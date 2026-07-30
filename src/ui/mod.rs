@@ -1,0 +1,850 @@
+//! egui front end: main window plus the detachable debug viewports.
+
+pub mod back_buffer;
+pub mod debugger;
+pub mod ram_map;
+pub mod tape;
+
+use eframe::egui;
+use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportId};
+
+use crate::audio_out::AudioOut;
+use crate::machine::{Model, Spectrum, Stop};
+use crate::screen;
+use crate::snapshot;
+
+/// ROM images found at startup, used when switching machines.
+#[derive(Default, Clone)]
+pub struct Roms {
+    pub rom48: Option<Vec<u8>>,
+    pub rom128: Option<Vec<u8>>,
+    /// The 64K four-ROM image shared by the +2A and +3.
+    pub rom_plus3: Option<Vec<u8>>,
+}
+
+impl Roms {
+    pub fn for_model(&self, model: Model) -> Option<&Vec<u8>> {
+        match model {
+            Model::Spectrum48 => self.rom48.as_ref(),
+            Model::Spectrum128 => self.rom128.as_ref(),
+            Model::Plus2A | Model::Plus3 => self.rom_plus3.as_ref(),
+        }
+    }
+
+    /// Which machine a ROM image is for, judged by its size: 16K is a 48K
+    /// ROM, 32K a 128K/+2 one, 64K the four-ROM +2A/+3 image.
+    pub fn model_for_rom_size(len: usize) -> Option<Model> {
+        match len {
+            0x4000 => Some(Model::Spectrum48),
+            0x8000 => Some(Model::Spectrum128),
+            0x10000 => Some(Model::Plus3),
+            _ => None,
+        }
+    }
+
+    pub fn set_for_model(&mut self, model: Model, data: Vec<u8>) {
+        match model {
+            Model::Spectrum48 => self.rom48 = Some(data),
+            Model::Spectrum128 => self.rom128 = Some(data),
+            Model::Plus2A | Model::Plus3 => self.rom_plus3 = Some(data),
+        }
+    }
+
+    /// File name to suggest when the ROM for a model is missing.
+    pub fn expected_file(model: Model) -> &'static str {
+        match model {
+            Model::Spectrum48 => "roms/48.rom",
+            Model::Spectrum128 => "roms/128.rom",
+            Model::Plus2A | Model::Plus3 => "roms/plus3.rom",
+        }
+    }
+}
+
+/// How fast to run relative to a real Spectrum.
+pub const SPEED_PRESETS: [(&str, f32); 8] = [
+    ("1%", 0.01),
+    ("5%", 0.05),
+    ("10%", 0.1),
+    ("25%", 0.25),
+    ("50%", 0.5),
+    ("100%", 1.0),
+    ("200%", 2.0),
+    ("Max", 20.0),
+];
+
+pub struct App {
+    pub spec: Spectrum,
+    pub running: bool,
+    pub speed: f32,
+    pub status: String,
+
+    pub show_ram_map: bool,
+    pub show_debugger: bool,
+    pub show_back_buffer: bool,
+    pub show_tape: bool,
+
+    screen_pixels: Vec<u8>,
+    screen_tex: Option<TextureHandle>,
+    pub scale: f32,
+
+    pub ram: ram_map::RamMapState,
+    pub dbg: debugger::DebuggerState,
+    pub back: back_buffer::BackBufferState,
+    pub tape: tape::TapeWindowState,
+
+    pub last_stop: Option<Stop>,
+    /// Emulated T-states left over from the previous host frame.
+    leftover: f32,
+
+    /// True when `status` is a failure the user should notice.
+    pub status_is_error: bool,
+    /// Model shown in the window title, so a switch is always visible.
+    title_model: Option<Model>,
+
+    /// How far ahead of the sound device to stay, in seconds.
+    pub audio_latency_target: f32,
+
+    pub roms: Roms,
+    /// Kept alive for as long as the app runs; dropping it stops the sound.
+    pub audio_out: Option<AudioOut>,
+    pub audio_error: Option<String>,
+}
+
+impl App {
+    pub fn new(spec: Spectrum, status: String) -> Self {
+        Self::with_roms(spec, status, Roms::default(), None)
+    }
+
+    pub fn with_roms(
+        spec: Spectrum,
+        status: String,
+        roms: Roms,
+        audio_out: Option<AudioOut>,
+    ) -> Self {
+        App {
+            spec,
+            running: true,
+            speed: 1.0,
+            status,
+            show_ram_map: true,
+            show_debugger: true,
+            show_back_buffer: false,
+            show_tape: false,
+            screen_pixels: vec![0; screen::WIDTH * screen::HEIGHT * 4],
+            screen_tex: None,
+            scale: 2.0,
+            ram: ram_map::RamMapState::default(),
+            dbg: debugger::DebuggerState::default(),
+            back: back_buffer::BackBufferState::default(),
+            tape: tape::TapeWindowState::default(),
+            last_stop: None,
+            leftover: 0.0,
+            status_is_error: false,
+            title_model: None,
+            audio_latency_target: 0.06,
+            roms,
+            audio_out,
+            audio_error: None,
+        }
+    }
+
+    /// Switch between the 48K and 128K machines, which needs the matching ROM.
+    pub fn switch_model(&mut self, model: Model) {
+        if self.spec.bus.model == model {
+            self.set_status(format!("Already running as {}", model.name()), false);
+            return;
+        }
+        let Some(rom) = self.roms.for_model(model).cloned() else {
+            self.set_status(
+                format!(
+                    "Cannot switch to {}: no ROM. Put a {} ROM at {}, or use File ▸ Load ROM…",
+                    model.name(),
+                    model.name(),
+                    Roms::expected_file(model)
+                ),
+                true,
+            );
+            return;
+        };
+        self.spec.set_model(model, &rom);
+        self.leftover = 0.0;
+        self.running = true;
+        self.set_status(format!("Switched to {}", model.name()), false);
+    }
+
+    /// Load a ROM image, switching to the machine its size implies. A 32K
+    /// image is a 128K ROM, so loading one on a 48K has to change machine or
+    /// the image would simply be truncated.
+    pub fn load_rom_image(&mut self, path: &std::path::Path, data: Vec<u8>) {
+        let Some(model) = Roms::model_for_rom_size(data.len()) else {
+            let len = data.len();
+            self.spec.load_rom(&data);
+            self.spec.reset();
+            self.set_status(
+                format!(
+                    "{}: {len} bytes is not a 16K, 32K or 64K ROM. Loaded it into the {} as-is.",
+                    path.display(),
+                    self.spec.bus.model.name()
+                ),
+                true,
+            );
+            return;
+        };
+
+        // Remember it, so the toolbar offers that machine from now on.
+        self.roms.set_for_model(model, data.clone());
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+
+        if self.spec.bus.model == model {
+            self.spec.load_rom(&data);
+            self.spec.reset();
+            self.title_model = None; // force the title to refresh
+        } else {
+            self.spec.set_model(model, &data);
+            self.leftover = 0.0;
+        }
+        self.running = true;
+        self.set_status(format!("Loaded {name} as a {}", model.name()), false);
+    }
+
+    pub fn set_status(&mut self, text: String, is_error: bool) {
+        self.status = text;
+        self.status_is_error = is_error;
+    }
+
+    /// Keep the window title in step with the machine, so switching is
+    /// visible even if the screen happens to look similar.
+    fn sync_title(&mut self, ctx: &egui::Context) {
+        let model = self.spec.bus.model;
+        if self.title_model != Some(model) {
+            self.title_model = Some(model);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+                "ZX Spectrum {}",
+                model.name()
+            )));
+        }
+    }
+
+    /// The always-visible toolbar: machine selector, a file loader and the
+    /// window toggles. Everything here is a plain widget rather than a menu
+    /// entry, so no popup has to stay open for a click to land.
+    fn machine_row(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Machine:");
+            for model in [
+                Model::Spectrum48,
+                Model::Spectrum128,
+                Model::Plus2A,
+                Model::Plus3,
+            ] {
+                let current = self.spec.bus.model == model;
+                let have_rom = self.roms.for_model(model).is_some();
+                let label = if have_rom {
+                    model.name().to_string()
+                } else {
+                    format!("{} (no ROM)", model.name())
+                };
+                if ui
+                    .selectable_label(current, label)
+                    .on_hover_text(if have_rom {
+                        format!("Switch to the {} and reset", model.name())
+                    } else {
+                        format!("Needs {}", Roms::expected_file(model))
+                    })
+                    .clicked()
+                {
+                    self.switch_model(model);
+                }
+            }
+
+            ui.separator();
+            if ui
+                .button("Load…")
+                .on_hover_text("Open a tape, snapshot or ROM image")
+                .clicked()
+            {
+                self.load_any_file();
+            }
+            if ui.button("Reset").clicked() {
+                self.spec.reset();
+                self.set_status(format!("Reset ({})", self.spec.bus.model.name()), false);
+            }
+
+            ui.separator();
+            ui.label("Windows:");
+            ui.toggle_value(&mut self.show_ram_map, "RAM map");
+            ui.toggle_value(&mut self.show_debugger, "Debugger");
+            ui.toggle_value(&mut self.show_tape, "Tape");
+            ui.toggle_value(&mut self.show_back_buffer, "Back buffer");
+        });
+    }
+
+    /// One file picker for every supported type, dispatched by extension.
+    pub fn load_any_file(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Tape, snapshot or ROM", &["tzx", "tap", "sna", "z80", "rom", "bin"])
+            .add_filter("Tape", &["tzx", "tap"])
+            .add_filter("Snapshot", &["sna", "z80"])
+            .add_filter("ROM image", &["rom", "bin"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.load_path(&path);
+    }
+
+    pub fn load_path(&mut self, path: &std::path::Path) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "tzx" | "tap" => match crate::tape::Tape::load(path) {
+                Ok(mut t) => {
+                    let blocks = t.blocks.len();
+                    if self.tape.auto_play_on_load {
+                        t.play(self.spec.bus.total_t());
+                    }
+                    let playing = t.playing;
+                    let name = t.name.clone();
+                    self.spec.bus.tape = Some(t);
+                    self.show_tape = true;
+                    self.tape.scroll_to_current = true;
+                    self.tape.last_block = None;
+                    self.set_status(
+                        format!(
+                            "Tape: {name} ({blocks} blocks){}",
+                            if playing { "" } else { " — press Play" }
+                        ),
+                        false,
+                    );
+                }
+                Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
+            },
+            "sna" | "z80" => match snapshot::probe_model(path) {
+                Ok(model) => {
+                    self.switch_model(model);
+                    match snapshot::load(&mut self.spec, path) {
+                        Ok(()) => {
+                            self.set_status(format!("Loaded {}", path.display()), false)
+                        }
+                        Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
+                    }
+                }
+                Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
+            },
+            "rom" | "bin" => match std::fs::read(path) {
+                Ok(data) => self.load_rom_image(path, data),
+                Err(e) => self.set_status(format!("ROM load failed: {e}"), true),
+            },
+            other => self.set_status(format!("Unsupported file type: .{other}"), true),
+        }
+    }
+
+    fn flash_on(&self) -> bool {
+        (self.spec.bus.frame / 16) % 2 == 1
+    }
+
+    /// Advance the emulation by however much wall-clock time has passed.
+    fn advance(&mut self, dt: f32) {
+        if !self.running {
+            return;
+        }
+        self.spec.bus.slow.begin_slice();
+
+        let dt = dt.clamp(0.0, 0.1);
+        // Loading a real tape takes minutes; run faster while it moves.
+        let boost = if self.spec.bus.tape_boost && self.spec.bus.tape_playing() {
+            8.0
+        } else {
+            1.0
+        };
+        // Nudge the amount of work to keep the sound buffer near its target
+        // depth, so it neither runs dry nor backs up.
+        let pace = if self.speed == 1.0 && self.spec.bus.audio.enabled {
+            self.spec.bus.audio.pace(self.audio_latency_target as f64)
+        } else {
+            1.0
+        };
+        let want = self.spec.bus.model.cpu_hz() as f32 * dt * self.speed * boost * pace
+            + self.leftover;
+        let budget = want.max(0.0) as u32;
+        self.leftover = want - budget as f32;
+
+        // Sound only makes sense near real time; muting keeps fast-forward
+        // from shrieking.
+        let effective = self.speed * boost;
+        self.spec.bus.audio.speed_ok = (0.85..=1.2).contains(&effective);
+
+        // Cap the work per host frame so "Max" speed cannot lock up the UI.
+        let budget = budget.min(self.spec.bus.frame_t() * 24);
+        let stop = self.spec.run(budget);
+        self.last_stop = Some(stop);
+        match stop {
+            Stop::Breakpoint(pc) => {
+                self.running = false;
+                self.status = format!("Breakpoint at ${pc:04X}");
+                self.dbg.follow_pc = true;
+            }
+            Stop::SlowDraw => {
+                self.leftover = 0.0;
+            }
+            _ => {}
+        }
+        self.spec.bus.audio_sync();
+        self.spec.bus.audio.flush();
+    }
+
+    fn draw_screen_texture(&mut self, ctx: &egui::Context) {
+        let flash = self.flash_on();
+        screen::render(&self.spec.bus, &mut self.screen_pixels, flash);
+        let img = ColorImage::from_rgba_unmultiplied(
+            [screen::WIDTH, screen::HEIGHT],
+            &self.screen_pixels,
+        );
+        match &mut self.screen_tex {
+            Some(t) => t.set(img, TextureOptions::NEAREST),
+            None => {
+                self.screen_tex =
+                    Some(ctx.load_texture("spectrum-screen", img, TextureOptions::NEAREST))
+            }
+        }
+    }
+
+    fn menu(&mut self, ui: &mut egui::Ui) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Load ROM…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("ROM image", &["rom", "bin"])
+                        .pick_file()
+                    {
+                        self.load_path(&path);
+                    }
+                    ui.close();
+                }
+                if ui.button("Load tape…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Tape", &["tzx", "tap"])
+                        .pick_file()
+                    {
+                        match crate::tape::Tape::load(&path) {
+                            Ok(mut t) => {
+                                let blocks = t.blocks.len();
+                                if self.tape.auto_play_on_load {
+                                    t.play(self.spec.bus.total_t());
+                                }
+                                let playing = t.playing;
+                                let name = t.name.clone();
+                                self.spec.bus.tape = Some(t);
+                                self.show_tape = true;
+                                self.tape.scroll_to_current = true;
+                                self.tape.last_block = None;
+                                self.set_status(
+                                    format!(
+                                        "Tape: {name} ({blocks} blocks){}",
+                                        if playing { "" } else { " — press Play" }
+                                    ),
+                                    false,
+                                );
+                            }
+                            Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
+                        }
+                    }
+                    ui.close();
+                }
+                if ui.button("Load snapshot…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Snapshot", &["sna", "z80"])
+                        .pick_file()
+                    {
+                        match snapshot::probe_model(&path) {
+                            Ok(model) => {
+                                self.switch_model(model);
+                                match snapshot::load(&mut self.spec, &path) {
+                                    Ok(()) => {
+                                        self.status = format!("Loaded {}", path.display())
+                                    }
+                                    Err(e) => {
+                                        self.set_status(format!("Snapshot load failed: {e}"), true)
+                                    }
+                                }
+                            }
+                            Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
+                        }
+                    }
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Reset").clicked() {
+                    self.spec.reset();
+                    self.status = "Reset".into();
+                    ui.close();
+                }
+            });
+            ui.menu_button("Machine", |ui| {
+                let model = self.spec.bus.model;
+                if ui
+                    .radio(model == Model::Spectrum48, "ZX Spectrum 48K")
+                    .clicked()
+                {
+                    self.switch_model(Model::Spectrum48);
+                    ui.close();
+                }
+                if ui
+                    .radio(model == Model::Spectrum128, "ZX Spectrum 128K (AY sound)")
+                    .clicked()
+                {
+                    self.switch_model(Model::Spectrum128);
+                    ui.close();
+                }
+                if ui
+                    .radio(model == Model::Plus2A, "ZX Spectrum +2A")
+                    .clicked()
+                {
+                    self.switch_model(Model::Plus2A);
+                    ui.close();
+                }
+                if ui
+                    .radio(model == Model::Plus3, "ZX Spectrum +3 (no disk drive)")
+                    .on_hover_text("The FDC is not emulated: tapes and snapshots only.")
+                    .clicked()
+                {
+                    self.switch_model(Model::Plus3);
+                    ui.close();
+                }
+            });
+            ui.menu_button("Sound", |ui| {
+                ui.checkbox(&mut self.spec.bus.audio.enabled, "Sound on");
+                ui.add(
+                    egui::Slider::new(&mut self.spec.bus.audio.volume, 0.0..=1.0).text("volume"),
+                );
+                ui.checkbox(
+                    &mut self.spec.bus.audio.mute_off_speed,
+                    "Mute unless running at normal speed",
+                );
+                match (&self.audio_out, &self.audio_error) {
+                    (Some(out), _) => {
+                        ui.label(format!("{} @ {} Hz", out.device_name, out.sample_rate));
+                    }
+                    (None, Some(e)) => {
+                        ui.colored_label(egui::Color32::from_rgb(255, 140, 140), e);
+                    }
+                    (None, None) => {
+                        ui.label("no audio device");
+                    }
+                }
+                ui.add(
+                    egui::Slider::new(&mut self.audio_latency_target, 0.02..=0.25)
+                        .text("buffer (s)"),
+                )
+                .on_hover_text(
+                    "How far ahead of the sound card to stay. Raise it if you hear \
+                     crackling, lower it for a more immediate beeper.",
+                );
+                ui.label(format!(
+                    "buffer {} samples ({:.0} ms), {} dropped",
+                    self.spec.bus.audio.queue_len(),
+                    self.spec.bus.audio.latency() * 1000.0,
+                    self.spec.bus.audio.dropped
+                ));
+            });
+            ui.menu_button("Windows", |ui| {
+                ui.checkbox(&mut self.show_ram_map, "RAM access map");
+                ui.checkbox(&mut self.show_debugger, "Debugger");
+                ui.checkbox(&mut self.show_back_buffer, "Back buffer");
+                ui.checkbox(&mut self.show_tape, "Tape");
+            });
+            ui.separator();
+
+            if ui
+                .button(if self.running { "⏸ Pause" } else { "▶ Run" })
+                .clicked()
+            {
+                self.running = !self.running;
+            }
+            ui.separator();
+            ui.label("Speed:");
+            for (name, mult) in SPEED_PRESETS {
+                if ui
+                    .selectable_label((self.speed - mult).abs() < f32::EPSILON, name)
+                    .clicked()
+                {
+                    self.speed = mult;
+                }
+            }
+            ui.add(
+                egui::Slider::new(&mut self.speed, 0.001..=20.0)
+                    .logarithmic(true)
+                    .text("x"),
+            );
+        });
+    }
+
+    fn controls_row(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.spec.bus.slow.enabled, "Slow draw")
+                .on_hover_text(
+                    "Park the CPU after a set number of writes to watched video memory \
+                     so the picture visibly builds up over several host frames.",
+                );
+            ui.add_enabled_ui(self.spec.bus.slow.enabled, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut self.spec.bus.slow.writes_per_slice, 1..=4096)
+                        .logarithmic(true)
+                        .text("writes/frame"),
+                );
+                ui.checkbox(&mut self.spec.bus.slow.watch_screen, "video RAM");
+                ui.checkbox(&mut self.spec.bus.slow.watch_back_buffer, "back buffer");
+            });
+            ui.separator();
+            if self.spec.bus.tape.is_some() {
+                let playing = self.spec.bus.tape_playing();
+                if ui.button(if playing { "⏸ Tape" } else { "▶ Tape" }).clicked() {
+                    let now = self.spec.bus.total_t();
+                    let t = self.spec.bus.tape.as_mut().unwrap();
+                    if playing {
+                        t.stop();
+                    } else {
+                        t.play(now);
+                    }
+                }
+                if ui.button("Tape window").clicked() {
+                    self.show_tape = true;
+                }
+                ui.separator();
+            }
+            ui.checkbox(&mut self.spec.bus.audio.enabled, "🔊");
+            ui.add(
+                egui::Slider::new(&mut self.spec.bus.audio.volume, 0.0..=1.0)
+                    .show_value(false)
+                    .text("vol"),
+            );
+            ui.separator();
+            ui.label(format!(
+                "{}  frame {}  t={}  screen writes/frame {}",
+                self.spec.bus.model.name(),
+                self.spec.bus.frame,
+                self.spec.bus.tstates,
+                self.spec.bus.screen_writes
+            ));
+        });
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw(ui);
+    }
+}
+
+impl App {
+    /// The whole user interface for one frame. Separate from the `eframe::App`
+    /// impl so tests can drive it without a real window.
+    pub fn draw(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let dt = ctx.input(|i| i.stable_dt);
+        self.read_keyboard(&ctx);
+        self.advance(dt);
+        self.sync_title(&ctx);
+        self.spec.bus.tape_tick();
+        self.spec.bus.frame_visuals();
+        self.draw_screen_texture(&ctx);
+
+        // The debug windows are rendered before this viewport's own panels:
+        // an immediate viewport runs a nested pass over the same Context, and
+        // doing that after a menu popup has been opened discards the popup.
+        self.debug_viewports(&ctx);
+
+        egui::Panel::top("menu").show(ui, |ui| {
+            self.menu(ui);
+            self.machine_row(ui);
+        });
+        egui::Panel::bottom("status").show(ui, |ui| {
+            self.controls_row(ui);
+            let status = self.status.clone();
+            if self.status_is_error {
+                ui.colored_label(egui::Color32::from_rgb(255, 120, 120), status);
+            } else {
+                ui.label(status);
+            }
+        });
+        egui::CentralPanel::default().show(ui, |ui| {
+            if let Some(tex) = &self.screen_tex {
+                let size = egui::vec2(
+                    screen::WIDTH as f32 * self.scale,
+                    screen::HEIGHT as f32 * self.scale,
+                );
+                let src = egui::ImageSource::Texture(egui::load::SizedTexture::new(tex.id(), size));
+                ui.centered_and_justified(|ui| {
+                    ui.image(src);
+                });
+            }
+        });
+
+        ctx.request_repaint();
+    }
+}
+
+impl App {
+    fn debug_viewports(&mut self, ctx: &egui::Context) {
+        if self.show_ram_map {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("ram-map"),
+                ViewportBuilder::default()
+                    .with_title("RAM access map")
+                    .with_inner_size([560.0, 700.0])
+                    .with_position([1120.0, 40.0]),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| ram_map::ui(self, ui));
+                },
+            );
+            self.show_ram_map = open;
+        }
+
+        if self.show_debugger {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("debugger"),
+                ViewportBuilder::default()
+                    .with_title("Debugger")
+                    .with_inner_size([820.0, 780.0])
+                    .with_position([20.0, 40.0]),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| debugger::ui(self, ui));
+                },
+            );
+            self.show_debugger = open;
+        }
+
+        if self.show_tape {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("tape"),
+                ViewportBuilder::default()
+                    .with_title("Tape")
+                    .with_inner_size([720.0, 780.0])
+                    .with_position([300.0, 120.0]),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| tape::ui(self, ui));
+                },
+            );
+            self.show_tape = open;
+        }
+
+        if self.show_back_buffer {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("back-buffer"),
+                ViewportBuilder::default()
+                    .with_title("Back buffer")
+                    .with_inner_size([680.0, 700.0])
+                    .with_position([420.0, 240.0]),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| back_buffer::ui(self, ui));
+                },
+            );
+            self.show_back_buffer = open;
+        }
+    }
+
+    /// Map host keys onto the 8x5 Spectrum keyboard matrix.
+    fn read_keyboard(&mut self, ctx: &egui::Context) {
+        use egui::Key;
+        let mut matrix = [0xffu8; 8];
+        let mut press = |row: usize, bit: u8| matrix[row] &= !(1 << bit);
+
+        ctx.input(|i| {
+            const MAP: &[(Key, usize, u8)] = &[
+                (Key::Z, 0, 1),
+                (Key::X, 0, 2),
+                (Key::C, 0, 3),
+                (Key::V, 0, 4),
+                (Key::A, 1, 0),
+                (Key::S, 1, 1),
+                (Key::D, 1, 2),
+                (Key::F, 1, 3),
+                (Key::G, 1, 4),
+                (Key::Q, 2, 0),
+                (Key::W, 2, 1),
+                (Key::E, 2, 2),
+                (Key::R, 2, 3),
+                (Key::T, 2, 4),
+                (Key::Num1, 3, 0),
+                (Key::Num2, 3, 1),
+                (Key::Num3, 3, 2),
+                (Key::Num4, 3, 3),
+                (Key::Num5, 3, 4),
+                (Key::Num0, 4, 0),
+                (Key::Num9, 4, 1),
+                (Key::Num8, 4, 2),
+                (Key::Num7, 4, 3),
+                (Key::Num6, 4, 4),
+                (Key::P, 5, 0),
+                (Key::O, 5, 1),
+                (Key::I, 5, 2),
+                (Key::U, 5, 3),
+                (Key::Y, 5, 4),
+                (Key::Enter, 6, 0),
+                (Key::L, 6, 1),
+                (Key::K, 6, 2),
+                (Key::J, 6, 3),
+                (Key::H, 6, 4),
+                (Key::Space, 7, 0),
+                (Key::M, 7, 2),
+                (Key::N, 7, 3),
+                (Key::B, 7, 4),
+            ];
+            for &(key, row, bit) in MAP {
+                if i.key_down(key) {
+                    press(row, bit);
+                }
+            }
+            if i.modifiers.shift {
+                press(0, 0); // CAPS SHIFT
+            }
+            if i.modifiers.alt || i.modifiers.ctrl {
+                press(7, 1); // SYMBOL SHIFT
+            }
+            // Convenience keys that need CAPS SHIFT on real hardware.
+            if i.key_down(Key::Backspace) {
+                press(0, 0);
+                press(4, 0);
+            }
+            if i.key_down(Key::ArrowLeft) {
+                press(0, 0);
+                press(3, 4);
+            }
+            if i.key_down(Key::ArrowDown) {
+                press(0, 0);
+                press(4, 4);
+            }
+            if i.key_down(Key::ArrowUp) {
+                press(0, 0);
+                press(4, 3);
+            }
+            if i.key_down(Key::ArrowRight) {
+                press(0, 0);
+                press(4, 2);
+            }
+        });
+        self.spec.bus.keys = matrix;
+    }
+}

@@ -1,0 +1,954 @@
+//! TZX (and TAP) tape loading and playback.
+//!
+//! TZX is a pulse-level format, so the player does not decode bytes: it turns
+//! blocks into a stream of pulse lengths in T-states and drives the EAR bit,
+//! exactly like a real tape feeding the ULA. That means ordinary ROM loading,
+//! turbo loaders and custom pulse schemes all work through the same path.
+
+use std::collections::VecDeque;
+use std::path::Path;
+
+/// ROM loader pulse lengths, in T-states.
+pub const PILOT_PULSE: u16 = 2168;
+pub const SYNC1_PULSE: u16 = 667;
+pub const SYNC2_PULSE: u16 = 735;
+pub const ZERO_PULSE: u16 = 855;
+pub const ONE_PULSE: u16 = 1710;
+/// Pilot tone length: longer for headers (flag < 128) than for data blocks.
+pub const HEADER_PILOT_PULSES: u16 = 8063;
+pub const DATA_PILOT_PULSES: u16 = 3223;
+
+const T_PER_MS: u32 = 3500;
+
+#[derive(Clone, Debug)]
+pub enum Block {
+    /// ID $10, and every block of a .tap file.
+    Standard { pause_ms: u16, data: Vec<u8> },
+    /// ID $11.
+    Turbo {
+        pilot: u16,
+        sync1: u16,
+        sync2: u16,
+        zero: u16,
+        one: u16,
+        pilot_pulses: u16,
+        used_bits: u8,
+        pause_ms: u16,
+        data: Vec<u8>,
+    },
+    /// ID $12.
+    PureTone { len: u16, count: u16 },
+    /// ID $13.
+    Pulses(Vec<u16>),
+    /// ID $14.
+    PureData {
+        zero: u16,
+        one: u16,
+        used_bits: u8,
+        pause_ms: u16,
+        data: Vec<u8>,
+    },
+    /// ID $15.
+    Direct {
+        t_per_sample: u16,
+        pause_ms: u16,
+        used_bits: u8,
+        data: Vec<u8>,
+    },
+    /// ID $20. A pause of 0 means "stop the tape".
+    Pause(u16),
+    /// ID $21 / $22.
+    GroupStart(String),
+    GroupEnd,
+    /// ID $23.
+    Jump(i16),
+    /// ID $24 / $25.
+    LoopStart(u16),
+    LoopEnd,
+    /// ID $26 / $27.
+    CallSequence(Vec<i16>),
+    Return,
+    /// ID $2A.
+    StopIf48k,
+    /// ID $2B.
+    SetLevel(bool),
+    /// Informational blocks: $30, $31, $32, $33, $35, $5A.
+    Info(String),
+}
+
+impl Block {
+    /// One-line description for the tape window.
+    pub fn describe(&self) -> String {
+        match self {
+            Block::Standard { data, pause_ms } => {
+                format!("Standard  {:5} bytes  {}", data.len(), header_summary(data))
+                    + &format!("  (pause {pause_ms}ms)")
+            }
+            Block::Turbo { data, pilot, .. } => {
+                format!("Turbo     {:5} bytes  pilot {pilot}T", data.len())
+            }
+            Block::PureTone { len, count } => format!("Pure tone {count} x {len}T"),
+            Block::Pulses(p) => format!("Pulses    {} pulses", p.len()),
+            Block::PureData { data, .. } => format!("Pure data {:5} bytes", data.len()),
+            Block::Direct { data, .. } => format!("Direct    {:5} bytes", data.len()),
+            Block::Pause(ms) => {
+                if *ms == 0 {
+                    "Stop the tape".into()
+                } else {
+                    format!("Pause     {ms}ms")
+                }
+            }
+            Block::GroupStart(s) => format!("Group: {s}"),
+            Block::GroupEnd => "Group end".into(),
+            Block::Jump(n) => format!("Jump {n:+}"),
+            Block::LoopStart(n) => format!("Loop start x{n}"),
+            Block::LoopEnd => "Loop end".into(),
+            Block::CallSequence(v) => format!("Call sequence ({})", v.len()),
+            Block::Return => "Return".into(),
+            Block::StopIf48k => "Stop if 48K".into(),
+            Block::SetLevel(l) => format!("Set signal level {}", *l as u8),
+            Block::Info(s) => format!("Info: {s}"),
+        }
+    }
+
+    /// True for blocks that actually produce sound.
+    pub fn is_data(&self) -> bool {
+        matches!(
+            self,
+            Block::Standard { .. }
+                | Block::Turbo { .. }
+                | Block::PureTone { .. }
+                | Block::Pulses(_)
+                | Block::PureData { .. }
+                | Block::Direct { .. }
+        )
+    }
+}
+
+/// Decode the 17-byte ZX header inside a standard block, if that is what it is.
+fn header_summary(data: &[u8]) -> String {
+    if data.len() != 19 || data[0] != 0x00 {
+        return if data.first() == Some(&0xff) {
+            "data".into()
+        } else {
+            String::new()
+        };
+    }
+    let kind = match data[1] {
+        0 => "Program",
+        1 => "Number array",
+        2 => "Char array",
+        3 => "Bytes",
+        _ => "?",
+    };
+    let name: String = data[2..12]
+        .iter()
+        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { ' ' })
+        .collect();
+    format!("{kind} \"{}\"", name.trim_end())
+}
+
+// ---------------------------------------------------------------------------
+// parsing
+// ---------------------------------------------------------------------------
+
+struct Reader<'a> {
+    d: &'a [u8],
+    p: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn left(&self) -> usize {
+        self.d.len().saturating_sub(self.p)
+    }
+    fn u8(&mut self) -> Result<u8, String> {
+        let v = *self.d.get(self.p).ok_or("unexpected end of file")?;
+        self.p += 1;
+        Ok(v)
+    }
+    fn u16(&mut self) -> Result<u16, String> {
+        Ok(u16::from_le_bytes([self.u8()?, self.u8()?]))
+    }
+    fn i16(&mut self) -> Result<i16, String> {
+        Ok(self.u16()? as i16)
+    }
+    fn u24(&mut self) -> Result<u32, String> {
+        let (a, b, c) = (self.u8()? as u32, self.u8()? as u32, self.u8()? as u32);
+        Ok(a | (b << 8) | (c << 16))
+    }
+    fn u32(&mut self) -> Result<u32, String> {
+        Ok(u32::from_le_bytes([
+            self.u8()?,
+            self.u8()?,
+            self.u8()?,
+            self.u8()?,
+        ]))
+    }
+    fn bytes(&mut self, n: usize) -> Result<Vec<u8>, String> {
+        if self.left() < n {
+            return Err(format!("block claims {n} bytes but only {} remain", self.left()));
+        }
+        let v = self.d[self.p..self.p + n].to_vec();
+        self.p += n;
+        Ok(v)
+    }
+    fn text(&mut self, n: usize) -> Result<String, String> {
+        Ok(String::from_utf8_lossy(&self.bytes(n)?).trim().to_string())
+    }
+}
+
+pub fn parse_tzx(data: &[u8]) -> Result<Vec<Block>, String> {
+    if data.len() < 10 || &data[0..8] != b"ZXTape!\x1a" {
+        return Err("not a TZX file (bad signature)".into());
+    }
+    let version = (data[8], data[9]);
+    let mut r = Reader { d: data, p: 10 };
+    let mut blocks = Vec::new();
+
+    while r.left() > 0 {
+        let id = r.u8()?;
+        match id {
+            0x10 => {
+                let pause_ms = r.u16()?;
+                let len = r.u16()? as usize;
+                blocks.push(Block::Standard {
+                    pause_ms,
+                    data: r.bytes(len)?,
+                });
+            }
+            0x11 => {
+                let pilot = r.u16()?;
+                let sync1 = r.u16()?;
+                let sync2 = r.u16()?;
+                let zero = r.u16()?;
+                let one = r.u16()?;
+                let pilot_pulses = r.u16()?;
+                let used_bits = r.u8()?;
+                let pause_ms = r.u16()?;
+                let len = r.u24()? as usize;
+                blocks.push(Block::Turbo {
+                    pilot,
+                    sync1,
+                    sync2,
+                    zero,
+                    one,
+                    pilot_pulses,
+                    used_bits,
+                    pause_ms,
+                    data: r.bytes(len)?,
+                });
+            }
+            0x12 => {
+                let len = r.u16()?;
+                let count = r.u16()?;
+                blocks.push(Block::PureTone { len, count });
+            }
+            0x13 => {
+                let count = r.u8()? as usize;
+                let mut v = Vec::with_capacity(count);
+                for _ in 0..count {
+                    v.push(r.u16()?);
+                }
+                blocks.push(Block::Pulses(v));
+            }
+            0x14 => {
+                let zero = r.u16()?;
+                let one = r.u16()?;
+                let used_bits = r.u8()?;
+                let pause_ms = r.u16()?;
+                let len = r.u24()? as usize;
+                blocks.push(Block::PureData {
+                    zero,
+                    one,
+                    used_bits,
+                    pause_ms,
+                    data: r.bytes(len)?,
+                });
+            }
+            0x15 => {
+                let t_per_sample = r.u16()?;
+                let pause_ms = r.u16()?;
+                let used_bits = r.u8()?;
+                let len = r.u24()? as usize;
+                blocks.push(Block::Direct {
+                    t_per_sample,
+                    pause_ms,
+                    used_bits,
+                    data: r.bytes(len)?,
+                });
+            }
+            0x18 | 0x19 => {
+                // CSW / generalized data: skippable via their length field.
+                let len = r.u32()? as usize;
+                r.bytes(len)?;
+                blocks.push(Block::Info(format!(
+                    "unsupported block ${id:02X} ({len} bytes) skipped"
+                )));
+            }
+            0x20 => blocks.push(Block::Pause(r.u16()?)),
+            0x21 => {
+                let n = r.u8()? as usize;
+                blocks.push(Block::GroupStart(r.text(n)?));
+            }
+            0x22 => blocks.push(Block::GroupEnd),
+            0x23 => blocks.push(Block::Jump(r.i16()?)),
+            0x24 => blocks.push(Block::LoopStart(r.u16()?)),
+            0x25 => blocks.push(Block::LoopEnd),
+            0x26 => {
+                let count = r.u16()? as usize;
+                let mut v = Vec::with_capacity(count);
+                for _ in 0..count {
+                    v.push(r.i16()?);
+                }
+                blocks.push(Block::CallSequence(v));
+            }
+            0x27 => blocks.push(Block::Return),
+            0x28 => {
+                let len = r.u16()? as usize;
+                r.bytes(len)?;
+                blocks.push(Block::Info("select block (ignored)".into()));
+            }
+            0x2a => {
+                r.u32()?;
+                blocks.push(Block::StopIf48k);
+            }
+            0x2b => {
+                r.u32()?;
+                blocks.push(Block::SetLevel(r.u8()? != 0));
+            }
+            0x30 => {
+                let n = r.u8()? as usize;
+                blocks.push(Block::Info(r.text(n)?));
+            }
+            0x31 => {
+                r.u8()?;
+                let n = r.u8()? as usize;
+                blocks.push(Block::Info(r.text(n)?));
+            }
+            0x32 => {
+                let len = r.u16()? as usize;
+                let body = r.bytes(len)?;
+                blocks.push(Block::Info(archive_info(&body)));
+            }
+            0x33 => {
+                let count = r.u8()? as usize;
+                r.bytes(count * 3)?;
+                blocks.push(Block::Info("hardware type".into()));
+            }
+            0x35 => {
+                let id = r.text(10)?;
+                let len = r.u32()? as usize;
+                r.bytes(len)?;
+                blocks.push(Block::Info(format!("custom info: {id}")));
+            }
+            0x5a => {
+                r.bytes(9)?;
+                blocks.push(Block::Info("glue block".into()));
+            }
+            other => {
+                return Err(format!(
+                    "unknown TZX block ${other:02X} at offset {} (file version {}.{})",
+                    r.p - 1,
+                    version.0,
+                    version.1
+                ))
+            }
+        }
+    }
+    Ok(blocks)
+}
+
+/// Pull the title out of an archive-info block ($32) if it has one.
+fn archive_info(body: &[u8]) -> String {
+    if body.is_empty() {
+        return "archive info".into();
+    }
+    let mut p = 1;
+    for _ in 0..body[0] {
+        if p + 1 >= body.len() {
+            break;
+        }
+        let id = body[p];
+        let len = body[p + 1] as usize;
+        p += 2;
+        if p + len > body.len() {
+            break;
+        }
+        if id == 0x00 {
+            return format!("title: {}", String::from_utf8_lossy(&body[p..p + len]).trim());
+        }
+        p += len;
+    }
+    "archive info".into()
+}
+
+/// A .tap file is just a sequence of length-prefixed standard blocks.
+pub fn parse_tap(data: &[u8]) -> Result<Vec<Block>, String> {
+    let mut blocks = Vec::new();
+    let mut p = 0usize;
+    while p + 2 <= data.len() {
+        let len = u16::from_le_bytes([data[p], data[p + 1]]) as usize;
+        p += 2;
+        if len == 0 || p + len > data.len() {
+            return Err("truncated .tap block".into());
+        }
+        blocks.push(Block::Standard {
+            pause_ms: 1000,
+            data: data[p..p + len].to_vec(),
+        });
+        p += len;
+    }
+    if blocks.is_empty() {
+        return Err("no blocks found".into());
+    }
+    Ok(blocks)
+}
+
+// ---------------------------------------------------------------------------
+// playback
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+enum Phase {
+    /// Nothing loaded into the pulse generator yet.
+    Enter,
+    Pilot { left: u32 },
+    Sync1,
+    Sync2,
+    Data { byte: usize, bit: u8, second: bool },
+    Tone { left: u32 },
+    PulseList { idx: usize },
+    Direct { byte: usize, bit: u8 },
+    /// Silence at the end of a block.
+    BlockPause { ms: u16 },
+    Next,
+    Finished,
+}
+
+/// One pulse: how long it lasts and what the EAR line does.
+struct Pulse {
+    len: u32,
+    /// `None` toggles the level, `Some(l)` forces it.
+    level: Option<bool>,
+}
+
+pub struct Tape {
+    pub name: String,
+    pub blocks: Vec<Block>,
+    pub playing: bool,
+    /// Index of the block being played.
+    pub block: usize,
+    phase: Phase,
+    pub level: bool,
+    /// Absolute T-state at which the current pulse ends.
+    next_edge: u64,
+    loop_stack: Vec<(usize, u16)>,
+    call_stack: Vec<usize>,
+    /// Set when a $20 pause-of-zero or $2A block stops the tape.
+    pub stopped_by_block: bool,
+    /// Total pulses emitted, for the UI.
+    pub pulses: u64,
+    /// Recent level changes as (absolute T-state, new level), for the
+    /// oscilloscope. Oldest entries are dropped.
+    pub edges: VecDeque<(u64, bool)>,
+    /// Edges produced since the sound mixer last collected them, so each one
+    /// can be mixed in at the T-state it actually happened rather than the
+    /// tape's level being sampled whenever the CPU happens to look.
+    pending_edges: Vec<(u64, bool)>,
+}
+
+/// How many edges the oscilloscope can look back through.
+pub const EDGE_HISTORY: usize = 16384;
+
+impl Tape {
+    pub fn load(path: &Path) -> Result<Tape, String> {
+        let data = std::fs::read(path).map_err(|e| e.to_string())?;
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let blocks = match ext.as_str() {
+            "tzx" => parse_tzx(&data)?,
+            "tap" => parse_tap(&data)?,
+            // Sniff the signature if the extension is unhelpful.
+            _ => {
+                if data.starts_with(b"ZXTape!\x1a") {
+                    parse_tzx(&data)?
+                } else {
+                    parse_tap(&data)?
+                }
+            }
+        };
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        Ok(Tape::from_blocks(name, blocks))
+    }
+
+    pub fn from_blocks(name: String, blocks: Vec<Block>) -> Tape {
+        Tape {
+            name,
+            blocks,
+            playing: false,
+            block: 0,
+            phase: Phase::Enter,
+            level: false,
+            next_edge: 0,
+            loop_stack: Vec::new(),
+            call_stack: Vec::new(),
+            stopped_by_block: false,
+            pulses: 0,
+            edges: VecDeque::with_capacity(EDGE_HISTORY),
+            pending_edges: Vec::new(),
+        }
+    }
+
+    /// Start (or resume) playing at absolute T-state `now`.
+    pub fn play(&mut self, now: u64) {
+        if self.block >= self.blocks.len() {
+            self.rewind();
+        }
+        self.playing = true;
+        self.stopped_by_block = false;
+        // No edge is recorded here: the first generated pulse starts at `now`
+        // and records its own leading edge.
+        self.next_edge = now;
+    }
+
+    pub fn stop(&mut self) {
+        self.playing = false;
+        self.level = false;
+    }
+
+    /// Record a level change for the oscilloscope and the mixer.
+    fn push_edge(&mut self, at: u64) {
+        if self.edges.len() >= EDGE_HISTORY {
+            self.edges.pop_front();
+        }
+        self.edges.push_back((at, self.level));
+        // Fast-forwarding can outrun the mixer; drop the backlog rather than
+        // letting it grow without bound.
+        if self.pending_edges.len() >= EDGE_HISTORY {
+            self.pending_edges.clear();
+        }
+        self.pending_edges.push((at, self.level));
+    }
+
+    /// Hand over the edges produced since the last call.
+    pub fn take_pending_edges(&mut self, out: &mut Vec<(u64, bool)>) {
+        out.append(&mut self.pending_edges);
+    }
+
+    /// Move to the previous or next block, keeping playback going.
+    pub fn skip(&mut self, delta: i32, now: u64) {
+        let target = (self.block as i32 + delta).clamp(0, self.blocks.len().saturating_sub(1) as i32);
+        self.seek(target as usize);
+        if self.playing {
+            self.next_edge = now;
+        }
+    }
+
+    /// Index of the next block in `dir` that actually makes a sound.
+    pub fn next_data_block(&self, dir: i32) -> usize {
+        let mut i = self.block as i32;
+        loop {
+            i += dir;
+            if i <= 0 {
+                return 0;
+            }
+            if i >= self.blocks.len() as i32 {
+                return self.blocks.len().saturating_sub(1);
+            }
+            if self.blocks[i as usize].is_data() {
+                return i as usize;
+            }
+        }
+    }
+
+    pub fn rewind(&mut self) {
+        self.pending_edges.clear();
+        self.block = 0;
+        self.phase = Phase::Enter;
+        self.level = false;
+        self.loop_stack.clear();
+        self.call_stack.clear();
+        self.stopped_by_block = false;
+        self.pulses = 0;
+    }
+
+    /// Jump straight to a block, e.g. from the tape window.
+    pub fn seek(&mut self, block: usize) {
+        self.block = block.min(self.blocks.len());
+        self.phase = Phase::Enter;
+        self.level = false;
+    }
+
+    pub fn finished(&self) -> bool {
+        matches!(self.phase, Phase::Finished) || self.block >= self.blocks.len()
+    }
+
+    /// EAR level at absolute T-state `now`, advancing the pulse generator to
+    /// get there. Cheap: it only does work when pulses have actually elapsed.
+    pub fn level_at(&mut self, now: u64) -> bool {
+        if !self.playing {
+            return false;
+        }
+        // Guard against a huge jump (e.g. after a long pause) taking forever.
+        let mut guard = 0u32;
+        while now >= self.next_edge && self.playing {
+            match self.next_pulse() {
+                Some(p) => {
+                    let edge_at = self.next_edge;
+                    let new_level = p.level.unwrap_or(!self.level);
+                    let changed = new_level != self.level;
+                    self.level = new_level;
+                    self.next_edge = self.next_edge.saturating_add(p.len.max(1) as u64);
+                    self.pulses += 1;
+                    if changed {
+                        self.push_edge(edge_at);
+                    }
+                }
+                None => {
+                    self.playing = false;
+                    self.level = false;
+                    self.push_edge(self.next_edge);
+                    break;
+                }
+            }
+            guard += 1;
+            if guard > 2_000_000 {
+                break;
+            }
+        }
+        self.level
+    }
+
+    /// Produce the next pulse, moving between blocks as needed.
+    fn next_pulse(&mut self) -> Option<Pulse> {
+        loop {
+            match self.phase {
+                Phase::Finished => return None,
+                Phase::Next => {
+                    self.block += 1;
+                    self.phase = Phase::Enter;
+                }
+                Phase::Enter => {
+                    if self.block >= self.blocks.len() {
+                        self.phase = Phase::Finished;
+                        return None;
+                    }
+                    if let Some(p) = self.enter_block() {
+                        return Some(p);
+                    }
+                }
+                Phase::Pilot { left } => {
+                    let (pilot, next) = match &self.blocks[self.block] {
+                        Block::Standard { .. } => (PILOT_PULSE, Phase::Sync1),
+                        Block::Turbo { pilot, .. } => (*pilot, Phase::Sync1),
+                        _ => (PILOT_PULSE, Phase::Sync1),
+                    };
+                    if left == 0 {
+                        self.phase = next;
+                    } else {
+                        self.phase = Phase::Pilot { left: left - 1 };
+                        return Some(Pulse {
+                            len: pilot as u32,
+                            level: None,
+                        });
+                    }
+                }
+                Phase::Sync1 => {
+                    let sync = match &self.blocks[self.block] {
+                        Block::Turbo { sync1, .. } => *sync1,
+                        _ => SYNC1_PULSE,
+                    };
+                    self.phase = Phase::Sync2;
+                    return Some(Pulse {
+                        len: sync as u32,
+                        level: None,
+                    });
+                }
+                Phase::Sync2 => {
+                    let sync = match &self.blocks[self.block] {
+                        Block::Turbo { sync2, .. } => *sync2,
+                        _ => SYNC2_PULSE,
+                    };
+                    self.phase = Phase::Data {
+                        byte: 0,
+                        bit: 0,
+                        second: false,
+                    };
+                    return Some(Pulse {
+                        len: sync as u32,
+                        level: None,
+                    });
+                }
+                Phase::Data { byte, bit, second } => {
+                    let (data, zero, one, used_bits, pause_ms) = match &self.blocks[self.block] {
+                        Block::Standard { data, pause_ms } => {
+                            (data, ZERO_PULSE, ONE_PULSE, 8, *pause_ms)
+                        }
+                        Block::Turbo {
+                            data,
+                            zero,
+                            one,
+                            used_bits,
+                            pause_ms,
+                            ..
+                        } => (data, *zero, *one, *used_bits, *pause_ms),
+                        Block::PureData {
+                            data,
+                            zero,
+                            one,
+                            used_bits,
+                            pause_ms,
+                        } => (data, *zero, *one, *used_bits, *pause_ms),
+                        _ => {
+                            self.phase = Phase::Next;
+                            continue;
+                        }
+                    };
+
+                    // The final byte may carry fewer than eight meaningful bits.
+                    let last = byte + 1 == data.len();
+                    let bits_here = if last && (1..8).contains(&used_bits) {
+                        used_bits
+                    } else {
+                        8
+                    };
+                    if byte >= data.len() || bit >= bits_here {
+                        if byte >= data.len() {
+                            self.phase = Phase::BlockPause { ms: pause_ms };
+                            continue;
+                        }
+                        self.phase = Phase::Data {
+                            byte: byte + 1,
+                            bit: 0,
+                            second: false,
+                        };
+                        continue;
+                    }
+
+                    let set = data[byte] & (0x80 >> bit) != 0;
+                    let len = if set { one } else { zero } as u32;
+                    self.phase = if second {
+                        Phase::Data {
+                            byte,
+                            bit: bit + 1,
+                            second: false,
+                        }
+                    } else {
+                        Phase::Data {
+                            byte,
+                            bit,
+                            second: true,
+                        }
+                    };
+                    return Some(Pulse { len, level: None });
+                }
+                Phase::Tone { left } => {
+                    let len = match &self.blocks[self.block] {
+                        Block::PureTone { len, .. } => *len,
+                        _ => PILOT_PULSE,
+                    };
+                    if left == 0 {
+                        self.phase = Phase::Next;
+                    } else {
+                        self.phase = Phase::Tone { left: left - 1 };
+                        return Some(Pulse {
+                            len: len as u32,
+                            level: None,
+                        });
+                    }
+                }
+                Phase::PulseList { idx } => {
+                    let pulse = match &self.blocks[self.block] {
+                        Block::Pulses(v) => v.get(idx).copied(),
+                        _ => None,
+                    };
+                    match pulse {
+                        Some(len) => {
+                            self.phase = Phase::PulseList { idx: idx + 1 };
+                            return Some(Pulse {
+                                len: len as u32,
+                                level: None,
+                            });
+                        }
+                        None => self.phase = Phase::Next,
+                    }
+                }
+                Phase::Direct { byte, bit } => {
+                    let (data, t, used_bits, pause_ms) = match &self.blocks[self.block] {
+                        Block::Direct {
+                            data,
+                            t_per_sample,
+                            used_bits,
+                            pause_ms,
+                        } => (data, *t_per_sample, *used_bits, *pause_ms),
+                        _ => {
+                            self.phase = Phase::Next;
+                            continue;
+                        }
+                    };
+                    let last = byte + 1 == data.len();
+                    let bits_here = if last && (1..8).contains(&used_bits) {
+                        used_bits
+                    } else {
+                        8
+                    };
+                    if byte >= data.len() {
+                        self.phase = Phase::BlockPause { ms: pause_ms };
+                        continue;
+                    }
+                    if bit >= bits_here {
+                        self.phase = Phase::Direct {
+                            byte: byte + 1,
+                            bit: 0,
+                        };
+                        continue;
+                    }
+                    // Direct recording sets the level per sample rather than
+                    // toggling it.
+                    let level = data[byte] & (0x80 >> bit) != 0;
+                    self.phase = Phase::Direct { byte, bit: bit + 1 };
+                    return Some(Pulse {
+                        len: t as u32,
+                        level: Some(level),
+                    });
+                }
+                Phase::BlockPause { ms } => {
+                    self.phase = Phase::Next;
+                    if ms > 0 {
+                        return Some(Pulse {
+                            len: ms as u32 * T_PER_MS,
+                            level: Some(false),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Set up the pulse generator for the block at `self.block`, running any
+    /// control blocks (jumps, loops, pauses) immediately.
+    fn enter_block(&mut self) -> Option<Pulse> {
+        let block = self.blocks[self.block].clone();
+        match block {
+            Block::Standard { ref data, .. } => {
+                let flag = data.first().copied().unwrap_or(0xff);
+                let pulses = if flag < 0x80 {
+                    HEADER_PILOT_PULSES
+                } else {
+                    DATA_PILOT_PULSES
+                };
+                self.phase = Phase::Pilot {
+                    left: pulses as u32,
+                };
+                None
+            }
+            Block::Turbo { pilot_pulses, .. } => {
+                self.phase = Phase::Pilot {
+                    left: pilot_pulses as u32,
+                };
+                None
+            }
+            Block::PureTone { count, .. } => {
+                self.phase = Phase::Tone {
+                    left: count as u32,
+                };
+                None
+            }
+            Block::Pulses(_) => {
+                self.phase = Phase::PulseList { idx: 0 };
+                None
+            }
+            Block::PureData { .. } => {
+                self.phase = Phase::Data {
+                    byte: 0,
+                    bit: 0,
+                    second: false,
+                };
+                None
+            }
+            Block::Direct { .. } => {
+                self.phase = Phase::Direct { byte: 0, bit: 0 };
+                None
+            }
+            Block::Pause(ms) => {
+                if ms == 0 {
+                    // "Stop the tape" — the loader is expected to be waiting.
+                    self.stopped_by_block = true;
+                    self.playing = false;
+                    self.phase = Phase::Next;
+                    None
+                } else {
+                    self.phase = Phase::Next;
+                    Some(Pulse {
+                        len: ms as u32 * T_PER_MS,
+                        level: Some(false),
+                    })
+                }
+            }
+            Block::StopIf48k => {
+                self.stopped_by_block = true;
+                self.playing = false;
+                self.phase = Phase::Next;
+                None
+            }
+            Block::SetLevel(l) => {
+                self.level = l;
+                self.phase = Phase::Next;
+                None
+            }
+            Block::Jump(offset) => {
+                let target = self.block as i32 + offset as i32;
+                self.block = target.clamp(0, self.blocks.len() as i32) as usize;
+                self.phase = Phase::Enter;
+                None
+            }
+            Block::LoopStart(count) => {
+                if count > 0 {
+                    self.loop_stack.push((self.block, count));
+                }
+                self.phase = Phase::Next;
+                None
+            }
+            Block::LoopEnd => {
+                if let Some((start, count)) = self.loop_stack.pop() {
+                    if count > 1 {
+                        self.loop_stack.push((start, count - 1));
+                        self.block = start;
+                        self.phase = Phase::Next;
+                        return None;
+                    }
+                }
+                self.phase = Phase::Next;
+                None
+            }
+            Block::CallSequence(ref offsets) => {
+                if let Some(&first) = offsets.first() {
+                    self.call_stack.push(self.block);
+                    let target = self.block as i32 + first as i32;
+                    self.block = target.clamp(0, self.blocks.len() as i32) as usize;
+                    self.phase = Phase::Enter;
+                } else {
+                    self.phase = Phase::Next;
+                }
+                None
+            }
+            Block::Return => {
+                if let Some(back) = self.call_stack.pop() {
+                    self.block = back;
+                }
+                self.phase = Phase::Next;
+                None
+            }
+            Block::GroupStart(_) | Block::GroupEnd | Block::Info(_) => {
+                self.phase = Phase::Next;
+                None
+            }
+        }
+    }
+}

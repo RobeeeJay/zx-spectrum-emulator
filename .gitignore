@@ -1,0 +1,12 @@
+/target
+
+# Machine ROMs are copyrighted (Sinclair/Amstrad) and are not distributed with
+# this source. Drop your own images in roms/ — see the README.
+/roms/*
+!/roms/.gitkeep
+
+# Likewise the games: put your own .tzx/.tap files in tapes/.
+/tapes/*
+!/tapes/.gitkeep
+
+.DS_Store

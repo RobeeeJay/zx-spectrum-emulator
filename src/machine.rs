@@ -1,0 +1,926 @@
+//! ZX Spectrum 48K and 128K: memory map and paging, ULA timing, contention,
+//! sound, keyboard, and the debugging hooks that hang off the bus.
+
+use crate::audio::Audio;
+use crate::tape::Tape;
+use crate::tracker::{Tracker, SCREEN_END, SCREEN_START};
+use crate::z80::{Bus, Z80};
+
+/// Which machine is being emulated. The two differ in clock speed, frame
+/// length, memory layout and sound hardware.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Model {
+    Spectrum48,
+    Spectrum128,
+    /// +2A: the 128K reworked with four ROMs and the second paging port.
+    Plus2A,
+    /// +3: a +2A with a disk interface.
+    Plus3,
+}
+
+impl Model {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Model::Spectrum48 => "48K",
+            Model::Spectrum128 => "128K",
+            Model::Plus2A => "+2A",
+            Model::Plus3 => "+3",
+        }
+    }
+    /// T-states in one frame.
+    pub fn frame_t(&self) -> u32 {
+        match self {
+            Model::Spectrum48 => 69888,
+            _ => 70908,
+        }
+    }
+    /// T-state at which the ULA fetches the first pixel of the display.
+    pub fn first_pixel_t(&self) -> u32 {
+        match self {
+            Model::Spectrum48 => 14335,
+            _ => 14361,
+        }
+    }
+    pub fn t_per_line(&self) -> u32 {
+        match self {
+            Model::Spectrum48 => 224,
+            _ => 228,
+        }
+    }
+    pub fn cpu_hz(&self) -> f64 {
+        match self {
+            Model::Spectrum48 => 3_500_000.0,
+            _ => 3_546_900.0,
+        }
+    }
+    pub fn rom_size(&self) -> usize {
+        match self {
+            Model::Spectrum48 => 0x4000,
+            Model::Spectrum128 => 0x8000,
+            // +2A/+3 have four 16K ROMs.
+            Model::Plus2A | Model::Plus3 => 0x10000,
+        }
+    }
+    pub fn has_ay(&self) -> bool {
+        !matches!(self, Model::Spectrum48)
+    }
+    /// True for machines with the $7FFD paging latch.
+    pub fn has_paging(&self) -> bool {
+        !matches!(self, Model::Spectrum48)
+    }
+    /// True for the +2A/+3, which add port $1FFD and its all-RAM modes.
+    pub fn has_plus3_paging(&self) -> bool {
+        matches!(self, Model::Plus2A | Model::Plus3)
+    }
+    pub fn has_disk(&self) -> bool {
+        matches!(self, Model::Plus3)
+    }
+    /// The +2A/+3 ULA delays the CPU on a different phase of the fetch cycle.
+    pub fn contention_pattern(&self) -> [u8; 8] {
+        if self.has_plus3_paging() {
+            [1, 0, 7, 6, 5, 4, 3, 2]
+        } else {
+            [6, 5, 4, 3, 2, 1, 0, 0]
+        }
+    }
+    /// Which RAM banks the ULA shares with the CPU: the odd ones on a 48K/128K,
+    /// the top four on a +2A/+3.
+    pub fn bank_is_contended(&self, bank: usize) -> bool {
+        if self.has_plus3_paging() {
+            bank >= 4
+        } else {
+            bank & 1 == 1
+        }
+    }
+    /// The +2A/+3 gate array drives the bus high instead of leaving it
+    /// floating, so there is no floating-bus trick to emulate.
+    pub fn has_floating_bus(&self) -> bool {
+        !self.has_plus3_paging()
+    }
+}
+
+/// T-states in a 48K frame. Handy as a default run budget.
+pub const FRAME_T: u32 = 69888;
+pub const FRAME_T_128: u32 = 70908;
+pub const PIXEL_LINES: u32 = 192;
+/// How long the ULA holds /INT low at the top of the frame.
+pub const IRQ_LEN: u32 = 32;
+pub const CPU_HZ: f64 = 3_500_000.0;
+
+const TABLE_LEN: usize = (FRAME_T_128 + 512) as usize;
+
+/// Slow-motion drawing: stop the CPU after a fixed number of writes to the
+/// watched area so the screen visibly fills in over several host frames.
+pub struct SlowDraw {
+    pub enabled: bool,
+    /// Writes allowed per host frame before the CPU is parked.
+    pub writes_per_slice: u32,
+    pub watch_screen: bool,
+    pub watch_back_buffer: bool,
+    pub budget_left: u32,
+    pub hit: bool,
+    /// Writes to watched memory during the last host frame, for the UI.
+    pub last_slice_writes: u32,
+}
+
+impl Default for SlowDraw {
+    fn default() -> Self {
+        SlowDraw {
+            enabled: false,
+            writes_per_slice: 8,
+            watch_screen: true,
+            watch_back_buffer: true,
+            budget_left: 8,
+            hit: false,
+            last_slice_writes: 0,
+        }
+    }
+}
+
+impl SlowDraw {
+    pub fn begin_slice(&mut self) {
+        self.last_slice_writes = self.writes_per_slice.saturating_sub(self.budget_left);
+        self.budget_left = self.writes_per_slice.max(1);
+        self.hit = false;
+    }
+}
+
+/// What a 16K slot of the address space currently points at.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Slot {
+    Rom(usize),
+    Ram(usize),
+}
+
+pub struct SpectrumBus {
+    pub model: Model,
+    /// 16K (48K machine) or 32K (128K machine) of ROM.
+    pub rom: Vec<u8>,
+    /// Eight 16K RAM banks. A 48K machine uses banks 5, 2 and 0.
+    pub ram: Vec<u8>,
+    /// Last value written to port $7FFD.
+    pub page_reg: u8,
+    /// Last value written to port $1FFD (+2A/+3 only).
+    pub page_reg_1ffd: u8,
+    /// Once the 128K locks paging, only a reset can undo it.
+    pub paging_locked: bool,
+    slots: [Slot; 4],
+
+    pub tracker: Tracker,
+
+    /// T-states elapsed in the current frame.
+    pub tstates: u32,
+    pub frame: u64,
+    /// True while the ULA is asserting /INT for this frame.
+    pub irq_pending: bool,
+
+    pub border: u8,
+    /// Border colour at the start of the frame, plus every mid-frame change,
+    /// so the renderer can reproduce raster bands.
+    pub border_start: u8,
+    pub border_events: Vec<(u32, u8)>,
+    /// Keyboard matrix: one byte per half-row, bit clear = key down.
+    pub keys: [u8; 8],
+    pub ear: bool,
+    pub speaker: bool,
+    pub mic: bool,
+
+    pub audio: Audio,
+
+    /// Cassette player. Its EAR output is read through port $FE bit 6.
+    pub tape: Option<Tape>,
+    /// Run faster while the tape is playing, so loading does not take the
+    /// same four minutes it did in 1983.
+    pub tape_boost: bool,
+
+    /// Scratch space for tape edges on their way to the mixer.
+    tape_edge_scratch: Vec<(u64, bool)>,
+
+    pub slow: SlowDraw,
+    /// Writes to video RAM in the frame just finished, for the UI readout.
+    pub screen_writes: u32,
+    screen_writes_acc: u32,
+
+    contention: Vec<u8>,
+}
+
+impl Default for SpectrumBus {
+    fn default() -> Self {
+        Self::new(Model::Spectrum48)
+    }
+}
+
+impl SpectrumBus {
+    pub fn new(model: Model) -> Self {
+        let mut bus = SpectrumBus {
+            model,
+            rom: vec![0xff; model.rom_size()],
+            ram: vec![0; 8 * 0x4000],
+            page_reg: 0,
+            page_reg_1ffd: 0,
+            paging_locked: false,
+            slots: [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)],
+            tracker: Tracker::new(),
+            tstates: 0,
+            frame: 0,
+            irq_pending: false,
+            border: 7,
+            border_start: 7,
+            border_events: Vec::with_capacity(64),
+            keys: [0xff; 8],
+            ear: false,
+            speaker: false,
+            mic: false,
+            audio: Audio::new(model.cpu_hz()),
+            tape: None,
+            tape_boost: true,
+            tape_edge_scratch: Vec::new(),
+            slow: SlowDraw::default(),
+            screen_writes: 0,
+            screen_writes_acc: 0,
+            contention: vec![0; TABLE_LEN],
+        };
+        bus.audio.ay_present = model.has_ay();
+        bus.build_contention_table();
+        bus.apply_paging();
+        bus
+    }
+
+    fn build_contention_table(&mut self) {
+        let pattern = self.model.contention_pattern();
+        self.contention.iter_mut().for_each(|v| *v = 0);
+        let first = self.model.first_pixel_t();
+        let per_line = self.model.t_per_line();
+        for line in 0..PIXEL_LINES {
+            let line_start = first + line * per_line;
+            for px in 0..128u32 {
+                self.contention[(line_start + px) as usize] = pattern[(px % 8) as usize];
+            }
+        }
+    }
+
+    #[inline]
+    pub fn frame_t(&self) -> u32 {
+        self.model.frame_t()
+    }
+
+    // ---- memory paging -----------------------------------------------------
+
+    /// The four all-RAM layouts the +2A/+3 can select with $1FFD.
+    pub const SPECIAL_CONFIGS: [[usize; 4]; 4] =
+        [[0, 1, 2, 3], [4, 5, 6, 7], [4, 5, 6, 3], [4, 7, 6, 3]];
+
+    /// Recompute the four 16K slots from the paging registers.
+    fn apply_paging(&mut self) {
+        if !self.model.has_paging() {
+            self.slots = [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)];
+            return;
+        }
+
+        // +2A/+3 special mode: no ROM at all, four RAM banks instead.
+        if self.model.has_plus3_paging() && self.page_reg_1ffd & 0x01 != 0 {
+            let config = ((self.page_reg_1ffd >> 1) & 0x03) as usize;
+            let banks = Self::SPECIAL_CONFIGS[config];
+            self.slots = [
+                Slot::Ram(banks[0]),
+                Slot::Ram(banks[1]),
+                Slot::Ram(banks[2]),
+                Slot::Ram(banks[3]),
+            ];
+            return;
+        }
+
+        // Normal mode. On a +2A/+3 the ROM number is two bits, the low one
+        // from $7FFD and the high one from $1FFD.
+        let rom = if self.model.has_plus3_paging() {
+            (((self.page_reg_1ffd >> 1) & 0x02) | ((self.page_reg >> 4) & 0x01)) as usize
+        } else {
+            ((self.page_reg >> 4) & 0x01) as usize
+        };
+        let bank = (self.page_reg & 0x07) as usize;
+        self.slots = [
+            Slot::Rom(rom),
+            Slot::Ram(5),
+            Slot::Ram(2),
+            Slot::Ram(bank),
+        ];
+    }
+
+    /// Write to port $7FFD.
+    pub fn write_paging(&mut self, value: u8) {
+        if !self.model.has_paging() || self.paging_locked {
+            return;
+        }
+        self.page_reg = value;
+        if value & 0x20 != 0 {
+            self.paging_locked = true;
+        }
+        self.apply_paging();
+    }
+
+    /// Write to port $1FFD (+2A/+3).
+    pub fn write_paging_1ffd(&mut self, value: u8) {
+        if !self.model.has_plus3_paging() || self.paging_locked {
+            return;
+        }
+        self.page_reg_1ffd = value;
+        self.apply_paging();
+    }
+
+    /// True while the +3 is in one of its all-RAM configurations.
+    pub fn special_paging(&self) -> bool {
+        self.model.has_plus3_paging() && self.page_reg_1ffd & 0x01 != 0
+    }
+
+    /// +3 disk motor bit, decoded but not acted on: there is no FDC.
+    pub fn disk_motor(&self) -> bool {
+        self.model.has_disk() && self.page_reg_1ffd & 0x08 != 0
+    }
+
+    /// Bank the ULA is displaying: 5 normally, 7 for the shadow screen.
+    #[inline]
+    pub fn screen_bank(&self) -> usize {
+        if self.model.has_paging() && self.page_reg & 0x08 != 0 {
+            7
+        } else {
+            5
+        }
+    }
+
+    #[inline]
+    pub fn slot_of(&self, addr: u16) -> Slot {
+        self.slots[(addr >> 14) as usize]
+    }
+
+    #[inline]
+    pub fn mem(&self, addr: u16) -> u8 {
+        let off = (addr & 0x3fff) as usize;
+        match self.slot_of(addr) {
+            Slot::Rom(page) => {
+                let i = page * 0x4000 + off;
+                self.rom.get(i).copied().unwrap_or(0xff)
+            }
+            Slot::Ram(bank) => self.ram[bank * 0x4000 + off],
+        }
+    }
+
+    #[inline]
+    pub fn poke(&mut self, addr: u16, v: u8) {
+        let off = (addr & 0x3fff) as usize;
+        if let Slot::Ram(bank) = self.slot_of(addr) {
+            self.ram[bank * 0x4000 + off] = v;
+        }
+    }
+
+    /// Read a byte of the displayed screen, wherever it is banked.
+    #[inline]
+    pub fn video(&self, offset: u16) -> u8 {
+        let bank = self.screen_bank();
+        self.ram[bank * 0x4000 + (offset as usize & 0x3fff)]
+    }
+
+    /// Read a byte of a specific RAM bank, for the debugger.
+    pub fn bank_byte(&self, bank: usize, offset: u16) -> u8 {
+        self.ram[(bank & 7) * 0x4000 + (offset as usize & 0x3fff)]
+    }
+
+    /// Untracked read for renderers and the debugger.
+    #[inline]
+    pub fn peek_raw(&self, addr: u16) -> u8 {
+        self.mem(addr)
+    }
+
+    /// A page is contended when it holds an odd-numbered RAM bank: on a 48K
+    /// that is only bank 5 at $4000, on a 128K also banks 1, 3 and 7 wherever
+    /// they are paged in.
+    #[inline]
+    fn contended_addr(&self, addr: u16) -> bool {
+        match self.slot_of(addr) {
+            Slot::Ram(bank) => self.model.bank_is_contended(bank),
+            Slot::Rom(_) => false,
+        }
+    }
+
+    // ---- timing ------------------------------------------------------------
+
+    /// A whole memory cycle: the ULA stalls the CPU once, at the start, then
+    /// the access takes its usual `t` T-states.
+    #[inline]
+    fn access(&mut self, addr: u16, t: u32) {
+        if self.contended_addr(addr) {
+            self.tstates += self.delay() as u32;
+        }
+        self.tstates += t;
+    }
+
+    /// Internal cycles: the address stays on the bus, so contention is
+    /// re-evaluated for every single T-state.
+    #[inline]
+    fn contend_addr(&mut self, addr: u16, times: u32) {
+        if self.contended_addr(addr) {
+            for _ in 0..times {
+                self.tstates += self.delay() as u32 + 1;
+            }
+        } else {
+            self.tstates += times;
+        }
+    }
+
+    #[inline]
+    fn delay(&self) -> u8 {
+        let t = self.tstates as usize;
+        if t < self.contention.len() {
+            self.contention[t]
+        } else {
+            0
+        }
+    }
+
+    /// The I/O contention pattern, which depends on both the port's high byte
+    /// and whether it is a ULA port (A0 low).
+    fn contend_io(&mut self, port: u16) {
+        let high_contended = port & 0xc000 == 0x4000;
+        let ula = port & 1 == 0;
+        match (high_contended, ula) {
+            // C:1, C:3
+            (true, true) => {
+                self.io_stall();
+                self.tstates += 1;
+                self.io_stall();
+                self.tstates += 3;
+            }
+            // C:1, C:1, C:1, C:1
+            (true, false) => {
+                for _ in 0..4 {
+                    self.io_stall();
+                    self.tstates += 1;
+                }
+            }
+            // N:1, C:3 — the ULA stalls the CPU even for an uncontended page.
+            (false, true) => {
+                self.tstates += 1;
+                self.io_stall();
+                self.tstates += 3;
+            }
+            // N:4
+            (false, false) => self.tstates += 4,
+        }
+    }
+
+    #[inline]
+    fn io_stall(&mut self) {
+        self.tstates += self.delay() as u32;
+    }
+
+    // ---- sound -------------------------------------------------------------
+
+    /// Generate any samples due up to now. Called whenever the sound output
+    /// changes and once per frame.
+    ///
+    /// The tape is always advanced first: the mixer must never run past the
+    /// tape, or the tape's edges would arrive with timestamps already in the
+    /// past and be collapsed into silence.
+    pub fn audio_sync(&mut self) {
+        if self.tape_playing() {
+            self.tape_advance();
+        }
+        let now = self.total_t();
+        self.audio.advance_to(now);
+    }
+
+    fn update_beeper(&mut self) {
+        // The speaker bit dominates; MIC and the EAR input are audible on real
+        // hardware too, which is why you can hear a tape loading.
+        let level = 0.55 * self.speaker as u8 as f32
+            + 0.08 * self.mic as u8 as f32
+            + 0.08 * self.ear as u8 as f32;
+        self.audio.beeper = level;
+    }
+
+    // ---- tape --------------------------------------------------------------
+
+    /// T-states since power-on, which is the timebase for tape and sound.
+    #[inline]
+    pub fn total_t(&self) -> u64 {
+        self.frame * self.model.frame_t() as u64 + self.tstates as u64
+    }
+
+    /// Current EAR input level, advancing the tape to the present moment.
+    ///
+    /// Every edge the tape produced along the way is mixed in at its own
+    /// T-state. Sampling the level only when the CPU reads the port would
+    /// collapse a whole burst of pilot tone into one transition, which is
+    /// what makes a tape sound like noise instead of a tone.
+    pub fn tape_level(&mut self) -> bool {
+        self.tape_advance()
+    }
+
+    /// Advance the tape to the present, mixing in every edge it produced at
+    /// the T-state it happened, and return the resulting EAR level.
+    fn tape_advance(&mut self) -> bool {
+        let now = self.total_t();
+        if self.tape.is_none() {
+            return self.ear;
+        }
+
+        let mut edges = std::mem::take(&mut self.tape_edge_scratch);
+        edges.clear();
+        let level = {
+            let tape = self.tape.as_mut().expect("checked above");
+            let level = tape.level_at(now);
+            tape.take_pending_edges(&mut edges);
+            level
+        };
+
+        for (at, ear) in edges.drain(..) {
+            self.audio.advance_to(at);
+            self.ear = ear;
+            self.update_beeper();
+        }
+        self.tape_edge_scratch = edges;
+
+        if self.ear != level {
+            self.audio.advance_to(now);
+            self.ear = level;
+            self.update_beeper();
+        }
+        level
+    }
+
+    /// Keep the tape running even when the CPU is not polling the port, so the
+    /// oscilloscope and block position stay live.
+    pub fn tape_tick(&mut self) {
+        if self.tape_playing() {
+            self.tape_advance();
+        }
+    }
+
+    pub fn tape_playing(&self) -> bool {
+        self.tape.as_ref().is_some_and(|t| t.playing)
+    }
+
+    /// Border colour in effect at T-state `t` of the current frame.
+    pub fn border_at(&self, t: u32) -> u8 {
+        let mut color = self.border_start;
+        for &(at, c) in &self.border_events {
+            if at <= t {
+                color = c;
+            } else {
+                break;
+            }
+        }
+        color
+    }
+
+    fn watched(&self, addr: u16) -> bool {
+        if self.slow.watch_screen && (SCREEN_START..SCREEN_END).contains(&addr) {
+            return true;
+        }
+        if self.slow.watch_back_buffer {
+            if let Some(r) = self.tracker.back_buffer() {
+                return r.contains(addr);
+            }
+        }
+        false
+    }
+
+    /// Keyboard: 0xFE reads return the AND of every selected half-row.
+    fn keyboard(&self, port: u16, ear: bool) -> u8 {
+        let mut result = 0x1f;
+        for row in 0..8 {
+            if port & (1 << (8 + row)) == 0 {
+                result &= self.keys[row] & 0x1f;
+            }
+        }
+        let mut v = result | 0xa0;
+        if ear {
+            v |= 0x40;
+        }
+        v
+    }
+
+    /// Approximate floating bus: what the ULA happens to be fetching now.
+    /// The +2A/+3 has none, so it reads back as $FF.
+    fn floating_bus(&self) -> u8 {
+        if !self.model.has_floating_bus() {
+            return 0xff;
+        }
+        let t = self.tstates;
+        let first = self.model.first_pixel_t();
+        let per_line = self.model.t_per_line();
+        if t < first || t >= first + PIXEL_LINES * per_line {
+            return 0xff;
+        }
+        let rel = t - first;
+        let line = rel / per_line;
+        let col_t = rel % per_line;
+        if col_t >= 128 {
+            return 0xff;
+        }
+        let cell = col_t / 4;
+        let offset = match col_t % 4 {
+            0 => screen_bitmap_offset(line as u16, cell as u16),
+            1 => screen_attr_offset(line as u16, cell as u16),
+            2 => screen_bitmap_offset(line as u16, cell as u16 + 1),
+            _ => screen_attr_offset(line as u16, cell as u16 + 1),
+        };
+        self.video(offset)
+    }
+
+    /// End-of-frame bookkeeping: flush sound, re-arm the interrupt.
+    pub fn end_frame(&mut self) {
+        self.tstates -= self.model.frame_t();
+        self.frame += 1;
+        self.irq_pending = true;
+        self.screen_writes = self.screen_writes_acc;
+        self.screen_writes_acc = 0;
+        self.border_start = self.border;
+        self.border_events.clear();
+        self.audio_sync();
+    }
+
+    pub fn frame_visuals(&mut self) {
+        self.tracker.fade();
+        self.tracker.tick_detector();
+    }
+}
+
+/// Offset of a pixel byte within the 6912-byte display file.
+pub fn screen_bitmap_offset(line: u16, cell: u16) -> u16 {
+    let y = line;
+    ((y & 0xc0) << 5) | ((y & 0x07) << 8) | ((y & 0x38) << 2) | (cell & 0x1f)
+}
+
+/// Offset of an attribute byte within the display file.
+pub fn screen_attr_offset(line: u16, cell: u16) -> u16 {
+    0x1800 + (line / 8) * 32 + (cell & 0x1f)
+}
+
+pub fn screen_bitmap_addr(line: u16, cell: u16) -> u16 {
+    0x4000 | screen_bitmap_offset(line, cell)
+}
+
+pub fn screen_attr_addr(line: u16, cell: u16) -> u16 {
+    0x4000 | screen_attr_offset(line, cell)
+}
+
+impl Bus for SpectrumBus {
+    fn fetch_op(&mut self, addr: u16) -> u8 {
+        self.access(addr, 4);
+        self.tracker.on_exec(addr);
+        self.mem(addr)
+    }
+
+    fn read(&mut self, addr: u16) -> u8 {
+        self.access(addr, 3);
+        self.tracker.on_read(addr);
+        self.mem(addr)
+    }
+
+    fn write(&mut self, addr: u16, value: u8) {
+        self.access(addr, 3);
+        self.tracker.on_write(addr);
+        if (SCREEN_START..SCREEN_END).contains(&addr) {
+            self.screen_writes_acc += 1;
+        }
+        if self.slow.enabled && self.watched(addr) {
+            if self.slow.budget_left == 0 {
+                self.slow.hit = true;
+            } else {
+                self.slow.budget_left -= 1;
+                if self.slow.budget_left == 0 {
+                    self.slow.hit = true;
+                }
+            }
+        }
+        self.poke(addr, value);
+    }
+
+    fn contend(&mut self, addr: u16, times: u32) {
+        self.contend_addr(addr, times);
+    }
+
+    fn io_read(&mut self, port: u16) -> u8 {
+        self.contend_io(port);
+        // AY register read: $FFFD.
+        if self.model.has_ay() && port & 0xc002 == 0xc000 {
+            return self.audio.ay.read();
+        }
+        if port & 1 == 0 {
+            let ear = self.tape_level();
+            self.keyboard(port, ear)
+        } else {
+            self.floating_bus()
+        }
+    }
+
+    fn io_write(&mut self, port: u16, value: u8) {
+        self.contend_io(port);
+
+        if port & 1 == 0 {
+            let new = value & 7;
+            if new != self.border && self.border_events.len() < 512 {
+                self.border_events.push((self.tstates, new));
+            }
+            self.border = new;
+            let speaker = value & 0x10 != 0;
+            let mic = value & 0x08 != 0;
+            if speaker != self.speaker || mic != self.mic {
+                self.audio_sync();
+                self.speaker = speaker;
+                self.mic = mic;
+                self.update_beeper();
+            }
+        }
+
+        if self.model.has_paging() {
+            // $7FFD: memory paging. The +2A/+3 decode it more strictly than
+            // the 128K, which decodes only A15 and A1.
+            let is_7ffd = if self.model.has_plus3_paging() {
+                port & 0xc002 == 0x4000
+            } else {
+                port & 0x8002 == 0
+            };
+            if is_7ffd {
+                self.write_paging(value);
+            }
+            // $1FFD: the +2A/+3's second paging port.
+            if self.model.has_plus3_paging() && port & 0xf002 == 0x1000 {
+                self.write_paging_1ffd(value);
+            }
+            // $FFFD: AY register select, $BFFD: AY data.
+            if port & 0xc002 == 0xc000 {
+                self.audio.ay.selected = value & 0x0f;
+            } else if port & 0xc002 == 0x8000 {
+                self.audio_sync();
+                self.audio.ay.write(value);
+            }
+        }
+    }
+
+    fn peek(&self, addr: u16) -> u8 {
+        self.mem(addr)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stop {
+    /// Ran out of the requested T-state budget.
+    Budget,
+    /// Slow-draw mode used up its write allowance.
+    SlowDraw,
+    Breakpoint(u16),
+    /// A single-step request completed.
+    Stepped,
+}
+
+pub struct Spectrum {
+    pub cpu: Z80,
+    pub bus: SpectrumBus,
+    pub breakpoints: Vec<u16>,
+    /// Temporary breakpoint used by "step over" / "run to cursor".
+    pub temp_bp: Option<u16>,
+    /// Whole frames completed since the last visual update.
+    pub frames_completed: u32,
+}
+
+impl Default for Spectrum {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Spectrum {
+    pub fn new() -> Self {
+        Spectrum::with_model(Model::Spectrum48)
+    }
+
+    pub fn with_model(model: Model) -> Self {
+        Spectrum {
+            cpu: Z80::new(),
+            bus: SpectrumBus::new(model),
+            breakpoints: Vec::new(),
+            temp_bp: None,
+            frames_completed: 0,
+        }
+    }
+
+    pub fn load_rom(&mut self, data: &[u8]) {
+        let n = data.len().min(self.bus.rom.len());
+        self.bus.rom[..n].copy_from_slice(&data[..n]);
+    }
+
+    /// Switch machine, keeping the tape and audio device attached.
+    pub fn set_model(&mut self, model: Model, rom: &[u8]) {
+        let tape = self.bus.tape.take();
+        let audio = std::mem::replace(&mut self.bus.audio, crate::audio::Audio::new(1.0));
+        let tape_boost = self.bus.tape_boost;
+        let slow_enabled = self.bus.slow.enabled;
+
+        self.bus = SpectrumBus::new(model);
+        self.bus.audio = audio;
+        self.bus.audio.set_cpu_hz(model.cpu_hz());
+        self.bus.audio.ay_present = model.has_ay();
+        self.bus.audio.ay.reset();
+        self.bus.tape = tape;
+        self.bus.tape_boost = tape_boost;
+        self.bus.slow.enabled = slow_enabled;
+        self.load_rom(rom);
+        self.reset();
+    }
+
+    pub fn reset(&mut self) {
+        self.cpu.reset();
+        self.bus.tstates = 0;
+        self.bus.frame = 0;
+        self.bus.irq_pending = false;
+        self.bus.border = 7;
+        self.bus.ram.iter_mut().for_each(|b| *b = 0);
+        self.bus.page_reg = 0;
+        self.bus.page_reg_1ffd = 0;
+        self.bus.paging_locked = false;
+        self.bus.apply_paging();
+        self.bus.tracker.reset();
+        self.bus.audio.ay.reset();
+        self.bus.audio.rebase(0);
+        self.bus.speaker = false;
+        self.bus.mic = false;
+        self.bus.ear = false;
+        self.bus.audio.beeper = 0.0;
+        // The tape's timebase is absolute, so it has to go back to the start
+        // along with the frame counter.
+        if let Some(tape) = &mut self.bus.tape {
+            tape.stop();
+            tape.rewind();
+            tape.edges.clear();
+        }
+    }
+
+    fn check_interrupt(&mut self) {
+        if self.bus.irq_pending {
+            if self.bus.tstates >= IRQ_LEN {
+                // Missed the window entirely.
+                self.bus.irq_pending = false;
+            } else if self.cpu.interrupt(&mut self.bus) {
+                self.bus.irq_pending = false;
+            }
+        }
+    }
+
+    /// Execute exactly one instruction (after any pending interrupt).
+    pub fn step_instruction(&mut self) {
+        self.check_interrupt();
+        self.cpu.step(&mut self.bus);
+        if self.bus.tstates >= self.bus.frame_t() {
+            self.bus.end_frame();
+            self.frames_completed += 1;
+        }
+    }
+
+    /// Run until `budget` T-states have been consumed, a breakpoint is hit, or
+    /// slow-draw mode parks the CPU.
+    pub fn run(&mut self, budget: u32) -> Stop {
+        let frame_t = self.bus.frame_t();
+        let mut spent = 0u32;
+        while spent < budget {
+            let before = self.bus.tstates;
+            self.step_instruction();
+            let after = self.bus.tstates;
+            spent += if after >= before {
+                after - before
+            } else {
+                after + frame_t - before
+            };
+
+            if self.bus.slow.enabled && self.bus.slow.hit {
+                return Stop::SlowDraw;
+            }
+            let pc = self.cpu.pc;
+            if self.temp_bp == Some(pc) {
+                self.temp_bp = None;
+                return Stop::Breakpoint(pc);
+            }
+            if self.breakpoints.contains(&pc) {
+                return Stop::Breakpoint(pc);
+            }
+        }
+        Stop::Budget
+    }
+
+    /// True when the instruction at `pc` is one that "step over" should run to
+    /// completion rather than enter.
+    pub fn is_step_over_target(&self, pc: u16) -> bool {
+        let op = self.bus.peek(pc);
+        match op {
+            // CALL nn, CALL cc,nn, RST n
+            0xcd | 0xc4 | 0xcc | 0xd4 | 0xdc | 0xe4 | 0xec | 0xf4 | 0xfc => true,
+            0xc7 | 0xcf | 0xd7 | 0xdf | 0xe7 | 0xef | 0xf7 | 0xff => true,
+            // The repeating block instructions.
+            0xed => matches!(
+                self.bus.peek(pc.wrapping_add(1)),
+                0xb0 | 0xb1 | 0xb2 | 0xb3 | 0xb8 | 0xb9 | 0xba | 0xbb
+            ),
+            _ => false,
+        }
+    }
+}
