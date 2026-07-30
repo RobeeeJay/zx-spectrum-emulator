@@ -171,8 +171,8 @@ fn disassembly_round_trips_the_demo_rom() {
 fn screen_renderer_produces_a_full_frame() {
     let mut s = demo_machine();
     run_frames(&mut s, 40);
-    let mut buf = vec![0u8; screen::WIDTH * screen::HEIGHT * 4];
-    screen::render(&s.bus, &mut buf, false);
+    let mut buf = vec![0u8; screen::View::OVERSCAN.buffer_len()];
+    screen::render(&s.bus, screen::View::OVERSCAN, &mut buf, false);
     assert!(buf.chunks(4).all(|p| p[3] == 0xff), "alpha not filled in");
     let distinct: std::collections::HashSet<[u8; 3]> =
         buf.chunks(4).map(|p| [p[0], p[1], p[2]]).collect();

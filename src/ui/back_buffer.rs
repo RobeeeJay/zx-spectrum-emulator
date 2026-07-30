@@ -18,7 +18,7 @@ pub struct BackBufferState {
 impl Default for BackBufferState {
     fn default() -> Self {
         BackBufferState {
-            pixels: vec![0; screen::WIDTH * screen::HEIGHT * 4],
+            pixels: vec![0; screen::View::OVERSCAN.buffer_len()],
             tex: None,
             manual_text: "8000".into(),
             scale: 1.5,
@@ -104,15 +104,21 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 ))
                 .monospace(),
             );
+            let view = app.view();
+            if app.back.pixels.len() != view.buffer_len() {
+                app.back.pixels = vec![0; view.buffer_len()];
+                app.back.tex = None;
+            }
             screen::render_from(
                 &app.spec.bus,
+                view,
                 r.start,
                 &mut app.back.pixels,
                 (app.spec.bus.frame / 16) % 2 == 1,
                 false,
             );
             let img = ColorImage::from_rgba_unmultiplied(
-                [screen::WIDTH, screen::HEIGHT],
+                [view.width(), view.height()],
                 &app.back.pixels,
             );
             match &mut app.back.tex {
@@ -125,8 +131,8 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             ui.add(egui::Slider::new(&mut app.back.scale, 0.5..=3.0).text("zoom"));
             if let Some(tex) = &app.back.tex {
                 let size = egui::vec2(
-                    screen::WIDTH as f32 * app.back.scale,
-                    screen::HEIGHT as f32 * app.back.scale,
+                    view.width() as f32 * app.back.scale,
+                    view.height() as f32 * app.back.scale,
                 );
                 ui.image(egui::ImageSource::Texture(egui::load::SizedTexture::new(
                     tex.id(),

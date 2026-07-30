@@ -146,6 +146,8 @@ pub struct App {
     screen_pixels: Vec<u8>,
     screen_tex: Option<TextureHandle>,
     pub scale: f32,
+    /// Show the whole overscan area, or crop the border to television size.
+    pub overscan: bool,
 
     pub ram: ram_map::RamMapState,
     pub dbg: debugger::DebuggerState,
@@ -195,9 +197,10 @@ impl App {
             show_back_buffer: false,
             show_tape: false,
             show_profiler: false,
-            screen_pixels: vec![0; screen::WIDTH * screen::HEIGHT * 4],
+            screen_pixels: vec![0; screen::View::OVERSCAN.buffer_len()],
             screen_tex: None,
             scale: 2.0,
+            overscan: true,
             ram: ram_map::RamMapState::default(),
             dbg: debugger::DebuggerState::default(),
             back: back_buffer::BackBufferState::default(),
@@ -386,6 +389,14 @@ impl App {
             ui.toggle_value(&mut self.show_tape, "Tape");
             ui.toggle_value(&mut self.show_back_buffer, "Back buffer");
             ui.toggle_value(&mut self.show_profiler, "Profiler");
+
+            ui.separator();
+            ui.toggle_value(&mut self.overscan, "Overscan")
+                .on_hover_text(
+                    "Show the whole area the ULA draws, which is where border-art \
+                     demos put their graphics. Off crops the border to the size a \
+                     television would have shown.",
+                );
         });
     }
 
@@ -480,6 +491,15 @@ impl App {
         }
     }
 
+    /// How much border to draw.
+    pub fn view(&self) -> screen::View {
+        if self.overscan {
+            screen::View::OVERSCAN
+        } else {
+            screen::View::CROPPED
+        }
+    }
+
     fn flash_on(&self) -> bool {
         (self.spec.bus.frame / 16) % 2 == 1
     }
@@ -535,10 +555,15 @@ impl App {
     }
 
     fn draw_screen_texture(&mut self, ctx: &egui::Context) {
+        let view = self.view();
         let flash = self.flash_on();
-        screen::render(&self.spec.bus, &mut self.screen_pixels, flash);
+        if self.screen_pixels.len() != view.buffer_len() {
+            self.screen_pixels = vec![0; view.buffer_len()];
+            self.screen_tex = None; // the texture has to be remade at the new size
+        }
+        screen::render(&self.spec.bus, view, &mut self.screen_pixels, flash);
         let img = ColorImage::from_rgba_unmultiplied(
-            [screen::WIDTH, screen::HEIGHT],
+            [view.width(), view.height()],
             &self.screen_pixels,
         );
         match &mut self.screen_tex {
@@ -822,9 +847,10 @@ impl App {
         });
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(tex) = &self.screen_tex {
+                let view = self.view();
                 let size = egui::vec2(
-                    screen::WIDTH as f32 * self.scale,
-                    screen::HEIGHT as f32 * self.scale,
+                    view.width() as f32 * self.scale,
+                    view.height() as f32 * self.scale,
                 );
                 let src = egui::ImageSource::Texture(egui::load::SizedTexture::new(tex.id(), size));
                 ui.centered_and_justified(|ui| {

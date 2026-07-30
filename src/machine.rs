@@ -106,6 +106,9 @@ pub const FRAME_T_128: u32 = 70908;
 pub const PIXEL_LINES: u32 = 192;
 /// How long the ULA holds /INT low at the top of the frame.
 pub const IRQ_LEN: u32 = 32;
+/// Ceiling on border changes recorded per frame. A whole frame of the tightest
+/// border routine is comfortably under this.
+pub const BORDER_EVENT_CAP: usize = 24_000;
 pub const CPU_HZ: f64 = 3_500_000.0;
 
 const TABLE_LEN: usize = (FRAME_T_128 + 512) as usize;
@@ -182,7 +185,14 @@ pub struct SpectrumBus {
     /// Border colour at the start of the frame, plus every mid-frame change,
     /// so the renderer can reproduce raster bands.
     pub border_start: u8,
+    /// Every mid-frame border change, as (T-state, colour). Border art writes
+    /// the port hundreds of times per line, so this has to be roomy.
     pub border_events: Vec<(u32, u8)>,
+    /// The same for the frame just finished. The part of the screen the ULA
+    /// has not reached yet still shows the previous frame, so a render taken
+    /// mid-frame needs both.
+    pub border_prev: Vec<(u32, u8)>,
+    pub border_prev_start: u8,
     /// Keyboard matrix: one byte per half-row, bit clear = key down.
     pub keys: [u8; 8],
     pub ear: bool,
@@ -231,7 +241,9 @@ impl SpectrumBus {
             irq_pending: false,
             border: 7,
             border_start: 7,
-            border_events: Vec::with_capacity(64),
+            border_events: Vec::with_capacity(4096),
+            border_prev: Vec::with_capacity(4096),
+            border_prev_start: 7,
             keys: [0xff; 8],
             ear: false,
             speaker: false,
@@ -628,17 +640,44 @@ impl SpectrumBus {
         self.tape.as_ref().is_some_and(|t| t.playing)
     }
 
+    /// Border colour at every T-state of the frame as it would appear on
+    /// screen right now: the current frame up to where the ULA has got to,
+    /// and the previous frame beyond that.
+    pub fn border_raster(&self) -> Vec<u8> {
+        let frame_t = self.frame_t() as usize;
+        let mut out = vec![0u8; frame_t];
+        let now = (self.tstates as usize).min(frame_t);
+
+        let mut colour = self.border_start;
+        let mut ev = self.border_events.iter().peekable();
+        for (t, slot) in out.iter_mut().enumerate().take(now) {
+            while ev.peek().is_some_and(|(at, _)| *at as usize <= t) {
+                colour = ev.next().unwrap().1;
+            }
+            *slot = colour;
+        }
+
+        let mut colour = self.border_prev_start;
+        let mut ev = self.border_prev.iter().peekable();
+        // Catch up to the current position before filling the rest.
+        while ev.peek().is_some_and(|(at, _)| (*at as usize) < now) {
+            colour = ev.next().unwrap().1;
+        }
+        for (t, slot) in out.iter_mut().enumerate().skip(now) {
+            while ev.peek().is_some_and(|(at, _)| *at as usize <= t) {
+                colour = ev.next().unwrap().1;
+            }
+            *slot = colour;
+        }
+        out
+    }
+
     /// Border colour in effect at T-state `t` of the current frame.
     pub fn border_at(&self, t: u32) -> u8 {
-        let mut color = self.border_start;
-        for &(at, c) in &self.border_events {
-            if at <= t {
-                color = c;
-            } else {
-                break;
-            }
+        match self.border_events.partition_point(|&(at, _)| at <= t) {
+            0 => self.border_start,
+            i => self.border_events[i - 1].1,
         }
-        color
     }
 
     fn watched(&self, addr: u16) -> bool {
@@ -707,6 +746,10 @@ impl SpectrumBus {
         self.irq_pending = true;
         self.screen_writes = self.screen_writes_acc;
         self.screen_writes_acc = 0;
+        // Keep the finished frame; the renderer needs it for the part of the
+        // screen the ULA has not redrawn yet.
+        std::mem::swap(&mut self.border_events, &mut self.border_prev);
+        self.border_prev_start = self.border_start;
         self.border_start = self.border;
         self.border_events.clear();
         self.audio_sync();
@@ -791,12 +834,14 @@ impl Bus for SpectrumBus {
     }
 
     fn io_write(&mut self, port: u16, value: u8) {
-        self.contend_io(port);
+        let sampled = self.contend_io(port);
 
         if port & 1 == 0 {
             let new = value & 7;
-            if new != self.border && self.border_events.len() < 512 {
-                self.border_events.push((self.tstates, new));
+            if new != self.border && self.border_events.len() < BORDER_EVENT_CAP {
+                // Timed at the start of the IORQ cycle, which is when the ULA
+                // sees the write.
+                self.border_events.push((sampled, new));
             }
             self.border = new;
             let speaker = value & 0x10 != 0;

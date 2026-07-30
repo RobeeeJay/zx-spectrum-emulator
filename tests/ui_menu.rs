@@ -321,3 +321,28 @@ fn an_odd_sized_rom_is_reported_rather_than_silently_truncated() {
         "an unrecognised size should not change machine"
     );
 }
+
+#[test]
+fn the_overscan_toggle_changes_how_much_border_is_drawn() {
+    use zx_spectrum_emulator::screen::View;
+
+    let mut h = harness();
+    h.run_steps(3);
+    assert!(h.state().overscan, "the full border is shown by default");
+    assert_eq!(h.state().view(), View::OVERSCAN);
+
+    h.get_by_label("Overscan").click();
+    h.run_steps(3);
+
+    assert!(!h.state().overscan);
+    let view = h.state().view();
+    assert_eq!(view, View::CROPPED);
+    assert!(
+        view.width() < View::OVERSCAN.width() && view.height() < View::OVERSCAN.height(),
+        "cropping should show a smaller area: {view:?}"
+    );
+
+    h.get_by_label("Overscan").click();
+    h.run_steps(3);
+    assert_eq!(h.state().view(), View::OVERSCAN, "and back again");
+}

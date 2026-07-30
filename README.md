@@ -2,7 +2,14 @@
 
 A ZX Spectrum emulator in Rust — 48K, 128K, +2A and +3 — with a cycle-accurate
 Z80 core, beeper and AY sound, and a set of detachable debugging windows, built
-on `eframe`/`egui`.
+on `eframe`/`egui` with the **wgpu** renderer (Metal on macOS, Vulkan or DX12
+elsewhere).
+
+The OpenGL renderer is deliberately not used: on macOS it goes through glutin,
+whose Cocoa backend panics with *"context to have a current view"* when one of
+the extra windows loses its view — which this emulator, with four of them, runs
+into. If you are building somewhere wgpu cannot find a backend, swapping the
+`wgpu` feature for `glow` in `Cargo.toml` restores the OpenGL path.
 
 ```
 cargo run --release             # 48K
@@ -53,6 +60,25 @@ for the four idle T-states in each group of eight.
 **Early and late timing.** Real 48K machines came in two variants, one running
 the display a T-state later relative to the interrupt. **Machine ▸ Late timing**
 switches between them; the emulator matches the reference photograph for each.
+
+**Overscan.** The toolbar's **Overscan** toggle chooses how much border to
+draw: on (the default) shows the whole 384x304 area the ULA puts out, which is
+where border-art demos work; off crops it to 304x240, roughly what a television
+showed. Cropping only changes how much border surrounds the picture — every
+pixel stays exactly where it was.
+
+**Border art.** The border is rasterised by T-state rather than by scanline —
+the ULA puts out two pixels per T-state, so a program writing port `$FE` in a
+tight loop can draw in it at that resolution. Border Break (introspec/gonzy)
+renders **pixel for pixel identically** to a real 48K: all 116,736 pixels of
+`tapes/bb.png` match, border included.
+
+Getting there needed three things beyond per-line sampling: the ULA fetches two
+T-states ahead of the pixels it is emitting, so a border write lands on screen
+slightly before the fetch clock that contention counts; a frame that has only
+been drawn part-way still shows the *previous* frame below the point the ULA has
+reached, rather than going black; and the border log has to be big enough for
+the hundreds of writes per frame that this kind of code makes.
 
 **Verified against zexdoc and zexall.** Both exercisers pass every test,
 including the undocumented flag tests in zexall:
@@ -362,6 +388,14 @@ its directory are created on launch, that settings round-trip while hand-added
 keys survive, that ROM scanning recognises images by size and prefers a name
 that mentions the machine, and that opening a ROM or a tape remembers the right
 directory without replacing ROMs already loaded.
+
+`tests/border.rs` loads Border Break, waits for its border routine to start and
+compares the rendered border against rows taken from the photograph of real
+hardware, run-length encoded. It also checks that cropping the border shows
+the identical picture with less around it, that alternating the border in a
+tight loop produces stripes 38 and 62 pixels wide — the 19 and 31 T-states that
+loop actually takes — and that a half-drawn frame keeps the rest of the previous
+one.
 
 `tests/halt2int.rs` boots a real 48K ROM, types `LOAD ""`, plays HALT2INT off
 tape and reads the results back off the screen by matching character cells
