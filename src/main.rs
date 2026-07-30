@@ -152,10 +152,16 @@ fn main() -> eframe::Result<()> {
 
     let opened_tape = load_cli_files(&mut spec, &mut roms, &mut status);
 
+    // Put the main window back where it was last time.
+    let mut viewport = eframe::egui::ViewportBuilder::default().with_title("ZX Spectrum");
+    viewport = match prefs.window("main") {
+        Some(r) => viewport
+            .with_position([r.x, r.y])
+            .with_inner_size([r.w, r.h]),
+        None => viewport.with_inner_size([720.0, 660.0]),
+    };
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("ZX Spectrum")
-            .with_inner_size([720.0, 660.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
@@ -164,6 +170,7 @@ fn main() -> eframe::Result<()> {
         Box::new(move |_cc| {
             let mut app = ui::App::with_roms(spec, status, roms, audio_out);
             app.prefs = prefs;
+            app.apply_prefs();
             app.show_tape = opened_tape;
             app.audio_error = audio_error;
             Ok(Box::new(app))

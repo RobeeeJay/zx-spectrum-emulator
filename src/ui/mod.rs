@@ -11,7 +11,7 @@ use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportI
 
 use crate::audio_out::AudioOut;
 use crate::machine::{Model, Spectrum, Stop};
-use crate::prefs::{FileKind, Prefs};
+use crate::prefs::{FileKind, Prefs, WindowRect};
 use crate::screen;
 use crate::snapshot;
 
@@ -169,6 +169,13 @@ pub struct App {
 
     /// Remembered settings, including the directories files were opened from.
     pub prefs: Prefs,
+    /// Windows whose saved geometry has been applied, so a restore happens
+    /// once rather than fighting the user every frame.
+    restored: std::collections::HashSet<&'static str>,
+    /// The layout as last written, and when: the file is rewritten a moment
+    /// after things settle, so a crash or a kill does not lose it.
+    last_saved: Option<String>,
+    last_save_at: Option<std::time::Instant>,
 
     pub roms: Roms,
     /// Kept alive for as long as the app runs; dropping it stops the sound.
@@ -212,6 +219,9 @@ impl App {
             title_model: None,
             audio_latency_target: 0.06,
             prefs: Prefs::default(),
+            restored: std::collections::HashSet::new(),
+            last_saved: None,
+            last_save_at: None,
             roms,
             audio_out,
             audio_error: None,
@@ -391,6 +401,21 @@ impl App {
             ui.toggle_value(&mut self.show_profiler, "Profiler");
 
             ui.separator();
+            ui.label("Zoom:");
+            for scale in screen::SCALES {
+                let label = if scale.fract() == 0.0 {
+                    format!("{scale:.0}x")
+                } else {
+                    format!("{scale}x")
+                };
+                if ui
+                    .selectable_label((self.scale - scale).abs() < f32::EPSILON, label)
+                    .clicked()
+                {
+                    self.scale = scale;
+                }
+            }
+            ui.separator();
             ui.toggle_value(&mut self.overscan, "Overscan")
                 .on_hover_text(
                     "Show the whole area the ULA draws, which is where border-art \
@@ -488,6 +513,85 @@ impl App {
                 Err(e) => self.set_status(format!("ROM load failed: {e}"), true),
             },
             other => self.set_status(format!("Unsupported file type: .{other}"), true),
+        }
+    }
+
+    /// Note where a window is now, so it can be put back next time.
+    fn remember_window(&mut self, name: &str, ctx: &egui::Context) {
+        let (outer, inner) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect));
+        // Position comes from the outer rectangle and size from the inner one,
+        // to match what the viewport builder takes: mixing them would grow
+        // every window by the height of its title bar on each launch.
+        if let (Some(outer), Some(inner)) = (outer, inner) {
+            self.prefs.set_window(
+                name,
+                WindowRect {
+                    x: outer.min.x,
+                    y: outer.min.y,
+                    w: inner.width(),
+                    h: inner.height(),
+                },
+            );
+        }
+    }
+
+    /// Apply the saved geometry for a window, once.
+    fn restore_window(
+        &mut self,
+        name: &'static str,
+        builder: ViewportBuilder,
+        default_pos: [f32; 2],
+        default_size: [f32; 2],
+    ) -> ViewportBuilder {
+        if !self.restored.insert(name) {
+            // Already positioned; leave it alone so dragging it sticks.
+            return builder;
+        }
+        match self.prefs.window(name) {
+            Some(r) => builder
+                .with_position([r.x, r.y])
+                .with_inner_size([r.w, r.h]),
+            None => builder
+                .with_position(default_pos)
+                .with_inner_size(default_size),
+        }
+    }
+
+    /// Write the window layout and display settings out. Called on close.
+    pub fn save_window_state(&mut self) {
+        self.prefs.display_scale = Some(self.scale);
+        self.prefs.overscan = Some(self.overscan);
+        self.prefs.save();
+        self.last_saved = Some(self.prefs.to_text());
+        self.last_save_at = Some(std::time::Instant::now());
+    }
+
+    /// Save the layout if it has changed and has been still for a moment.
+    fn save_window_state_if_settled(&mut self) {
+        const SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+        if self
+            .last_save_at
+            .is_some_and(|at| at.elapsed() < SETTLE)
+        {
+            return;
+        }
+        self.prefs.display_scale = Some(self.scale);
+        self.prefs.overscan = Some(self.overscan);
+        let text = self.prefs.to_text();
+        if self.last_saved.as_deref() == Some(text.as_str()) {
+            self.last_save_at = Some(std::time::Instant::now());
+            return;
+        }
+        self.save_window_state();
+    }
+
+    /// Take the display settings from the preferences file, if it has any.
+    pub fn apply_prefs(&mut self) {
+        if let Some(scale) = self.prefs.display_scale.filter(|s| *s > 0.0) {
+            self.scale = scale;
+        }
+        if let Some(overscan) = self.prefs.overscan {
+            self.overscan = overscan;
         }
     }
 
@@ -812,6 +916,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.draw(ui);
     }
+
+    /// Keep the layout for next time.
+    fn on_exit(&mut self) {
+        self.save_window_state();
+    }
 }
 
 impl App {
@@ -823,6 +932,7 @@ impl App {
         self.read_keyboard(&ctx);
         self.advance(dt);
         self.sync_title(&ctx);
+        self.remember_window("main", &ctx);
         self.spec.bus.tape_tick();
         self.spec.bus.frame_visuals();
         self.draw_screen_texture(&ctx);
@@ -852,13 +962,22 @@ impl App {
                     view.width() as f32 * self.scale,
                     view.height() as f32 * self.scale,
                 );
-                let src = egui::ImageSource::Texture(egui::load::SizedTexture::new(tex.id(), size));
-                ui.centered_and_justified(|ui| {
-                    ui.image(src);
-                });
+                // Take the whole panel and put the picture in the middle of it,
+                // so the space around the display is equal on all four sides.
+                let (area, _) =
+                    ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+                let painter = ui.painter_at(area);
+                painter.rect_filled(area, 0.0, egui::Color32::BLACK);
+                painter.image(
+                    tex.id(),
+                    screen::centred(area, size),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
             }
         });
 
+        self.save_window_state_if_settled();
         ctx.request_repaint();
     }
 }
@@ -869,14 +988,18 @@ impl App {
             let mut open = true;
             ctx.show_viewport_immediate(
                 ViewportId::from_hash_of("ram-map"),
-                ViewportBuilder::default()
-                    .with_title("RAM access map")
-                    .with_inner_size([560.0, 700.0])
-                    .with_position([1120.0, 40.0]),
+                self.restore_window(
+                    "ram_map",
+                    ViewportBuilder::default().with_title("RAM access map"),
+                    [1120.0, 40.0],
+                    [560.0, 700.0],
+                ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
+                    let ctx = ui.ctx().clone();
+                    self.remember_window("ram_map", &ctx);
                     egui::CentralPanel::default().show(ui, |ui| ram_map::ui(self, ui));
                 },
             );
@@ -887,14 +1010,18 @@ impl App {
             let mut open = true;
             ctx.show_viewport_immediate(
                 ViewportId::from_hash_of("debugger"),
-                ViewportBuilder::default()
-                    .with_title("Debugger")
-                    .with_inner_size([820.0, 780.0])
-                    .with_position([20.0, 40.0]),
+                self.restore_window(
+                    "debugger",
+                    ViewportBuilder::default().with_title("Debugger"),
+                    [20.0, 40.0],
+                    [820.0, 780.0],
+                ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
+                    let ctx = ui.ctx().clone();
+                    self.remember_window("debugger", &ctx);
                     egui::CentralPanel::default().show(ui, |ui| debugger::ui(self, ui));
                 },
             );
@@ -905,14 +1032,18 @@ impl App {
             let mut open = true;
             ctx.show_viewport_immediate(
                 ViewportId::from_hash_of("profiler"),
-                ViewportBuilder::default()
-                    .with_title("Profiler")
-                    .with_inner_size([900.0, 620.0])
-                    .with_position([160.0, 320.0]),
+                self.restore_window(
+                    "profiler",
+                    ViewportBuilder::default().with_title("Profiler"),
+                    [160.0, 320.0],
+                    [900.0, 620.0],
+                ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
+                    let ctx = ui.ctx().clone();
+                    self.remember_window("profiler", &ctx);
                     egui::CentralPanel::default().show(ui, |ui| profiler::ui(self, ui));
                 },
             );
@@ -923,14 +1054,18 @@ impl App {
             let mut open = true;
             ctx.show_viewport_immediate(
                 ViewportId::from_hash_of("tape"),
-                ViewportBuilder::default()
-                    .with_title("Tape")
-                    .with_inner_size([720.0, 780.0])
-                    .with_position([300.0, 120.0]),
+                self.restore_window(
+                    "tape",
+                    ViewportBuilder::default().with_title("Tape"),
+                    [300.0, 120.0],
+                    [720.0, 780.0],
+                ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
+                    let ctx = ui.ctx().clone();
+                    self.remember_window("tape", &ctx);
                     egui::CentralPanel::default().show(ui, |ui| tape::ui(self, ui));
                 },
             );
@@ -941,14 +1076,18 @@ impl App {
             let mut open = true;
             ctx.show_viewport_immediate(
                 ViewportId::from_hash_of("back-buffer"),
-                ViewportBuilder::default()
-                    .with_title("Back buffer")
-                    .with_inner_size([680.0, 700.0])
-                    .with_position([420.0, 240.0]),
+                self.restore_window(
+                    "back_buffer",
+                    ViewportBuilder::default().with_title("Back buffer"),
+                    [420.0, 240.0],
+                    [680.0, 700.0],
+                ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
+                    let ctx = ui.ctx().clone();
+                    self.remember_window("back_buffer", &ctx);
                     egui::CentralPanel::default().show(ui, |ui| back_buffer::ui(self, ui));
                 },
             );

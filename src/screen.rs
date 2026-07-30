@@ -5,6 +5,8 @@
 //! draw in the border at that resolution — which is exactly what border-art
 //! demos do. Sampling one colour per line would reduce all of it to stripes.
 
+use eframe::egui;
+
 use crate::machine::SpectrumBus;
 
 pub const SCREEN_W: usize = 256;
@@ -54,6 +56,17 @@ impl Default for View {
     fn default() -> Self {
         View::OVERSCAN
     }
+}
+
+/// Display scales offered in the UI, as multiples of the Spectrum's pixels.
+pub const SCALES: [f32; 6] = [0.5, 1.0, 1.5, 2.0, 3.0, 3.5];
+
+/// Where to draw a picture of `size` so it sits in the middle of `available`,
+/// with the same amount of space on every side. When it is larger than the
+/// space, it overflows equally in each direction rather than sticking to a
+/// corner.
+pub fn centred(available: egui::Rect, size: egui::Vec2) -> egui::Rect {
+    egui::Rect::from_center_size(available.center(), size)
 }
 
 /// Dimensions of the full overscan view, which is what the tests measure

@@ -346,3 +346,47 @@ fn the_overscan_toggle_changes_how_much_border_is_drawn() {
     h.run_steps(3);
     assert_eq!(h.state().view(), View::OVERSCAN, "and back again");
 }
+
+#[test]
+fn the_display_is_centred_whatever_size_the_window_is() {
+    use egui::{pos2, vec2, Rect};
+    use zx_spectrum_emulator::screen::centred;
+
+    // Room to spare: equal space on all four sides.
+    let area = Rect::from_min_size(pos2(10.0, 20.0), vec2(800.0, 600.0));
+    let picture = centred(area, vec2(400.0, 300.0));
+    assert_eq!(picture.left() - area.left(), area.right() - picture.right());
+    assert_eq!(picture.top() - area.top(), area.bottom() - picture.bottom());
+    assert_eq!(picture.center(), area.center());
+
+    // Bigger than the window: it overflows the same amount each way rather
+    // than sticking to a corner.
+    let big = centred(area, vec2(1200.0, 900.0));
+    assert_eq!(area.left() - big.left(), big.right() - area.right());
+    assert_eq!(area.top() - big.top(), big.bottom() - area.bottom());
+    assert_eq!(big.center(), area.center());
+
+    // An odd size does not drift off centre.
+    let odd = centred(area, vec2(333.0, 111.0));
+    assert_eq!(odd.center(), area.center());
+}
+
+#[test]
+fn the_zoom_presets_set_the_display_scale() {
+    use zx_spectrum_emulator::screen::SCALES;
+
+    assert_eq!(SCALES, [0.5, 1.0, 1.5, 2.0, 3.0, 3.5]);
+
+    let mut h = harness();
+    h.run_steps(3);
+    for scale in SCALES {
+        let label = if scale.fract() == 0.0 {
+            format!("{scale:.0}x")
+        } else {
+            format!("{scale}x")
+        };
+        h.get_by_label(&label).click();
+        h.run_steps(3);
+        assert_eq!(h.state().scale, scale, "clicking {label}");
+    }
+}

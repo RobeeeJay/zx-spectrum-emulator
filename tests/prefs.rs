@@ -302,3 +302,117 @@ fn loading_a_tape_remembers_its_directory() {
     let reloaded = Prefs::load_or_create_in(cfg.path());
     assert_eq!(reloaded.tape_dir.as_deref(), tape.parent());
 }
+
+// ---------------------------------------------------------------------------
+// window geometry and display settings
+// ---------------------------------------------------------------------------
+
+use zx_spectrum_emulator::prefs::WindowRect;
+use zx_spectrum_emulator::screen;
+
+#[test]
+fn window_geometry_round_trips() {
+    let dir = TempDir::new("windows");
+    let mut prefs = Prefs::load_or_create_in(dir.path());
+    prefs.set_window(
+        "main",
+        WindowRect {
+            x: 100.0,
+            y: 50.0,
+            w: 800.0,
+            h: 600.0,
+        },
+    );
+    prefs.set_window(
+        "debugger",
+        WindowRect {
+            x: -20.0,
+            y: 0.0,
+            w: 640.0,
+            h: 480.0,
+        },
+    );
+    prefs.display_scale = Some(1.5);
+    prefs.overscan = Some(false);
+    prefs.save();
+
+    let back = Prefs::load_or_create_in(dir.path());
+    assert_eq!(
+        back.window("main"),
+        Some(WindowRect {
+            x: 100.0,
+            y: 50.0,
+            w: 800.0,
+            h: 600.0
+        })
+    );
+    assert_eq!(
+        back.window("debugger").map(|r| (r.x, r.w)),
+        Some((-20.0, 640.0)),
+        "a window off the left edge is still remembered"
+    );
+    assert_eq!(back.display_scale, Some(1.5));
+    assert_eq!(back.overscan, Some(false));
+    assert_eq!(back.window("nothing"), None);
+}
+
+#[test]
+fn nonsense_window_entries_are_ignored() {
+    let dir = TempDir::new("bad-windows");
+    let path = dir.path().join(FILE_NAME);
+    std::fs::write(
+        &path,
+        "window.main = \"1,2,0,0\"\n\
+         window.debugger = \"not,a,rectangle,at all\"\n\
+         window.tape = \"5,6\"\n\
+         window.profiler = \"7,8,300,200\"\n",
+    )
+    .unwrap();
+    let prefs = Prefs::load_or_create_in(dir.path());
+    assert_eq!(prefs.window("main"), None, "a zero-sized window is no use");
+    assert_eq!(prefs.window("debugger"), None);
+    assert_eq!(prefs.window("tape"), None, "too few numbers");
+    assert!(prefs.window("profiler").is_some(), "this one is fine");
+}
+
+#[test]
+fn the_display_settings_are_taken_from_the_file_on_launch() {
+    let dir = TempDir::new("apply");
+    let mut prefs = Prefs::load_or_create_in(dir.path());
+    prefs.display_scale = Some(3.0);
+    prefs.overscan = Some(false);
+    prefs.save();
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.prefs = Prefs::load_or_create_in(dir.path());
+    app.apply_prefs();
+
+    assert_eq!(app.scale, 3.0);
+    assert!(!app.overscan);
+    assert_eq!(app.view(), screen::View::CROPPED);
+}
+
+#[test]
+fn closing_writes_the_layout_out() {
+    let dir = TempDir::new("on-close");
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.prefs = Prefs::load_or_create_in(dir.path());
+    app.scale = 1.5;
+    app.overscan = false;
+    app.prefs.set_window(
+        "main",
+        WindowRect {
+            x: 10.0,
+            y: 20.0,
+            w: 700.0,
+            h: 500.0,
+        },
+    );
+
+    app.save_window_state();
+
+    let back = Prefs::load_or_create_in(dir.path());
+    assert_eq!(back.display_scale, Some(1.5));
+    assert_eq!(back.overscan, Some(false));
+    assert_eq!(back.window("main").map(|r| (r.w, r.h)), Some((700.0, 500.0)));
+}

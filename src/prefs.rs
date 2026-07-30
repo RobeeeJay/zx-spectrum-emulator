@@ -73,6 +73,32 @@ pub fn config_dir() -> Option<PathBuf> {
     config_dir_from(Platform::current(), &|k| std::env::var(k).ok())
 }
 
+/// Position and size of a window, in points.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct WindowRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl WindowRect {
+    fn parse(text: &str) -> Option<WindowRect> {
+        let mut n = text.split(',').map(|p| p.trim().parse::<f32>());
+        let (x, y, w, h) = (n.next()?.ok()?, n.next()?.ok()?, n.next()?.ok()?, n.next()?.ok()?);
+        // A window with no area is not worth restoring.
+        (w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite())
+            .then_some(WindowRect { x, y, w, h })
+    }
+
+    fn to_text(self) -> String {
+        format!("{:.0},{:.0},{:.0},{:.0}", self.x, self.y, self.w, self.h)
+    }
+}
+
+/// Key prefix used for window geometry.
+const WINDOW_PREFIX: &str = "window.";
+
 /// The remembered settings.
 #[derive(Clone, Debug, Default)]
 pub struct Prefs {
@@ -84,6 +110,12 @@ pub struct Prefs {
     pub tape_dir: Option<PathBuf>,
     /// Directory the last snapshot was opened from.
     pub snapshot_dir: Option<PathBuf>,
+    /// Where each window was when the emulator last closed.
+    pub windows: BTreeMap<String, WindowRect>,
+    /// Display scale, as a multiple of the Spectrum's own pixels.
+    pub display_scale: Option<f32>,
+    /// Whether the whole overscan border was being shown.
+    pub overscan: Option<bool>,
     /// Anything else already in the file, kept so hand edits survive.
     other: BTreeMap<String, String>,
 }
@@ -131,6 +163,15 @@ impl Prefs {
                 "rom_dir" => prefs.rom_dir = path,
                 "tape_dir" => prefs.tape_dir = path,
                 "snapshot_dir" => prefs.snapshot_dir = path,
+                "display_scale" => prefs.display_scale = value.parse().ok(),
+                "overscan" => prefs.overscan = value.parse().ok(),
+                k if k.starts_with(WINDOW_PREFIX) => {
+                    if let Some(rect) = WindowRect::parse(&value) {
+                        prefs
+                            .windows
+                            .insert(k[WINDOW_PREFIX.len()..].to_string(), rect);
+                    }
+                }
                 other => {
                     prefs.other.insert(other.to_string(), value);
                 }
@@ -154,6 +195,21 @@ impl Prefs {
         line(&mut s, "rom_dir", &self.rom_dir);
         line(&mut s, "tape_dir", &self.tape_dir);
         line(&mut s, "snapshot_dir", &self.snapshot_dir);
+        if let Some(scale) = self.display_scale {
+            s.push_str(&format!("display_scale = \"{scale}\"\n"));
+        }
+        if let Some(overscan) = self.overscan {
+            s.push_str(&format!("overscan = \"{overscan}\"\n"));
+        }
+        if !self.windows.is_empty() {
+            s.push_str("\n# Window geometry, as x,y,width,height in points.\n");
+            for (name, rect) in &self.windows {
+                s.push_str(&format!(
+                    "{WINDOW_PREFIX}{name} = \"{}\"\n",
+                    rect.to_text()
+                ));
+            }
+        }
         for (k, v) in &self.other {
             s.push_str(&format!("{k} = \"{v}\"\n"));
         }
@@ -182,6 +238,15 @@ impl Prefs {
             FileKind::Snapshot => self.snapshot_dir = Some(dir),
         }
         self.save();
+    }
+
+    /// Remember where a window is.
+    pub fn set_window(&mut self, name: &str, rect: WindowRect) {
+        self.windows.insert(name.to_string(), rect);
+    }
+
+    pub fn window(&self, name: &str) -> Option<WindowRect> {
+        self.windows.get(name).copied()
     }
 
     /// Directory a file picker for `kind` should open in.
