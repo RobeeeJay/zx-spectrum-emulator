@@ -107,11 +107,50 @@ fn put(out: &mut [u8], width: usize, x: usize, y: usize, c: [u8; 3]) {
     out[i + 3] = 0xff;
 }
 
+/// How much darker the previous frame is drawn when racing the beam: a third
+/// off, so it is clearly behind without being hard to read.
+pub const STALE_BRIGHTNESS: f32 = 2.0 / 3.0;
+
 /// Render the live display. On a 128K this follows the shadow-screen bit, so
 /// it draws whichever bank the ULA is showing. `flash_on` alternates every 16
 /// frames, as the ULA does.
 pub fn render(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool) {
-    draw(out, view, flash_on, true, bus, &|offset| bus.video(offset));
+    draw(out, view, flash_on, true, bus, &|offset| bus.video(offset), None);
+}
+
+/// Render with the beam part-way through the frame: everything up to T-state
+/// `beam` is this frame, the rest is what was on the screen before, dimmed.
+pub fn render_racing(
+    bus: &SpectrumBus,
+    view: View,
+    out: &mut [u8],
+    flash_on: bool,
+    beam: u32,
+) {
+    draw(
+        out,
+        view,
+        flash_on,
+        true,
+        bus,
+        &|offset| bus.video(offset),
+        Some(beam),
+    );
+}
+
+/// T-state at which the ULA emits the pixel at (`px`, `py`) of a rendered
+/// frame. The inverse of what [`draw`] does, so the cursor and the raster
+/// agree on where the beam is.
+pub fn t_at_pixel(
+    view: View,
+    first_pixel_t: u32,
+    t_per_line: u32,
+    px: usize,
+    py: usize,
+) -> i64 {
+    let line = py as i64 - view.border_top as i64;
+    let x = px as i64 - view.border_x as i64;
+    first_pixel_t as i64 + line * t_per_line as i64 + x.div_euclid(2) + DISPLAY_LEAD_T
 }
 
 /// Render 6912 bytes starting at logical address `base` as if they were video
@@ -124,9 +163,24 @@ pub fn render_from(
     flash_on: bool,
     borders: bool,
 ) {
-    draw(out, view, flash_on, borders, bus, &|offset| {
-        bus.peek_raw(base.wrapping_add(offset))
-    });
+    draw(
+        out,
+        view,
+        flash_on,
+        borders,
+        bus,
+        &|offset| bus.peek_raw(base.wrapping_add(offset)),
+        None,
+    );
+}
+
+#[inline]
+fn dim(c: [u8; 3]) -> [u8; 3] {
+    [
+        (c[0] as f32 * STALE_BRIGHTNESS) as u8,
+        (c[1] as f32 * STALE_BRIGHTNESS) as u8,
+        (c[2] as f32 * STALE_BRIGHTNESS) as u8,
+    ]
 }
 
 /// The ULA fetches two T-states ahead of the pixels it is putting out, so a
@@ -145,6 +199,7 @@ fn draw(
     borders: bool,
     bus: &SpectrumBus,
     byte: &dyn Fn(u16) -> u8,
+    beam: Option<u32>,
 ) {
     let (width, height) = (view.width(), view.height());
     let first = bus.first_pixel_t() as i64;
@@ -153,7 +208,12 @@ fn draw(
     // Colour per T-state, mixing this frame with the last one at the point the
     // ULA has reached — which is what a screen actually shows.
     let raster = if borders {
-        bus.border_raster()
+        // When racing the beam the split between this frame and the last is
+        // wherever the cursor is, not wherever the emulator has got to.
+        match beam {
+            Some(t) => bus.border_raster_at(t),
+            None => bus.border_raster(),
+        }
     } else {
         Vec::new()
     };
@@ -176,14 +236,27 @@ fn draw(
         let mut cell_bits = 0u8;
         let mut ink_c = PALETTE[0];
         let mut paper_c = PALETTE[0];
+        let mut cell_stale = false;
 
         for px in 0..width {
             let x = px as i64 - view.border_x as i64;
+            let t = line_start + x.div_euclid(2) + DISPLAY_LEAD_T;
+            // Past the beam, the screen still shows the frame before this one.
+            let stale = beam.is_some_and(|b| t > b as i64);
+
             if on_display_line && (0..SCREEN_W as i64).contains(&x) {
                 let cell = (x / 8) as u16;
-                if x % 8 == 0 {
-                    cell_bits = byte(row_off | cell);
-                    let attr = byte(attr_row + cell);
+                if x % 8 == 0 || stale != cell_stale {
+                    cell_stale = stale;
+                    let read = |o: u16| {
+                        if stale {
+                            bus.video_prev(o)
+                        } else {
+                            byte(o)
+                        }
+                    };
+                    cell_bits = read(row_off | cell);
+                    let attr = read(attr_row + cell);
                     let bright = (attr & 0x40) >> 3;
                     let mut ink = (attr & 0x07) | bright;
                     let mut paper = ((attr >> 3) & 0x07) | bright;
@@ -192,6 +265,10 @@ fn draw(
                     }
                     ink_c = PALETTE[ink as usize];
                     paper_c = PALETTE[paper as usize];
+                    if stale {
+                        ink_c = dim(ink_c);
+                        paper_c = dim(paper_c);
+                    }
                 }
                 let on = cell_bits & (0x80 >> (x % 8)) != 0;
                 put(out, width, px, py, if on { ink_c } else { paper_c });
@@ -200,12 +277,12 @@ fn draw(
 
             let colour = if borders {
                 // Two pixels per T-state.
-                let t = line_start + x.div_euclid(2) + DISPLAY_LEAD_T;
                 raster[t.rem_euclid(frame_t) as usize]
             } else {
                 bus.border
             };
-            put(out, width, px, py, PALETTE[(colour & 7) as usize]);
+            let rgb = PALETTE[(colour & 7) as usize];
+            put(out, width, px, py, if stale { dim(rgb) } else { rgb });
         }
     }
 }

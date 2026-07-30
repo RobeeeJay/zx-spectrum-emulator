@@ -61,6 +61,15 @@ for the four idle T-states in each group of eight.
 the display a T-state later relative to the interrupt. **Machine ▸ Late timing**
 switches between them; the emulator matches the reference photograph for each.
 
+**Race the beam.** With this on, hovering the picture shows the frame
+half-drawn: everything up to the cursor is what the ULA has put out so far, and
+the rest of that raster line and the lines below it are the *previous* frame,
+drawn a third darker. The cursor position is converted to a T-state with the
+same arithmetic the renderer uses, so the split lands exactly where the beam
+would be. It works while paused, which makes it a way to read a frame's timing
+by hand: park the emulator on a breakpoint and sweep the cursor to see what had
+been drawn at any point in the frame.
+
 **Overscan.** The toolbar's **Overscan** toggle chooses how much border to
 draw: on (the default) shows the whole 384x304 area the ULA puts out, which is
 where border-art demos work; off crops it to 304x240, roughly what a television
@@ -258,6 +267,10 @@ place for the platform:
 | Windows | `%APPDATA%\ZX Spectrum Emulator\preferences.toml` |
 | Linux and friends | `$XDG_CONFIG_HOME/zx-spectrum-emulator/preferences.toml`, or `~/.config/…` |
 
+It also keeps the position and size of every window, the display scale and the
+overscan setting, written when the emulator closes and again a couple of
+seconds after anything settles, so a crash does not lose the layout.
+
 It is a TOML-compatible `key = "value"` file, meant to be readable and editable;
 keys the emulator does not know about are left alone when it saves. Set
 `ZX_SPECTRUM_CONFIG_DIR` to put it somewhere else.
@@ -388,6 +401,12 @@ its directory are created on launch, that settings round-trip while hand-added
 keys survive, that ROM scanning recognises images by size and prefers a name
 that mentions the machine, and that opening a ROM or a tape remembers the right
 directory without replacing ROMs already loaded.
+
+`tests/race_the_beam.rs` checks that the beam splits the picture between the
+two frames at the right place — including part-way along a single line — that
+the older part is dimmed to exactly two thirds, that the border is split and
+dimmed with it, and that moving the beam changes the picture with nothing
+running.
 
 `tests/border.rs` loads Border Break, waits for its border routine to start and
 compares the rendered border against rows taken from the photograph of real

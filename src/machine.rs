@@ -193,6 +193,10 @@ pub struct SpectrumBus {
     /// mid-frame needs both.
     pub border_prev: Vec<(u32, u8)>,
     pub border_prev_start: u8,
+    /// The display file as it stood at the end of the last frame, so the part
+    /// of the screen the beam has not reached yet can show what is still on
+    /// the glass rather than what the CPU has since written.
+    pub screen_prev: Vec<u8>,
     /// Keyboard matrix: one byte per half-row, bit clear = key down.
     pub keys: [u8; 8],
     pub ear: bool,
@@ -244,6 +248,7 @@ impl SpectrumBus {
             border_events: Vec::with_capacity(4096),
             border_prev: Vec::with_capacity(4096),
             border_prev_start: 7,
+            screen_prev: vec![0; 6912],
             keys: [0xff; 8],
             ear: false,
             speaker: false,
@@ -401,6 +406,15 @@ impl SpectrumBus {
         if let Slot::Ram(bank) = self.slot_of(addr) {
             self.ram[bank * 0x4000 + off] = v;
         }
+    }
+
+    /// A byte of the display file as it was at the end of the last frame.
+    #[inline]
+    pub fn video_prev(&self, offset: u16) -> u8 {
+        self.screen_prev
+            .get(offset as usize & 0x1fff)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Read a byte of the displayed screen, wherever it is banked.
@@ -644,9 +658,15 @@ impl SpectrumBus {
     /// screen right now: the current frame up to where the ULA has got to,
     /// and the previous frame beyond that.
     pub fn border_raster(&self) -> Vec<u8> {
+        self.border_raster_at(self.tstates)
+    }
+
+    /// The same, but splitting this frame from the last at `split` rather than
+    /// at wherever the emulator has got to.
+    pub fn border_raster_at(&self, split: u32) -> Vec<u8> {
         let frame_t = self.frame_t() as usize;
         let mut out = vec![0u8; frame_t];
-        let now = (self.tstates as usize).min(frame_t);
+        let now = (split as usize).min(frame_t);
 
         let mut colour = self.border_start;
         let mut ev = self.border_events.iter().peekable();
@@ -748,6 +768,8 @@ impl SpectrumBus {
         self.screen_writes_acc = 0;
         // Keep the finished frame; the renderer needs it for the part of the
         // screen the ULA has not redrawn yet.
+        let bank = self.screen_bank() * 0x4000;
+        self.screen_prev.copy_from_slice(&self.ram[bank..bank + 6912]);
         std::mem::swap(&mut self.border_events, &mut self.border_prev);
         self.border_prev_start = self.border_start;
         self.border_start = self.border;

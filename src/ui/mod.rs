@@ -15,6 +15,12 @@ use crate::prefs::{FileKind, Prefs, WindowRect};
 use crate::screen;
 use crate::snapshot;
 
+/// T-state of the pixel at (`px`, `py`), clamped into the frame.
+fn beam_at(bus: &crate::machine::SpectrumBus, view: screen::View, px: usize, py: usize) -> u32 {
+    let t = screen::t_at_pixel(view, bus.first_pixel_t(), bus.model.t_per_line(), px, py);
+    t.clamp(0, bus.frame_t() as i64 - 1) as u32
+}
+
 /// ROM images found at startup, used when switching machines.
 #[derive(Default, Clone)]
 pub struct Roms {
@@ -148,6 +154,11 @@ pub struct App {
     pub scale: f32,
     /// Show the whole overscan area, or crop the border to television size.
     pub overscan: bool,
+    /// Follow the raster with the mouse: everything up to the cursor is this
+    /// frame, the rest is what was on screen before.
+    pub race_the_beam: bool,
+    /// Beam position under the cursor last frame, in T-states.
+    pub beam_t: Option<u32>,
 
     pub ram: ram_map::RamMapState,
     pub dbg: debugger::DebuggerState,
@@ -208,6 +219,8 @@ impl App {
             screen_tex: None,
             scale: 2.0,
             overscan: true,
+            race_the_beam: false,
+            beam_t: None,
             ram: ram_map::RamMapState::default(),
             dbg: debugger::DebuggerState::default(),
             back: back_buffer::BackBufferState::default(),
@@ -416,6 +429,12 @@ impl App {
                 }
             }
             ui.separator();
+            ui.toggle_value(&mut self.race_the_beam, "Race the beam")
+                .on_hover_text(
+                    "Hover the picture to see the frame half-drawn: everything up to \
+                     the cursor is what the ULA has put out so far, the rest is the \
+                     previous frame, dimmed. Works while paused too.",
+                );
             ui.toggle_value(&mut self.overscan, "Overscan")
                 .on_hover_text(
                     "Show the whole area the ULA draws, which is where border-art \
@@ -665,7 +684,16 @@ impl App {
             self.screen_pixels = vec![0; view.buffer_len()];
             self.screen_tex = None; // the texture has to be remade at the new size
         }
-        screen::render(&self.spec.bus, view, &mut self.screen_pixels, flash);
+        match self.beam_t.filter(|_| self.race_the_beam) {
+            Some(beam) => screen::render_racing(
+                &self.spec.bus,
+                view,
+                &mut self.screen_pixels,
+                flash,
+                beam,
+            ),
+            None => screen::render(&self.spec.bus, view, &mut self.screen_pixels, flash),
+        }
         let img = ColorImage::from_rgba_unmultiplied(
             [view.width(), view.height()],
             &self.screen_pixels,
@@ -955,6 +983,7 @@ impl App {
                 ui.label(status);
             }
         });
+        let mut beam = None;
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(tex) = &self.screen_tex {
                 let view = self.view();
@@ -964,18 +993,30 @@ impl App {
                 );
                 // Take the whole panel and put the picture in the middle of it,
                 // so the space around the display is equal on all four sides.
-                let (area, _) =
+                let (area, response) =
                     ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
                 let painter = ui.painter_at(area);
                 painter.rect_filled(area, 0.0, egui::Color32::BLACK);
+                let picture = screen::centred(area, size);
                 painter.image(
                     tex.id(),
-                    screen::centred(area, size),
+                    picture,
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+
+                // Where is the beam? Wherever the cursor is over the picture.
+                beam = response
+                    .hover_pos()
+                    .filter(|p| picture.contains(*p))
+                    .map(|p| {
+                        let px = ((p.x - picture.left()) / self.scale) as usize;
+                        let py = ((p.y - picture.top()) / self.scale) as usize;
+                        beam_at(&self.spec.bus, view, px, py)
+                    });
             }
         });
+        self.beam_t = beam;
 
         self.save_window_state_if_settled();
         ctx.request_repaint();

@@ -390,3 +390,19 @@ fn the_zoom_presets_set_the_display_scale() {
         assert_eq!(h.state().scale, scale, "clicking {label}");
     }
 }
+
+#[test]
+fn race_the_beam_is_off_until_switched_on() {
+    let mut h = harness();
+    h.run_steps(3);
+    assert!(!h.state().race_the_beam);
+    assert!(h.state().beam_t.is_none(), "no beam without the cursor");
+
+    h.get_by_label("Race the beam").click();
+    h.run_steps(3);
+    assert!(h.state().race_the_beam);
+
+    h.get_by_label("Race the beam").click();
+    h.run_steps(3);
+    assert!(!h.state().race_the_beam);
+}
