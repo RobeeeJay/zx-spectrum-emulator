@@ -2,6 +2,7 @@
 //! sound, keyboard, and the debugging hooks that hang off the bus.
 
 use crate::audio::Audio;
+use crate::profiler::Profiler;
 use crate::tape::Tape;
 use crate::tracker::{Tracker, SCREEN_END, SCREEN_START};
 use crate::z80::{Bus, Z80};
@@ -164,6 +165,9 @@ pub struct SpectrumBus {
     pub page_reg_1ffd: u8,
     /// Once the 128K locks paging, only a reset can undo it.
     pub paging_locked: bool,
+    /// Later 48K machines run the display one T-state later relative to the
+    /// interrupt. Both variants existed; HALT2INT tells them apart.
+    pub late_timing: bool,
     slots: [Slot; 4],
 
     pub tracker: Tracker,
@@ -219,6 +223,7 @@ impl SpectrumBus {
             page_reg: 0,
             page_reg_1ffd: 0,
             paging_locked: false,
+            late_timing: false,
             slots: [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)],
             tracker: Tracker::new(),
             tstates: 0,
@@ -246,10 +251,24 @@ impl SpectrumBus {
         bus
     }
 
+    /// T-state of the first pixel fetch, including the late-timing shift.
+    #[inline]
+    pub fn first_pixel_t(&self) -> u32 {
+        self.model.first_pixel_t() + self.late_timing as u32
+    }
+
+    /// Rebuild the contention table; call after changing the timing model.
+    pub fn set_late_timing(&mut self, late: bool) {
+        if self.late_timing != late {
+            self.late_timing = late;
+            self.build_contention_table();
+        }
+    }
+
     fn build_contention_table(&mut self) {
         let pattern = self.model.contention_pattern();
         self.contention.iter_mut().for_each(|v| *v = 0);
-        let first = self.model.first_pixel_t();
+        let first = self.first_pixel_t();
         let per_line = self.model.t_per_line();
         for line in 0..PIXEL_LINES {
             let line_start = first + line * per_line;
@@ -379,6 +398,41 @@ impl SpectrumBus {
         self.ram[bank * 0x4000 + (offset as usize & 0x3fff)]
     }
 
+    /// Where an address lives in physical memory, which is what the access
+    /// tracker records against so a bank keeps its history while paged out.
+    #[inline]
+    pub fn phys_index(&self, addr: u16) -> usize {
+        match self.slot_of(addr) {
+            Slot::Ram(bank) => crate::tracker::ram_phys(bank, addr),
+            Slot::Rom(page) => crate::tracker::rom_phys(page, addr),
+        }
+    }
+
+    /// RAM banks worth showing, in address order. A 48K machine only ever
+    /// sees three of them.
+    pub fn visible_banks(&self) -> Vec<usize> {
+        if self.model.has_paging() {
+            (0..8).collect()
+        } else {
+            vec![5, 2, 0]
+        }
+    }
+
+    /// ROM pages this machine has.
+    pub fn rom_pages(&self) -> usize {
+        self.rom.len() / 0x4000
+    }
+
+    /// Which slot, if any, a RAM bank is currently paged into.
+    pub fn ram_bank_slot(&self, bank: usize) -> Option<usize> {
+        (0..4).find(|&slot| self.slots[slot] == Slot::Ram(bank))
+    }
+
+    /// Which slot, if any, a ROM page is currently paged into.
+    pub fn rom_page_slot(&self, page: usize) -> Option<usize> {
+        (0..4).find(|&slot| self.slots[slot] == Slot::Rom(page))
+    }
+
     /// Read a byte of a specific RAM bank, for the debugger.
     pub fn bank_byte(&self, bank: usize, offset: u16) -> u8 {
         self.ram[(bank & 7) * 0x4000 + (offset as usize & 0x3fff)]
@@ -438,32 +492,47 @@ impl SpectrumBus {
 
     /// The I/O contention pattern, which depends on both the port's high byte
     /// and whether it is a ULA port (A0 low).
-    fn contend_io(&mut self, port: u16) {
+    ///
+    /// Returns the T-state at which the IORQ cycle begins, which is when the
+    /// ULA's data is on the bus and therefore what a floating-bus read sees.
+    fn contend_io(&mut self, port: u16) -> u32 {
         let high_contended = port & 0xc000 == 0x4000;
         let ula = port & 1 == 0;
         match (high_contended, ula) {
             // C:1, C:3
             (true, true) => {
                 self.io_stall();
+                let sampled = self.tstates;
                 self.tstates += 1;
                 self.io_stall();
                 self.tstates += 3;
+                sampled
             }
             // C:1, C:1, C:1, C:1
             (true, false) => {
-                for _ in 0..4 {
+                self.io_stall();
+                let sampled = self.tstates;
+                self.tstates += 1;
+                for _ in 0..3 {
                     self.io_stall();
                     self.tstates += 1;
                 }
+                sampled
             }
             // N:1, C:3 — the ULA stalls the CPU even for an uncontended page.
             (false, true) => {
                 self.tstates += 1;
                 self.io_stall();
+                let sampled = self.tstates;
                 self.tstates += 3;
+                sampled
             }
             // N:4
-            (false, false) => self.tstates += 4,
+            (false, false) => {
+                let sampled = self.tstates;
+                self.tstates += 4;
+                sampled
+            }
         }
     }
 
@@ -599,14 +668,13 @@ impl SpectrumBus {
         v
     }
 
-    /// Approximate floating bus: what the ULA happens to be fetching now.
+    /// The floating bus: what the ULA had on the bus at T-state `t`.
     /// The +2A/+3 has none, so it reads back as $FF.
-    fn floating_bus(&self) -> u8 {
+    fn floating_bus(&self, t: u32) -> u8 {
         if !self.model.has_floating_bus() {
             return 0xff;
         }
-        let t = self.tstates;
-        let first = self.model.first_pixel_t();
+        let first = self.first_pixel_t();
         let per_line = self.model.t_per_line();
         if t < first || t >= first + PIXEL_LINES * per_line {
             return 0xff;
@@ -617,12 +685,17 @@ impl SpectrumBus {
         if col_t >= 128 {
             return 0xff;
         }
-        let cell = col_t / 4;
-        let offset = match col_t % 4 {
-            0 => screen_bitmap_offset(line as u16, cell as u16),
-            1 => screen_attr_offset(line as u16, cell as u16),
-            2 => screen_bitmap_offset(line as u16, cell as u16 + 1),
-            _ => screen_attr_offset(line as u16, cell as u16 + 1),
+        // The ULA fetches two cells in every eight T-states — bitmap, attribute,
+        // bitmap, attribute — and leaves the bus alone for the other four, when
+        // it reads back as $FF.
+        let group = col_t / 8;
+        let cell = (group * 2) as u16;
+        let offset = match col_t % 8 {
+            0 => screen_bitmap_offset(line as u16, cell),
+            1 => screen_attr_offset(line as u16, cell),
+            2 => screen_bitmap_offset(line as u16, cell + 1),
+            3 => screen_attr_offset(line as u16, cell + 1),
+            _ => return 0xff,
         };
         self.video(offset)
     }
@@ -667,19 +740,22 @@ pub fn screen_attr_addr(line: u16, cell: u16) -> u16 {
 impl Bus for SpectrumBus {
     fn fetch_op(&mut self, addr: u16) -> u8 {
         self.access(addr, 4);
-        self.tracker.on_exec(addr);
+        let phys = self.phys_index(addr);
+        self.tracker.on_exec(phys, addr);
         self.mem(addr)
     }
 
     fn read(&mut self, addr: u16) -> u8 {
         self.access(addr, 3);
-        self.tracker.on_read(addr);
+        let phys = self.phys_index(addr);
+        self.tracker.on_read(phys, addr);
         self.mem(addr)
     }
 
     fn write(&mut self, addr: u16, value: u8) {
         self.access(addr, 3);
-        self.tracker.on_write(addr);
+        let phys = self.phys_index(addr);
+        self.tracker.on_write(phys, addr);
         if (SCREEN_START..SCREEN_END).contains(&addr) {
             self.screen_writes_acc += 1;
         }
@@ -701,7 +777,7 @@ impl Bus for SpectrumBus {
     }
 
     fn io_read(&mut self, port: u16) -> u8 {
-        self.contend_io(port);
+        let sampled = self.contend_io(port);
         // AY register read: $FFFD.
         if self.model.has_ay() && port & 0xc002 == 0xc000 {
             return self.audio.ay.read();
@@ -710,7 +786,7 @@ impl Bus for SpectrumBus {
             let ear = self.tape_level();
             self.keyboard(port, ear)
         } else {
-            self.floating_bus()
+            self.floating_bus(sampled)
         }
     }
 
@@ -782,6 +858,8 @@ pub struct Spectrum {
     pub temp_bp: Option<u16>,
     /// Whole frames completed since the last visual update.
     pub frames_completed: u32,
+    /// Call profiler; does nothing until a run is started.
+    pub profiler: Profiler,
 }
 
 impl Default for Spectrum {
@@ -802,6 +880,7 @@ impl Spectrum {
             breakpoints: Vec::new(),
             temp_bp: None,
             frames_completed: 0,
+            profiler: Profiler::new(),
         }
     }
 
@@ -816,8 +895,10 @@ impl Spectrum {
         let audio = std::mem::replace(&mut self.bus.audio, crate::audio::Audio::new(1.0));
         let tape_boost = self.bus.tape_boost;
         let slow_enabled = self.bus.slow.enabled;
+        let late = self.bus.late_timing;
 
         self.bus = SpectrumBus::new(model);
+        self.bus.set_late_timing(late);
         self.bus.audio = audio;
         self.bus.audio.set_cpu_hz(model.cpu_hz());
         self.bus.audio.ay_present = model.has_ay();
@@ -863,6 +944,11 @@ impl Spectrum {
                 self.bus.irq_pending = false;
             } else if self.cpu.interrupt(&mut self.bus) {
                 self.bus.irq_pending = false;
+                // The handler is profiled like any other call.
+                if self.profiler.running {
+                    let now = self.bus.total_t();
+                    self.profiler.on_call(self.cpu.pc, self.cpu.sp, now);
+                }
             }
         }
     }
@@ -870,10 +956,28 @@ impl Spectrum {
     /// Execute exactly one instruction (after any pending interrupt).
     pub fn step_instruction(&mut self) {
         self.check_interrupt();
+
+        let profiling = self.profiler.running;
+        let (pc0, sp0, t0) = if profiling {
+            (self.cpu.pc, self.cpu.sp, self.bus.total_t())
+        } else {
+            (0, 0, 0)
+        };
+
         self.cpu.step(&mut self.bus);
         if self.bus.tstates >= self.bus.frame_t() {
             self.bus.end_frame();
             self.frames_completed += 1;
+        }
+
+        if profiling {
+            let now = self.bus.total_t();
+            let elapsed = now.saturating_sub(t0);
+            let (pc1, sp1) = (self.cpu.pc, self.cpu.sp);
+            let bus = &self.bus;
+            self.profiler.on_instruction(pc0, sp0, pc1, sp1, now, elapsed, |a| {
+                u16::from_le_bytes([bus.peek_raw(a), bus.peek_raw(a.wrapping_add(1))])
+            });
         }
     }
 

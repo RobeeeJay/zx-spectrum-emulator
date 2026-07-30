@@ -4,6 +4,25 @@
 pub const PAGE_SIZE: usize = 256;
 pub const PAGES: usize = 256;
 
+/// Heat is recorded per physical location rather than per address, so a RAM
+/// bank keeps its history while it is paged out. The physical space is the
+/// eight 16K RAM banks followed by up to four 16K ROM pages.
+pub const PHYS_RAM_BANKS: usize = 8;
+pub const PHYS_ROM_PAGES: usize = 4;
+pub const BANK_SIZE: usize = 0x4000;
+pub const PHYS_ROM_BASE: usize = PHYS_RAM_BANKS * BANK_SIZE;
+pub const PHYS_LEN: usize = (PHYS_RAM_BANKS + PHYS_ROM_PAGES) * BANK_SIZE;
+
+/// Physical index of a byte in RAM bank `bank`.
+pub fn ram_phys(bank: usize, offset: u16) -> usize {
+    (bank & 7) * BANK_SIZE + (offset as usize & 0x3fff)
+}
+
+/// Physical index of a byte in ROM page `page`.
+pub fn rom_phys(page: usize, offset: u16) -> usize {
+    PHYS_ROM_BASE + (page & 3) * BANK_SIZE + (offset as usize & 0x3fff)
+}
+
 /// Main video RAM of a 48K Spectrum: 6144 bytes of bitmap + 768 of attributes.
 pub const SCREEN_START: u16 = 0x4000;
 pub const SCREEN_END: u16 = 0x5b00;
@@ -29,14 +48,15 @@ impl Region {
 }
 
 pub struct Tracker {
-    /// 0..=255 intensity, refreshed to 255 on access and faded every frame.
-    pub read_heat: Box<[u8; 65536]>,
-    pub write_heat: Box<[u8; 65536]>,
-    pub exec_heat: Box<[u8; 65536]>,
+    /// 0..=255 intensity, refreshed to 255 on access and faded every frame,
+    /// indexed by physical location (see [`ram_phys`] and [`rom_phys`]).
+    pub read_heat: Box<[u8; PHYS_LEN]>,
+    pub write_heat: Box<[u8; PHYS_LEN]>,
+    pub exec_heat: Box<[u8; PHYS_LEN]>,
 
     /// Total accesses since reset, for the "coldest/hottest" statistics.
-    pub read_count: Box<[u32; 65536]>,
-    pub write_count: Box<[u32; 65536]>,
+    pub read_count: Box<[u32; PHYS_LEN]>,
+    pub write_count: Box<[u32; PHYS_LEN]>,
 
     pub fade_read: u8,
     pub fade_write: u8,
@@ -67,11 +87,11 @@ impl Default for Tracker {
 impl Tracker {
     pub fn new() -> Self {
         Tracker {
-            read_heat: Box::new([0; 65536]),
-            write_heat: Box::new([0; 65536]),
-            exec_heat: Box::new([0; 65536]),
-            read_count: Box::new([0; 65536]),
-            write_count: Box::new([0; 65536]),
+            read_heat: Box::new([0; PHYS_LEN]),
+            write_heat: Box::new([0; PHYS_LEN]),
+            exec_heat: Box::new([0; PHYS_LEN]),
+            read_count: Box::new([0; PHYS_LEN]),
+            write_count: Box::new([0; PHYS_LEN]),
             fade_read: 12,
             fade_write: 8,
             fade_exec: 20,
@@ -99,22 +119,22 @@ impl Tracker {
     }
 
     #[inline]
-    pub fn on_read(&mut self, addr: u16) {
-        self.read_heat[addr as usize] = 255;
-        self.read_count[addr as usize] = self.read_count[addr as usize].saturating_add(1);
+    pub fn on_read(&mut self, phys: usize, addr: u16) {
+        self.read_heat[phys] = 255;
+        self.read_count[phys] = self.read_count[phys].saturating_add(1);
         self.last_read = addr;
     }
 
     #[inline]
-    pub fn on_exec(&mut self, addr: u16) {
-        self.exec_heat[addr as usize] = 255;
-        self.read_count[addr as usize] = self.read_count[addr as usize].saturating_add(1);
+    pub fn on_exec(&mut self, phys: usize, _addr: u16) {
+        self.exec_heat[phys] = 255;
+        self.read_count[phys] = self.read_count[phys].saturating_add(1);
     }
 
     #[inline]
-    pub fn on_write(&mut self, addr: u16) {
-        self.write_heat[addr as usize] = 255;
-        self.write_count[addr as usize] = self.write_count[addr as usize].saturating_add(1);
+    pub fn on_write(&mut self, phys: usize, addr: u16) {
+        self.write_heat[phys] = 255;
+        self.write_count[phys] = self.write_count[phys].saturating_add(1);
         self.win_writes[(addr as usize) >> 8] += 1;
 
         if self.detect_enabled && (SCREEN_START..SCREEN_END).contains(&addr) {
@@ -246,7 +266,7 @@ impl Tracker {
     }
 }
 
-fn fade_buf(buf: &mut [u8; 65536], step: u8) {
+fn fade_buf(buf: &mut [u8; PHYS_LEN], step: u8) {
     if step == 0 {
         return;
     }

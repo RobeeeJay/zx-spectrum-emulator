@@ -1,0 +1,219 @@
+//! Preferences: a small file in the usual place for the platform, created on
+//! first launch and rewritten whenever something worth remembering changes.
+//!
+//! The format is a TOML-compatible subset — `key = "value"` lines — so it can
+//! be read and edited by hand. Keys the emulator does not recognise are kept
+//! as they are rather than being thrown away on the next save.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+pub const FILE_NAME: &str = "preferences.toml";
+/// Set this to put the preferences somewhere else; used by the tests.
+pub const DIR_OVERRIDE_VAR: &str = "ZX_SPECTRUM_CONFIG_DIR";
+
+/// Which convention to follow for the configuration directory.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Platform {
+    MacOs,
+    Windows,
+    Unix,
+}
+
+impl Platform {
+    pub fn current() -> Platform {
+        if cfg!(target_os = "macos") {
+            Platform::MacOs
+        } else if cfg!(windows) {
+            Platform::Windows
+        } else {
+            Platform::Unix
+        }
+    }
+}
+
+/// Where preferences live, given a way to read environment variables.
+///
+/// * macOS — `~/Library/Application Support/ZX Spectrum Emulator`
+/// * Windows — `%APPDATA%\ZX Spectrum Emulator`
+/// * anything else — `$XDG_CONFIG_HOME/zx-spectrum-emulator`, falling back to
+///   `~/.config/zx-spectrum-emulator`
+pub fn config_dir_from(
+    platform: Platform,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<PathBuf> {
+    if let Some(dir) = env(DIR_OVERRIDE_VAR).filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    match platform {
+        Platform::MacOs => {
+            let home = env("HOME").filter(|h| !h.is_empty())?;
+            Some(
+                PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support")
+                    .join("ZX Spectrum Emulator"),
+            )
+        }
+        Platform::Windows => {
+            let appdata = env("APPDATA").filter(|d| !d.is_empty())?;
+            Some(PathBuf::from(appdata).join("ZX Spectrum Emulator"))
+        }
+        Platform::Unix => {
+            let base = match env("XDG_CONFIG_HOME").filter(|d| !d.is_empty()) {
+                Some(dir) => PathBuf::from(dir),
+                None => PathBuf::from(env("HOME").filter(|h| !h.is_empty())?).join(".config"),
+            };
+            Some(base.join("zx-spectrum-emulator"))
+        }
+    }
+}
+
+pub fn config_dir() -> Option<PathBuf> {
+    config_dir_from(Platform::current(), &|k| std::env::var(k).ok())
+}
+
+/// The remembered settings.
+#[derive(Clone, Debug, Default)]
+pub struct Prefs {
+    /// Where the file lives, if one could be located at all.
+    pub path: Option<PathBuf>,
+    /// Directory the last ROM was opened from.
+    pub rom_dir: Option<PathBuf>,
+    /// Directory the last tape was opened from.
+    pub tape_dir: Option<PathBuf>,
+    /// Directory the last snapshot was opened from.
+    pub snapshot_dir: Option<PathBuf>,
+    /// Anything else already in the file, kept so hand edits survive.
+    other: BTreeMap<String, String>,
+}
+
+impl Prefs {
+    /// Read the preferences, creating the file (and its directory) if it is
+    /// not there yet. Failure is not fatal: the emulator runs without it.
+    pub fn load_or_create() -> Prefs {
+        let Some(dir) = config_dir() else {
+            return Prefs::default();
+        };
+        Prefs::load_or_create_in(&dir)
+    }
+
+    pub fn load_or_create_in(dir: &Path) -> Prefs {
+        let path = dir.join(FILE_NAME);
+        let mut prefs = match std::fs::read_to_string(&path) {
+            Ok(text) => Prefs::parse(&text),
+            Err(_) => Prefs::default(),
+        };
+        prefs.path = Some(path.clone());
+        if !path.exists() {
+            // Create it straight away, so there is something to edit and it is
+            // obvious where settings are kept.
+            let _ = std::fs::create_dir_all(dir);
+            let _ = std::fs::write(&path, prefs.to_text());
+        }
+        prefs
+    }
+
+    pub fn parse(text: &str) -> Prefs {
+        let mut prefs = Prefs::default();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim().trim_matches('"').to_string();
+            let path = (!value.is_empty()).then(|| PathBuf::from(&value));
+            match key {
+                "rom_dir" => prefs.rom_dir = path,
+                "tape_dir" => prefs.tape_dir = path,
+                "snapshot_dir" => prefs.snapshot_dir = path,
+                other => {
+                    prefs.other.insert(other.to_string(), value);
+                }
+            }
+        }
+        prefs
+    }
+
+    pub fn to_text(&self) -> String {
+        let mut s = String::from(
+            "# ZX Spectrum emulator preferences.\n\
+             # Written automatically; edit freely, unknown keys are kept.\n\n",
+        );
+        let line = |s: &mut String, key: &str, value: &Option<PathBuf>| {
+            let v = value
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            s.push_str(&format!("{key} = \"{v}\"\n"));
+        };
+        line(&mut s, "rom_dir", &self.rom_dir);
+        line(&mut s, "tape_dir", &self.tape_dir);
+        line(&mut s, "snapshot_dir", &self.snapshot_dir);
+        for (k, v) in &self.other {
+            s.push_str(&format!("{k} = \"{v}\"\n"));
+        }
+        s
+    }
+
+    /// Write the file back. Quietly does nothing if there is nowhere to write.
+    pub fn save(&self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, self.to_text());
+    }
+
+    /// Remember the directory a file was opened from, and save.
+    pub fn remember_file(&mut self, kind: FileKind, file: &Path) {
+        let Some(dir) = file.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        match kind {
+            FileKind::Rom => self.rom_dir = Some(dir),
+            FileKind::Tape => self.tape_dir = Some(dir),
+            FileKind::Snapshot => self.snapshot_dir = Some(dir),
+        }
+        self.save();
+    }
+
+    /// Directory a file picker for `kind` should open in.
+    pub fn dir_for(&self, kind: FileKind) -> Option<&PathBuf> {
+        match kind {
+            FileKind::Rom => self.rom_dir.as_ref(),
+            FileKind::Tape => self.tape_dir.as_ref(),
+            FileKind::Snapshot => self.snapshot_dir.as_ref(),
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum FileKind {
+    Rom,
+    Tape,
+    Snapshot,
+}
+
+impl FileKind {
+    /// Which kind of file an extension names, if any.
+    pub fn of_path(path: &Path) -> Option<FileKind> {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())?
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "rom" | "bin" => Some(FileKind::Rom),
+            "tzx" | "tap" => Some(FileKind::Tape),
+            "sna" | "z80" => Some(FileKind::Snapshot),
+            _ => None,
+        }
+    }
+}

@@ -34,21 +34,30 @@ fn demo_rom_draws_to_video_ram() {
 fn heat_maps_record_reads_and_writes_and_then_fade() {
     let mut s = demo_machine();
     run_frames(&mut s, 10);
+    // Heat is kept per physical location, so look each address up through
+    // the current paging.
+    let phys = |s: &Spectrum, addr: u16| s.bus.phys_index(addr);
+    let (back, screen, loop_start, untouched) = (
+        phys(&s, 0x8000),
+        phys(&s, 0x4000),
+        phys(&s, 0x000a),
+        phys(&s, 0xc000),
+    );
     let t = &s.bus.tracker;
-    assert!(t.write_count[0x8000] > 0, "back buffer never written");
-    assert!(t.write_count[0x4000] > 0, "video RAM never written");
-    assert!(t.exec_heat[0x000a] > 0, "main loop never marked as executed");
+    assert!(t.write_count[back] > 0, "back buffer never written");
+    assert!(t.write_count[screen] > 0, "video RAM never written");
+    assert!(t.exec_heat[loop_start] > 0, "main loop never marked as executed");
 
     // Nothing touches $C000, so it must stay cold.
-    assert_eq!(s.bus.tracker.read_count[0xc000], 0);
+    assert_eq!(t.read_count[untouched], 0);
 
     // With the CPU stopped, heat decays to nothing.
-    let before = s.bus.tracker.write_heat[0x4000];
+    let before = s.bus.tracker.write_heat[screen];
     assert!(before > 0);
     for _ in 0..64 {
         s.bus.frame_visuals();
     }
-    assert_eq!(s.bus.tracker.write_heat[0x4000], 0, "heat did not fade out");
+    assert_eq!(s.bus.tracker.write_heat[screen], 0, "heat did not fade out");
 }
 
 #[test]
@@ -92,13 +101,14 @@ fn slow_draw_parks_the_cpu_after_its_write_allowance() {
     let mut parked = false;
     for _ in 0..200 {
         s.bus.slow.begin_slice();
-        let before = s.bus.tracker.write_count[0x4000..0x5b00]
-            .iter()
-            .sum::<u32>();
+        let screen_writes = |s: &Spectrum| -> u32 {
+            (0x4000..0x5b00u32)
+                .map(|a| s.bus.tracker.write_count[s.bus.phys_index(a as u16)])
+                .sum()
+        };
+        let before = screen_writes(&s);
         let stop = s.run(FRAME_T);
-        let after = s.bus.tracker.write_count[0x4000..0x5b00]
-            .iter()
-            .sum::<u32>();
+        let after = screen_writes(&s);
         if stop == Stop::SlowDraw {
             parked = true;
             assert_eq!(after - before, 4, "wrote more than the allowance");

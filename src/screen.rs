@@ -105,7 +105,7 @@ fn draw(
 /// Border colour in effect when the ULA drew screen row `y`, so that mid-frame
 /// `OUT (254),A` writes show up as horizontal bands.
 fn border_at_line(bus: &SpectrumBus, y: usize) -> u8 {
-    let t = bus.model.first_pixel_t() as i64
+    let t = bus.first_pixel_t() as i64
         + (y as i64 - BORDER_Y as i64) * bus.model.t_per_line() as i64;
     bus.border_at(t.max(0) as u32)
 }

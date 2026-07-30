@@ -6,6 +6,8 @@ pub mod audio_out;
 pub mod demo_rom;
 pub mod disasm;
 pub mod machine;
+pub mod prefs;
+pub mod profiler;
 pub mod screen;
 pub mod snapshot;
 pub mod tape;

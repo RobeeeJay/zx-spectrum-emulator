@@ -293,6 +293,19 @@ impl Z80 {
         self.prev_q = self.q;
         self.q = 0;
         self.defer_int = false;
+
+        if self.halted {
+            // The halt state is not a re-run of the HALT opcode: the CPU keeps
+            // performing M1 cycles so refresh continues, with PC — the address
+            // *after* the HALT — on the bus. That matters on a Spectrum, where
+            // a HALT at $7FFF refreshes from the uncontended $8000 while one at
+            // $4000 is contended on every cycle.
+            bus.fetch_op(self.pc);
+            self.inc_r();
+            self.instructions = self.instructions.wrapping_add(1);
+            return;
+        }
+
         let op = self.fetch(bus);
         exec::execute(self, bus, op, Idx::Hl);
         self.instructions = self.instructions.wrapping_add(1);
@@ -303,10 +316,9 @@ impl Z80 {
         if !self.iff1 || self.defer_int {
             return false;
         }
-        if self.halted {
-            self.halted = false;
-            self.pc = self.pc.wrapping_add(1);
-        }
+        // Leaving the halt state costs nothing: PC already points at the
+        // instruction after the HALT, which is what gets pushed.
+        self.halted = false;
         self.iff1 = false;
         self.iff2 = false;
         self.inc_r();
@@ -336,10 +348,7 @@ impl Z80 {
 
     /// Non-maskable interrupt: 11 T-states, always taken.
     pub fn nmi(&mut self, bus: &mut impl Bus) {
-        if self.halted {
-            self.halted = false;
-            self.pc = self.pc.wrapping_add(1);
-        }
+        self.halted = false;
         self.iff2 = self.iff1;
         self.iff1 = false;
         self.inc_r();

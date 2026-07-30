@@ -36,6 +36,24 @@ ones (`IXH`/`IXL`, `SLL`, the `DD CB d op` register copies), MEMPTR/WZ, the Q
 register that drives `SCF`/`CCF`'s F3/F5 behaviour, and interrupt modes 0/1/2
 with NMI.
 
+**Verified against real hardware.** HALT2INT (Mark Woodmass) measures the R
+register at the moment an interrupt is taken after a HALT reached at exact
+T-states, which pins down interrupt timing, memory contention, the halt state
+and the floating bus at once. The emulator reproduces the output of a real 48K
+exactly, in both timing variants — the reference photographs are in `tapes/`,
+and `tests/halt2int.rs` runs the tape and compares all thirty values plus the
+test's own Early/Late verdicts.
+
+Two things that test caught, both now fixed: the halt state performs its M1
+cycles at PC — the byte *after* the HALT — so a HALT at `$7FFF` refreshes from
+the uncontended `$8000` while one at `$4000` is contended on every cycle; and
+the floating bus is sampled at the start of the IORQ cycle and reads back `$FF`
+for the four idle T-states in each group of eight.
+
+**Early and late timing.** Real 48K machines came in two variants, one running
+the display a T-state later relative to the interrupt. **Machine ▸ Late timing**
+switches between them; the emulator matches the reference photograph for each.
+
 **Verified against zexdoc and zexall.** Both exercisers pass every test,
 including the undocumented flag tests in zexall:
 
@@ -50,8 +68,21 @@ in the `anotherlin/z80emu` repository under `testfiles/`.)
 
 ### RAM access map
 
-One pixel per byte of the 64K address space, 256 bytes per row, updated every
-frame.
+One pixel per byte, 256 bytes per row, updated every frame. Two views:
+
+* **Address space** — the 64K the CPU sees right now, with each 16K slot
+  labelled with what is paged into it (`$C000 RAM7`), video RAM and any
+  detected back buffer outlined, and a white line on the row PC is in.
+* **All memory** — every RAM bank and ROM page the machine has, stacked as 16K
+  blocks. Banks that are *not* currently paged in are still there, greyed and
+  marked "paged out"; the ones that are get a bright outline saying which
+  address they answer to (`RAM7 → $C000`), and the bank the ULA is displaying
+  is marked "(screen)" with its display file outlined. On a 48K only the three
+  reachable banks are shown.
+
+Heat is recorded per physical location rather than per address, so a bank keeps
+its history while it is paged out, and two banks that take turns at `$C000` do
+not smear into each other.
 
 * **Green** — reads
 * **Red** — writes
@@ -62,8 +93,9 @@ alone, or separate code from data by hiding reads. Every access sets its pixel t
 full intensity and fades from there, with a separate fade rate per channel and an
 overall gain. Video RAM and
 any detected back buffer are outlined, and a white line marks the row PC is in.
-Hovering reports the address, its current value and its lifetime read/write
-counts; clicking jumps the debugger to it.
+Hovering reports the bank, the offset within it, the address it answers to (or
+"not paged in"), the byte's value and its lifetime read/write counts; clicking
+jumps the debugger to it.
 
 ### Debugger
 
@@ -87,6 +119,30 @@ video RAM.
 ### Tape
 
 Block list, transport and an oscilloscope for the loaded tape — see below.
+
+### Profiler
+
+**Start** and **Stop** record a run. Each run appears in a list with the local
+date and time it started, and gains its length (wall-clock, plus the emulated
+time covered) when stopped; runs are kept so you can compare them.
+
+Next to the list is a bar graph of where the time went, one bar per function,
+longest first. Each bar is labelled with the function's entry point in hex and
+shows its share of the run, its time and how many times it was called; hovering
+adds whether it is in ROM or a RAM bank, both time figures, and how deeply it
+nested. **Clicking an entry point opens the disassembly of that function** in
+the debugger.
+
+Calls are spotted from what the CPU did rather than by decoding opcodes: a call
+is any instruction that leaves SP two lower with the address of the following
+instruction on the stack, which catches `CALL`, `RST` *and* interrupt
+acceptance, so interrupt handlers are profiled like anything else. A return is
+any instruction that pops the address it jumps to. Each function gets both
+**self** time (excluding its callees) and **inclusive** time (entry to return),
+switchable with **Rank by**; anything still on the stack when you press Stop
+keeps the time it had spent, and time outside any call is reported separately.
+While recording, the window shows the live call depth and which function the CPU
+is in.
 
 ## Watching the screen being drawn
 
@@ -164,6 +220,32 @@ are skipped over rather than played.
   scrolling; the trigger point is marked at the left edge and the threshold is
   drawn across the middle. The sweep width goes from 50 µs — individual pulses
   of a turbo loader — up to 40 ms.
+
+## Preferences
+
+A preferences file is created the first time the emulator runs, in the usual
+place for the platform:
+
+| Platform | Location |
+| --- | --- |
+| macOS | `~/Library/Application Support/ZX Spectrum Emulator/preferences.toml` |
+| Windows | `%APPDATA%\ZX Spectrum Emulator\preferences.toml` |
+| Linux and friends | `$XDG_CONFIG_HOME/zx-spectrum-emulator/preferences.toml`, or `~/.config/…` |
+
+It is a TOML-compatible `key = "value"` file, meant to be readable and editable;
+keys the emulator does not know about are left alone when it saves. Set
+`ZX_SPECTRUM_CONFIG_DIR` to put it somewhere else.
+
+What it remembers so far is where files came from: **open a ROM and the ROM
+picker starts there next time**, the same for tapes and snapshots, each tracked
+separately so a tape does not send you looking for ROMs.
+
+Opening a ROM also **scans that directory for other ROMs** and adopts the ones
+for machines you have no image for, recognised by size (16K, 32K, 64K) with the
+file name breaking ties — so pointing at one `128.rom` typically lights up the
+48K, 128K and +3 buttons at once, and says which files it found. A ROM you have
+already loaded is never replaced by a scanned one. That directory is scanned
+again at the next launch, so the machines stay available between sessions.
 
 ## ROMs and snapshots
 
@@ -274,6 +356,19 @@ and the printer.
 cargo test --release
 ```
 
+`tests/prefs.rs` checks the configuration directory for each platform's
+convention (including `XDG_CONFIG_HOME` and the no-home case), that the file and
+its directory are created on launch, that settings round-trip while hand-added
+keys survive, that ROM scanning recognises images by size and prefers a name
+that mentions the machine, and that opening a ROM or a tape remembers the right
+directory without replacing ROMs already loaded.
+
+`tests/halt2int.rs` boots a real 48K ROM, types `LOAD ""`, plays HALT2INT off
+tape and reads the results back off the screen by matching character cells
+against the ROM font, then compares them with the photographs of real hardware
+in both timing modes. It also unit-tests the halt state's refresh address and
+the return address pushed when an interrupt wakes it.
+
 `tests/timing.rs` checks T-state counts for around 60 instructions against the
 published timings, the interrupt/NMI acknowledge sequences, `EI`'s one
 instruction interrupt shadow, and the contention behaviour at frame positions
@@ -308,7 +403,18 @@ back in the right direction, and that the mixer clock never runs backwards.
 until Play, that the opt-in auto-play still works, and that the block list
 scrolls the playing block into view when playback moves on but leaves the list
 alone when following is off. `tests/ui_ram_map.rs` covers the read/write/execute
-toggles and their fade sliders.
+toggles and their fade sliders, that heat follows the bank rather than the
+address (including that a paged-out bank keeps its history), that ROM pages are
+tracked separately, the layout of the all-memory view for both a 128K and a 48K,
+that each block reports the slot it is paged into, and what hovering returns for
+a bank that is not paged in.
+
+`tests/profiler.rs` checks time attribution against hand-counted T-states: two
+leaf functions come out at exactly 30 and 50 T-states per call, a nested pair
+splits 35 self / 85 inclusive correctly, interrupt handlers are counted once per
+frame at 14 T-states each, a function that never returns still gets its time,
+nothing accumulates while stopped, and the window's Start/Stop, run list and
+bar clicks do what they should.
 
 `tests/audio_device.rs` is a smoke test that opens the host audio device and
 checks the callback drains samples; it skips itself when there is no device.
@@ -330,8 +436,10 @@ and loads a whole game from a real TZX. Tests that need `roms/48.rom` or
 | `src/tracker.rs` | Access heat maps and back-buffer detection |
 | `src/screen.rs` | Display rendering |
 | `src/tape.rs` | TZX/TAP parsing and pulse-level playback |
+| `src/prefs.rs` | Preferences file and its platform-appropriate location |
+| `src/profiler.rs` | Call profiler: call/return detection and time attribution |
 | `src/audio.rs` | AY-3-8912 and the beeper/AY mixer |
 | `src/audio_out.rs` | cpal output device |
 | `src/disasm.rs` | Disassembler |
-| `src/ui/` | Main window, RAM map, debugger, back-buffer and tape windows |
+| `src/ui/` | Main window, RAM map, debugger, back-buffer, tape and profiler windows |
 | `src/bin/zextest.rs` | CP/M harness for zexdoc/zexall |

@@ -1,0 +1,304 @@
+//! Preferences: where the file goes, that it is created on launch, and that
+//! the directories files were opened from are remembered.
+
+use std::path::{Path, PathBuf};
+
+use zx_spectrum_emulator::machine::{Model, Spectrum};
+use zx_spectrum_emulator::prefs::{config_dir_from, FileKind, Platform, Prefs, FILE_NAME};
+use zx_spectrum_emulator::ui::{App, Roms};
+
+/// A scratch directory that cleans up after itself.
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(name: &str) -> TempDir {
+        let dir = std::env::temp_dir().join(format!(
+            "zx-prefs-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TempDir(dir)
+    }
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn env_of(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+    let owned: Vec<(String, String)> = pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    move |key: &str| {
+        owned
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    }
+}
+
+#[test]
+fn the_config_directory_follows_each_platforms_convention() {
+    let unix = env_of(&[("HOME", "/home/someone")]);
+    assert_eq!(
+        config_dir_from(Platform::Unix, &unix).unwrap(),
+        PathBuf::from("/home/someone/.config/zx-spectrum-emulator")
+    );
+
+    let xdg = env_of(&[("HOME", "/home/someone"), ("XDG_CONFIG_HOME", "/cfg")]);
+    assert_eq!(
+        config_dir_from(Platform::Unix, &xdg).unwrap(),
+        PathBuf::from("/cfg/zx-spectrum-emulator"),
+        "XDG_CONFIG_HOME wins on Unix"
+    );
+
+    let mac = env_of(&[("HOME", "/Users/someone")]);
+    assert_eq!(
+        config_dir_from(Platform::MacOs, &mac).unwrap(),
+        PathBuf::from("/Users/someone/Library/Application Support/ZX Spectrum Emulator")
+    );
+
+    let win = env_of(&[("APPDATA", r"C:\Users\someone\AppData\Roaming")]);
+    assert_eq!(
+        config_dir_from(Platform::Windows, &win).unwrap(),
+        // Built by joining, so the separator matches whatever host runs this.
+        PathBuf::from(r"C:\Users\someone\AppData\Roaming").join("ZX Spectrum Emulator")
+    );
+
+    // With nothing to go on, there is no directory rather than a guess.
+    let empty = env_of(&[]);
+    assert!(config_dir_from(Platform::Unix, &empty).is_none());
+}
+
+#[test]
+fn launching_creates_the_file_if_it_is_not_there() {
+    let dir = TempDir::new("create");
+    let path = dir.path().join(FILE_NAME);
+    assert!(!path.exists());
+
+    let prefs = Prefs::load_or_create_in(dir.path());
+    assert!(path.exists(), "the file should be created on launch");
+    assert_eq!(prefs.path.as_deref(), Some(path.as_path()));
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("rom_dir"), "with its keys present: {text}");
+    assert!(text.starts_with('#'), "and a comment explaining itself");
+}
+
+#[test]
+fn it_creates_the_directory_too() {
+    let dir = TempDir::new("mkdir");
+    let nested = dir.path().join("a").join("b");
+    let prefs = Prefs::load_or_create_in(&nested);
+    assert!(nested.join(FILE_NAME).exists());
+    assert!(prefs.path.is_some());
+}
+
+#[test]
+fn settings_survive_a_round_trip_and_hand_edits_are_kept() {
+    let dir = TempDir::new("roundtrip");
+    let mut prefs = Prefs::load_or_create_in(dir.path());
+    prefs.rom_dir = Some(PathBuf::from("/roms"));
+    prefs.tape_dir = Some(PathBuf::from("/tapes"));
+    prefs.save();
+
+    // Someone adds a key of their own.
+    let path = dir.path().join(FILE_NAME);
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{text}my_own_setting = \"42\"\n")).unwrap();
+
+    let mut reloaded = Prefs::load_or_create_in(dir.path());
+    assert_eq!(reloaded.rom_dir, Some(PathBuf::from("/roms")));
+    assert_eq!(reloaded.tape_dir, Some(PathBuf::from("/tapes")));
+    assert_eq!(reloaded.snapshot_dir, None);
+
+    reloaded.snapshot_dir = Some(PathBuf::from("/snaps"));
+    reloaded.save();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("my_own_setting = \"42\""),
+        "unknown keys must survive a save: {text}"
+    );
+    assert!(text.contains("snapshot_dir = \"/snaps\""));
+}
+
+#[test]
+fn remembering_a_file_stores_its_directory_and_saves() {
+    let dir = TempDir::new("remember");
+    let mut prefs = Prefs::load_or_create_in(dir.path());
+    prefs.remember_file(FileKind::Rom, Path::new("/somewhere/roms/48.rom"));
+    prefs.remember_file(FileKind::Tape, Path::new("/elsewhere/tapes/game.tzx"));
+
+    assert_eq!(prefs.rom_dir, Some(PathBuf::from("/somewhere/roms")));
+    assert_eq!(prefs.tape_dir, Some(PathBuf::from("/elsewhere/tapes")));
+
+    // And it went to disk without being asked again.
+    let reloaded = Prefs::load_or_create_in(dir.path());
+    assert_eq!(reloaded.rom_dir, Some(PathBuf::from("/somewhere/roms")));
+    assert_eq!(reloaded.tape_dir, Some(PathBuf::from("/elsewhere/tapes")));
+}
+
+#[test]
+fn file_kinds_are_recognised_by_extension() {
+    let cases = [
+        ("a.rom", Some(FileKind::Rom)),
+        ("a.BIN", Some(FileKind::Rom)),
+        ("a.tzx", Some(FileKind::Tape)),
+        ("a.tap", Some(FileKind::Tape)),
+        ("a.z80", Some(FileKind::Snapshot)),
+        ("a.sna", Some(FileKind::Snapshot)),
+        ("a.txt", None),
+        ("a", None),
+    ];
+    for (name, want) in cases {
+        assert_eq!(FileKind::of_path(Path::new(name)), want, "{name}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// scanning a directory of ROMs
+// ---------------------------------------------------------------------------
+
+fn write_rom(dir: &Path, name: &str, len: usize) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, vec![0u8; len]).unwrap();
+    path
+}
+
+#[test]
+fn scanning_recognises_roms_by_size() {
+    let dir = TempDir::new("scan");
+    write_rom(dir.path(), "48.rom", 0x4000);
+    write_rom(dir.path(), "128.rom", 0x8000);
+    write_rom(dir.path(), "plus3.rom", 0x10000);
+    write_rom(dir.path(), "notes.txt", 10);
+    write_rom(dir.path(), "odd.rom", 0x1234); // not a ROM size
+
+    let found = Roms::scan_directory(dir.path());
+    let mut names: Vec<&str> = found.iter().map(|(_, m)| m.name()).collect();
+    names.sort_unstable();
+    assert_eq!(names, vec!["+3", "128K", "48K"], "found {found:?}");
+    // The odd-sized file and the text file are ignored.
+    assert_eq!(found.len(), 3);
+}
+
+#[test]
+fn a_named_rom_beats_an_anonymous_one_of_the_same_size() {
+    let dir = TempDir::new("names");
+    write_rom(dir.path(), "aaa-mystery.rom", 0x8000);
+    write_rom(dir.path(), "zx128.rom", 0x8000);
+
+    let found = Roms::scan_directory(dir.path());
+    assert_eq!(found.len(), 1, "one ROM per machine");
+    assert_eq!(found[0].1, Model::Spectrum128);
+    assert!(
+        found[0].0.ends_with("zx128.rom"),
+        "the name that mentions the machine should win, got {:?}",
+        found[0].0
+    );
+}
+
+#[test]
+fn loading_a_rom_remembers_its_directory_and_adopts_its_neighbours() {
+    let dir = TempDir::new("adopt");
+    let cfg = TempDir::new("adopt-cfg");
+    let rom48 = write_rom(dir.path(), "48.rom", 0x4000);
+    write_rom(dir.path(), "128.rom", 0x8000);
+    write_rom(dir.path(), "plus3.rom", 0x10000);
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.prefs = Prefs::load_or_create_in(cfg.path());
+    assert!(app.roms.rom128.is_none(), "nothing to start with");
+
+    app.load_path(&rom48);
+
+    assert_eq!(app.spec.bus.model, Model::Spectrum48);
+    assert_eq!(
+        app.prefs.rom_dir.as_deref(),
+        Some(dir.path()),
+        "the directory should be remembered"
+    );
+    assert!(
+        app.roms.rom128.is_some() && app.roms.rom_plus3.is_some(),
+        "the other machines' ROMs should have been picked up"
+    );
+    assert!(
+        app.status.contains("128.rom") && app.status.contains("plus3.rom"),
+        "and mentioned: {}",
+        app.status
+    );
+
+    // The other machines can now be selected.
+    app.switch_model(Model::Plus3);
+    assert_eq!(app.spec.bus.model, Model::Plus3);
+
+    // And it was written to the preferences file.
+    let reloaded = Prefs::load_or_create_in(cfg.path());
+    assert_eq!(reloaded.rom_dir.as_deref(), Some(dir.path()));
+}
+
+#[test]
+fn adopting_never_replaces_a_rom_that_is_already_loaded() {
+    let dir = TempDir::new("no-clobber");
+    let cfg = TempDir::new("no-clobber-cfg");
+    let rom48 = write_rom(dir.path(), "48.rom", 0x4000);
+    std::fs::write(dir.path().join("128.rom"), vec![0xaa; 0x8000]).unwrap();
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.prefs = Prefs::load_or_create_in(cfg.path());
+    // A 128K ROM the user already chose.
+    app.roms.rom128 = Some(vec![0x55; 0x8000]);
+
+    app.load_path(&rom48);
+    assert_eq!(
+        app.roms.rom128.as_ref().unwrap()[0],
+        0x55,
+        "the loaded ROM should be left alone"
+    );
+}
+
+#[test]
+fn loading_a_tape_remembers_its_directory() {
+    let Some(tape) = std::fs::read_dir("tapes")
+        .ok()
+        .and_then(|e| {
+            let mut v: Vec<PathBuf> = e
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    matches!(
+                        p.extension().and_then(|x| x.to_str()),
+                        Some("tzx") | Some("tap")
+                    )
+                })
+                .collect();
+            v.sort();
+            v.into_iter().next()
+        })
+    else {
+        eprintln!("no tapes/; skipping");
+        return;
+    };
+
+    let cfg = TempDir::new("tape-dir");
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.prefs = Prefs::load_or_create_in(cfg.path());
+
+    app.load_path(&tape);
+
+    assert_eq!(
+        app.prefs.tape_dir.as_deref(),
+        tape.parent(),
+        "the tape's directory should be remembered"
+    );
+    assert!(app.prefs.rom_dir.is_none(), "and not confused with ROMs");
+    let reloaded = Prefs::load_or_create_in(cfg.path());
+    assert_eq!(reloaded.tape_dir.as_deref(), tape.parent());
+}

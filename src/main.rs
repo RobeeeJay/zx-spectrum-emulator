@@ -1,10 +1,11 @@
 use zx_spectrum_emulator::{
-    audio_out::AudioOut, demo_rom, machine::Model, machine::Spectrum, snapshot, tape::Tape, ui,
+    audio_out::AudioOut, demo_rom, machine::Model, machine::Spectrum, prefs::Prefs, snapshot,
+    tape::Tape, ui,
 };
 
 /// Look for ROM images in ./roms. The 48K one is needed to boot anything real;
 /// without it the built-in demo ROM runs instead.
-fn find_roms() -> ui::Roms {
+fn find_roms(prefs: &Prefs) -> ui::Roms {
     let read = |names: &[&str]| -> Option<Vec<u8>> {
         for n in names {
             if let Ok(d) = std::fs::read(n) {
@@ -15,11 +16,24 @@ fn find_roms() -> ui::Roms {
         }
         None
     };
-    ui::Roms {
+    let mut roms = ui::Roms {
         rom48: read(&["roms/48.rom", "roms/48k.rom", "48.rom"]),
         rom128: read(&["roms/128.rom", "roms/128k.rom", "128.rom"]),
         rom_plus3: read(&["roms/plus3.rom", "roms/plus2a.rom", "plus3.rom"]),
+    };
+
+    // Then whatever is in the directory the last ROM was opened from, so the
+    // machines stay available between sessions.
+    if let Some(dir) = &prefs.rom_dir {
+        for (path, model) in ui::Roms::scan_directory(dir) {
+            if roms.for_model(model).is_none() {
+                if let Ok(data) = std::fs::read(&path) {
+                    roms.set_for_model(model, data);
+                }
+            }
+        }
     }
+    roms
 }
 
 /// Files named on the command line are dispatched by extension:
@@ -99,7 +113,9 @@ fn load_cli_files(spec: &mut Spectrum, roms: &mut ui::Roms, status: &mut String)
 }
 
 fn main() -> eframe::Result<()> {
-    let mut roms = find_roms();
+    // Created on first launch, so there is always a file to look at.
+    let prefs = Prefs::load_or_create();
+    let mut roms = find_roms(&prefs);
     let model = std::env::args()
         .find_map(|a| match a.as_str() {
             "--48" => Some(Model::Spectrum48),
@@ -147,6 +163,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |_cc| {
             let mut app = ui::App::with_roms(spec, status, roms, audio_out);
+            app.prefs = prefs;
             app.show_tape = opened_tape;
             app.audio_error = audio_error;
             Ok(Box::new(app))

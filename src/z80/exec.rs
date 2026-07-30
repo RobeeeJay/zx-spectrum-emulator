@@ -338,8 +338,9 @@ fn base(cpu: &mut Z80, bus: &mut impl Bus, op: u8, idx: Idx) {
 
         1 => {
             if y == 6 && z == 6 {
+                // PC is left pointing after the HALT; the halt state is
+                // handled in `step`.
                 cpu.halted = true;
-                cpu.pc = cpu.pc.wrapping_sub(1);
             } else if z == 6 {
                 // LD r,(HL) / LD r,(IX+d): the destination is always a real
                 // register, never IXH/IXL.

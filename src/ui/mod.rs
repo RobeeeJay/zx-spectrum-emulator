@@ -2,6 +2,7 @@
 
 pub mod back_buffer;
 pub mod debugger;
+pub mod profiler;
 pub mod ram_map;
 pub mod tape;
 
@@ -10,6 +11,7 @@ use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportI
 
 use crate::audio_out::AudioOut;
 use crate::machine::{Model, Spectrum, Stop};
+use crate::prefs::{FileKind, Prefs};
 use crate::screen;
 use crate::snapshot;
 
@@ -50,6 +52,63 @@ impl Roms {
         }
     }
 
+    /// ROM images in a directory, recognised by size. Where several fit the
+    /// same machine, one whose name mentions it wins (`128.rom` beats
+    /// `something.rom`), otherwise the first in alphabetical order.
+    pub fn scan_directory(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Model)> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut files: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                matches!(
+                    p.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_ascii_lowercase())
+                        .as_deref(),
+                    Some("rom") | Some("bin")
+                )
+            })
+            .collect();
+        files.sort();
+
+        let mut best: Vec<(std::path::PathBuf, Model)> = Vec::new();
+        for path in files {
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Some(model) = Roms::model_for_rom_size(meta.len() as usize) else {
+                continue;
+            };
+            let named = Roms::name_suggests(&path, model);
+            match best.iter().position(|(_, m)| *m == model) {
+                Some(i) => {
+                    if named && !Roms::name_suggests(&best[i].0, model) {
+                        best[i] = (path, model);
+                    }
+                }
+                None => best.push((path, model)),
+            }
+        }
+        best
+    }
+
+    /// Whether a file name mentions the machine its size implies.
+    fn name_suggests(path: &std::path::Path, model: Model) -> bool {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        match model {
+            Model::Spectrum48 => name.contains("48"),
+            Model::Spectrum128 => name.contains("128") || name.contains("plus2"),
+            Model::Plus2A | Model::Plus3 => {
+                name.contains("plus3") || name.contains("+3") || name.contains("plus2a")
+            }
+        }
+    }
+
     /// File name to suggest when the ROM for a model is missing.
     pub fn expected_file(model: Model) -> &'static str {
         match model {
@@ -82,6 +141,7 @@ pub struct App {
     pub show_debugger: bool,
     pub show_back_buffer: bool,
     pub show_tape: bool,
+    pub show_profiler: bool,
 
     screen_pixels: Vec<u8>,
     screen_tex: Option<TextureHandle>,
@@ -91,6 +151,7 @@ pub struct App {
     pub dbg: debugger::DebuggerState,
     pub back: back_buffer::BackBufferState,
     pub tape: tape::TapeWindowState,
+    pub profiler: profiler::ProfilerWindowState,
 
     pub last_stop: Option<Stop>,
     /// Emulated T-states left over from the previous host frame.
@@ -103,6 +164,9 @@ pub struct App {
 
     /// How far ahead of the sound device to stay, in seconds.
     pub audio_latency_target: f32,
+
+    /// Remembered settings, including the directories files were opened from.
+    pub prefs: Prefs,
 
     pub roms: Roms,
     /// Kept alive for as long as the app runs; dropping it stops the sound.
@@ -130,6 +194,7 @@ impl App {
             show_debugger: true,
             show_back_buffer: false,
             show_tape: false,
+            show_profiler: false,
             screen_pixels: vec![0; screen::WIDTH * screen::HEIGHT * 4],
             screen_tex: None,
             scale: 2.0,
@@ -137,11 +202,13 @@ impl App {
             dbg: debugger::DebuggerState::default(),
             back: back_buffer::BackBufferState::default(),
             tape: tape::TapeWindowState::default(),
+            profiler: profiler::ProfilerWindowState::default(),
             last_stop: None,
             leftover: 0.0,
             status_is_error: false,
             title_model: None,
             audio_latency_target: 0.06,
+            prefs: Prefs::default(),
             roms,
             audio_out,
             audio_error: None,
@@ -207,7 +274,46 @@ impl App {
             self.leftover = 0.0;
         }
         self.running = true;
-        self.set_status(format!("Loaded {name} as a {}", model.name()), false);
+
+        self.prefs.remember_file(FileKind::Rom, path);
+        // ROMs tend to arrive in sets, so pick up the machines this one's
+        // neighbours can provide.
+        let also = match path.parent() {
+            Some(dir) => self.adopt_roms_from(dir),
+            None => Vec::new(),
+        };
+        let extra = if also.is_empty() {
+            String::new()
+        } else {
+            format!("; also found {}", also.join(", "))
+        };
+        self.set_status(
+            format!("Loaded {name} as a {}{extra}", model.name()),
+            false,
+        );
+    }
+
+    /// Fill in ROMs for machines that have none from the images in `dir`.
+    /// Returns what was adopted, for the status line.
+    pub fn adopt_roms_from(&mut self, dir: &std::path::Path) -> Vec<String> {
+        let mut adopted = Vec::new();
+        for (path, model) in Roms::scan_directory(dir) {
+            if self.roms.for_model(model).is_some() {
+                continue;
+            }
+            let Ok(data) = std::fs::read(&path) else {
+                continue;
+            };
+            self.roms.set_for_model(model, data);
+            adopted.push(format!(
+                "{} ({})",
+                path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                model.name()
+            ));
+        }
+        adopted
     }
 
     pub fn set_status(&mut self, text: String, is_error: bool) {
@@ -279,21 +385,48 @@ impl App {
             ui.toggle_value(&mut self.show_debugger, "Debugger");
             ui.toggle_value(&mut self.show_tape, "Tape");
             ui.toggle_value(&mut self.show_back_buffer, "Back buffer");
+            ui.toggle_value(&mut self.show_profiler, "Profiler");
         });
+    }
+
+    /// A file picker that opens where the last file of that kind came from.
+    pub fn pick_file(&self, kind: Option<FileKind>) -> Option<std::path::PathBuf> {
+        let mut dialog = rfd::FileDialog::new();
+        dialog = match kind {
+            Some(FileKind::Rom) => dialog.add_filter("ROM image", &["rom", "bin"]),
+            Some(FileKind::Tape) => dialog.add_filter("Tape", &["tzx", "tap"]),
+            Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80"]),
+            None => dialog
+                .add_filter(
+                    "Tape, snapshot or ROM",
+                    &["tzx", "tap", "sna", "z80", "rom", "bin"],
+                )
+                .add_filter("Tape", &["tzx", "tap"])
+                .add_filter("Snapshot", &["sna", "z80"])
+                .add_filter("ROM image", &["rom", "bin"]),
+        };
+        // For the catch-all picker, start wherever the most recent file of any
+        // kind came from.
+        let start = match kind {
+            Some(k) => self.prefs.dir_for(k).cloned(),
+            None => self
+                .prefs
+                .tape_dir
+                .clone()
+                .or_else(|| self.prefs.snapshot_dir.clone())
+                .or_else(|| self.prefs.rom_dir.clone()),
+        };
+        if let Some(dir) = start.filter(|d| d.is_dir()) {
+            dialog = dialog.set_directory(dir);
+        }
+        dialog.pick_file()
     }
 
     /// One file picker for every supported type, dispatched by extension.
     pub fn load_any_file(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Tape, snapshot or ROM", &["tzx", "tap", "sna", "z80", "rom", "bin"])
-            .add_filter("Tape", &["tzx", "tap"])
-            .add_filter("Snapshot", &["sna", "z80"])
-            .add_filter("ROM image", &["rom", "bin"])
-            .pick_file()
-        else {
-            return;
-        };
-        self.load_path(&path);
+        if let Some(path) = self.pick_file(None) {
+            self.load_path(&path);
+        }
     }
 
     pub fn load_path(&mut self, path: &std::path::Path) {
@@ -315,6 +448,7 @@ impl App {
                     self.show_tape = true;
                     self.tape.scroll_to_current = true;
                     self.tape.last_block = None;
+                    self.prefs.remember_file(FileKind::Tape, path);
                     self.set_status(
                         format!(
                             "Tape: {name} ({blocks} blocks){}",
@@ -330,6 +464,7 @@ impl App {
                     self.switch_model(model);
                     match snapshot::load(&mut self.spec, path) {
                         Ok(()) => {
+                            self.prefs.remember_file(FileKind::Snapshot, path);
                             self.set_status(format!("Loaded {}", path.display()), false)
                         }
                         Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
@@ -419,19 +554,13 @@ impl App {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button("Load ROM…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("ROM image", &["rom", "bin"])
-                        .pick_file()
-                    {
+                    if let Some(path) = self.pick_file(Some(FileKind::Rom)) {
                         self.load_path(&path);
                     }
                     ui.close();
                 }
                 if ui.button("Load tape…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Tape", &["tzx", "tap"])
-                        .pick_file()
-                    {
+                    if let Some(path) = self.pick_file(Some(FileKind::Tape)) {
                         match crate::tape::Tape::load(&path) {
                             Ok(mut t) => {
                                 let blocks = t.blocks.len();
@@ -458,10 +587,7 @@ impl App {
                     ui.close();
                 }
                 if ui.button("Load snapshot…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Snapshot", &["sna", "z80"])
-                        .pick_file()
-                    {
+                    if let Some(path) = self.pick_file(Some(FileKind::Snapshot)) {
                         match snapshot::probe_model(&path) {
                             Ok(model) => {
                                 self.switch_model(model);
@@ -508,6 +634,26 @@ impl App {
                 {
                     self.switch_model(Model::Plus2A);
                     ui.close();
+                }
+                if model == Model::Spectrum48 {
+                    let mut late = self.spec.bus.late_timing;
+                    if ui
+                        .checkbox(&mut late, "Late timing")
+                        .on_hover_text(
+                            "Later 48K machines run the display one T-state later \
+                             relative to the interrupt. HALT2INT tells them apart.",
+                        )
+                        .changed()
+                    {
+                        self.spec.bus.set_late_timing(late);
+                        self.set_status(
+                            format!(
+                                "48K {} timing",
+                                if late { "late" } else { "early" }
+                            ),
+                            false,
+                        );
+                    }
                 }
                 if ui
                     .radio(model == Model::Plus3, "ZX Spectrum +3 (no disk drive)")
@@ -558,6 +704,7 @@ impl App {
                 ui.checkbox(&mut self.show_debugger, "Debugger");
                 ui.checkbox(&mut self.show_back_buffer, "Back buffer");
                 ui.checkbox(&mut self.show_tape, "Tape");
+                ui.checkbox(&mut self.show_profiler, "Profiler");
             });
             ui.separator();
 
@@ -726,6 +873,24 @@ impl App {
                 },
             );
             self.show_debugger = open;
+        }
+
+        if self.show_profiler {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("profiler"),
+                ViewportBuilder::default()
+                    .with_title("Profiler")
+                    .with_inner_size([900.0, 620.0])
+                    .with_position([160.0, 320.0]),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| profiler::ui(self, ui));
+                },
+            );
+            self.show_profiler = open;
         }
 
         if self.show_tape {
