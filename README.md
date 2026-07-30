@@ -244,6 +244,10 @@ are skipped over rather than played.
   move the tape straight to it. The block being played is highlighted and kept in
   view as the tape advances; **Follow playing block** turns that off if you want
   to browse the list while it runs.
+* **Progress** — one bar for the tape as a whole and another for the block
+  being played, which names it, shows the percentage through it and how much
+  playing time is left. The position comes from where the pulse generator has
+  got to rather than from the clock, so it stays right after a seek or a pause.
 * **Transport** — Start, Rewind, Play/Pause, Stop, Fast forward. Rewind and fast
   forward step backwards and forwards through the tape's sections, skipping the
   informational blocks that make no sound. A tape loads **stopped**, like a real
@@ -452,7 +456,10 @@ instead of stepping, that an AY tone comes out at the frequency its registers
 ask for with no sample-to-sample discontinuities, that the buffer pacing pushes
 back in the right direction, and that the mixer clock never runs backwards.
 
-`tests/ui_tape.rs` checks that a loaded tape stays stopped and emits no pulses
+`tests/ui_tape.rs` checks that a block's length adds up from its pilot, sync,
+data and pause, that progress through it rises from nothing to everything
+without going backwards, that a block making no sound reports none, that seeking
+resets it, that a loaded tape stays stopped and emits no pulses
 until Play, that the opt-in auto-play still works, and that the block list
 scrolls the playing block into view when playback moves on but leaves the list
 alone when following is off. `tests/ui_ram_map.rs` covers the read/write/execute

@@ -227,3 +227,144 @@ fn following_can_be_turned_off() {
         "with following off the list should stay where the user left it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// progress through the current block
+// ---------------------------------------------------------------------------
+
+use zx_spectrum_emulator::tape::{DATA_PILOT_PULSES, HEADER_PILOT_PULSES, ONE_PULSE, PILOT_PULSE,
+    SYNC1_PULSE, SYNC2_PULSE, ZERO_PULSE};
+
+#[test]
+fn a_blocks_length_adds_up() {
+    // A header block: the long pilot, two sync pulses, 19 bytes of data and a
+    // one-second pause.
+    let block = Block::Standard {
+        pause_ms: 1000,
+        data: vec![0x00; 19],
+    };
+    let seg = block.segment_times();
+    assert_eq!(seg.pilot, HEADER_PILOT_PULSES as u64 * PILOT_PULSE as u64);
+    assert_eq!(seg.sync, SYNC1_PULSE as u64 + SYNC2_PULSE as u64);
+    assert_eq!(
+        seg.data,
+        19 * 8 * (ZERO_PULSE as u64 + ONE_PULSE as u64),
+        "an even mix of bit lengths"
+    );
+    assert_eq!(seg.pause, 1000 * 3500);
+    assert_eq!(block.duration_t(), seg.total());
+
+    // A data block uses the short pilot, so it is quicker to start.
+    let data_block = Block::Standard {
+        pause_ms: 0,
+        data: vec![0xff; 19],
+    };
+    assert_eq!(
+        data_block.segment_times().pilot,
+        DATA_PILOT_PULSES as u64 * PILOT_PULSE as u64
+    );
+    assert!(data_block.duration_t() < block.duration_t());
+}
+
+#[test]
+fn block_progress_runs_from_nothing_to_everything() {
+    let mut tape = Tape::from_blocks(
+        "one block".into(),
+        vec![Block::Standard {
+            pause_ms: 0,
+            data: vec![0x5a; 64],
+        }],
+    );
+    assert_eq!(tape.block_progress(), Some(0.0), "before it starts");
+
+    tape.play(0);
+    let mut last = 0.0;
+    let mut seen_middle = false;
+    let mut t = 0u64;
+    let total = tape.blocks[0].duration_t();
+    while t < total + 1000 {
+        t += total / 200;
+        tape.level_at(t);
+        let p = tape.block_progress().unwrap_or(1.0);
+        assert!(p >= last - 0.001, "progress went backwards: {last} then {p}");
+        if (0.4..0.6).contains(&p) {
+            seen_middle = true;
+        }
+        last = p;
+    }
+    assert!(seen_middle, "should pass through the middle");
+    assert!(last > 0.99, "should finish at the end, got {last}");
+}
+
+#[test]
+fn progress_is_reported_for_each_kind_of_block() {
+    // A pure tone is half done after half its pulses.
+    let mut tape = Tape::from_blocks(
+        "tone".into(),
+        vec![Block::PureTone {
+            len: 1000,
+            count: 100,
+        }],
+    );
+    tape.play(0);
+    tape.level_at(50 * 1000);
+    let p = tape.block_progress().unwrap();
+    assert!((p - 0.5).abs() < 0.05, "halfway through a tone, got {p}");
+
+    // A block that makes no sound has no progress to show.
+    let info = Tape::from_blocks("info".into(), vec![Block::Info("hello".into())]);
+    assert_eq!(info.block_progress(), None);
+
+    // A pause block is all pause.
+    let pause = Tape::from_blocks("pause".into(), vec![Block::Pause(500)]);
+    assert_eq!(pause.blocks[0].duration_t(), 500 * 3500);
+    assert_eq!(pause.block_progress(), Some(0.0));
+}
+
+#[test]
+fn seeking_resets_the_block_progress() {
+    let mut tape = Tape::from_blocks(
+        "two".into(),
+        vec![
+            Block::Standard {
+                pause_ms: 0,
+                data: vec![0x00; 32],
+            },
+            Block::Standard {
+                pause_ms: 0,
+                data: vec![0xff; 32],
+            },
+        ],
+    );
+    tape.play(0);
+    tape.level_at(tape.blocks[0].duration_t() / 2);
+    assert!(tape.block_progress().unwrap() > 0.1);
+
+    tape.seek(1);
+    assert_eq!(
+        tape.block_progress(),
+        Some(0.0),
+        "a fresh block starts from the beginning"
+    );
+}
+
+#[test]
+fn the_window_shows_a_bar_for_the_current_block() {
+    let Some(path) = a_tape_file() else {
+        return;
+    };
+    let mut app = test_app();
+    app.load_path(&path);
+    let mut h = harness_for(app);
+    h.run_steps(3);
+
+    let text = labels(&h).join("\n");
+    assert!(
+        text.contains("block 1 / "),
+        "the overall bar should be there: {text}"
+    );
+    assert!(
+        text.contains("0%") || text.contains("left"),
+        "and one for the block itself: {text}"
+    );
+}

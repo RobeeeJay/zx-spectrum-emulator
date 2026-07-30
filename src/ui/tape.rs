@@ -136,6 +136,41 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         egui::ProgressBar::new(progress)
             .text(format!("block {} / {count}", (block + 1).min(count))),
     );
+
+    // And how far through the block itself.
+    let (within, description, seconds) = {
+        let t = app.spec.bus.tape.as_ref().unwrap();
+        let within = t.block_progress();
+        let (description, seconds) = match t.blocks.get(t.block) {
+            Some(b) => (
+                b.describe(),
+                b.duration_t() as f64 / crate::machine::CPU_HZ,
+            ),
+            None => (String::new(), 0.0),
+        };
+        (within, description, seconds)
+    };
+    match within {
+        Some(fraction) => {
+            let left = seconds * (1.0 - fraction as f64);
+            ui.add(egui::ProgressBar::new(fraction).text(format!(
+                "{}  {:.0}%  ({} left)",
+                description.split("  ").next().unwrap_or(&description).trim(),
+                fraction * 100.0,
+                crate::profiler::format_duration(left)
+            )))
+            .on_hover_text(format!(
+                "{description} — {} in total",
+                crate::profiler::format_duration(seconds)
+            ));
+        }
+        None => {
+            ui.add_enabled(
+                false,
+                egui::ProgressBar::new(0.0).text("this block takes no time to play"),
+            );
+        }
+    }
     ui.label(
         RichText::new(format!(
             "{}   {} pulses played",

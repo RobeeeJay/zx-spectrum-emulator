@@ -76,6 +76,21 @@ pub enum Block {
     Info(String),
 }
 
+/// How a block's playing time divides up, in T-states.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Segments {
+    pub pilot: u64,
+    pub sync: u64,
+    pub data: u64,
+    pub pause: u64,
+}
+
+impl Segments {
+    pub fn total(&self) -> u64 {
+        self.pilot + self.sync + self.data + self.pause
+    }
+}
+
 impl Block {
     /// One-line description for the tape window.
     pub fn describe(&self) -> String {
@@ -109,6 +124,105 @@ impl Block {
             Block::SetLevel(l) => format!("Set signal level {}", *l as u8),
             Block::Info(s) => format!("Info: {s}"),
         }
+    }
+
+    /// How long the block takes to play, in T-states, split into the pilot
+    /// tone, the sync pulses, the data itself and the pause that follows.
+    ///
+    /// The data figure assumes an even mix of 0 and 1 bits, which is what a
+    /// progress bar needs; it is not used for playback, which times every
+    /// pulse individually.
+    pub fn segment_times(&self) -> Segments {
+        let bits = |data: &[u8], used_bits: u8| -> u64 {
+            let full = data.len().saturating_sub(1) as u64 * 8;
+            let last = if (1..8).contains(&used_bits) {
+                used_bits as u64
+            } else {
+                8
+            };
+            full + if data.is_empty() { 0 } else { last }
+        };
+        let pause = |ms: u16| ms as u64 * T_PER_MS as u64;
+
+        match self {
+            Block::Standard { data, pause_ms } => {
+                let flag = data.first().copied().unwrap_or(0xff);
+                let pilot_pulses = if flag < 0x80 {
+                    HEADER_PILOT_PULSES
+                } else {
+                    DATA_PILOT_PULSES
+                } as u64;
+                Segments {
+                    pilot: pilot_pulses * PILOT_PULSE as u64,
+                    sync: SYNC1_PULSE as u64 + SYNC2_PULSE as u64,
+                    data: bits(data, 8) * (ZERO_PULSE as u64 + ONE_PULSE as u64),
+                    pause: pause(*pause_ms),
+                }
+            }
+            Block::Turbo {
+                pilot,
+                sync1,
+                sync2,
+                zero,
+                one,
+                pilot_pulses,
+                used_bits,
+                pause_ms,
+                data,
+            } => Segments {
+                pilot: *pilot_pulses as u64 * *pilot as u64,
+                sync: *sync1 as u64 + *sync2 as u64,
+                data: bits(data, *used_bits) * (*zero as u64 + *one as u64),
+                pause: pause(*pause_ms),
+            },
+            Block::PureTone { len, count } => Segments {
+                pilot: *count as u64 * *len as u64,
+                sync: 0,
+                data: 0,
+                pause: 0,
+            },
+            Block::Pulses(p) => Segments {
+                pilot: p.iter().map(|l| *l as u64).sum(),
+                sync: 0,
+                data: 0,
+                pause: 0,
+            },
+            Block::PureData {
+                zero,
+                one,
+                used_bits,
+                pause_ms,
+                data,
+            } => Segments {
+                pilot: 0,
+                sync: 0,
+                data: bits(data, *used_bits) * (*zero as u64 + *one as u64),
+                pause: pause(*pause_ms),
+            },
+            Block::Direct {
+                t_per_sample,
+                pause_ms,
+                used_bits,
+                data,
+            } => Segments {
+                pilot: 0,
+                sync: 0,
+                data: bits(data, *used_bits) * *t_per_sample as u64,
+                pause: pause(*pause_ms),
+            },
+            Block::Pause(ms) => Segments {
+                pilot: 0,
+                sync: 0,
+                data: 0,
+                pause: pause(*ms),
+            },
+            _ => Segments::default(),
+        }
+    }
+
+    /// Total time the block takes, in T-states.
+    pub fn duration_t(&self) -> u64 {
+        self.segment_times().total()
     }
 
     /// True for blocks that actually produce sound.
@@ -548,6 +662,80 @@ impl Tape {
         if self.playing {
             self.next_edge = now;
         }
+    }
+
+    /// How far through the current block playback has got, 0.0 to 1.0.
+    ///
+    /// Worked out from the pulse generator's position rather than from the
+    /// clock, so it stays right after a seek or a pause.
+    pub fn block_progress(&self) -> Option<f32> {
+        let block = self.blocks.get(self.block)?;
+        let seg = block.segment_times();
+        let total = seg.total();
+        if total == 0 {
+            return None; // nothing to show for a group marker or a text block
+        }
+
+        let done: u64 = match self.phase {
+            Phase::Enter => 0,
+            Phase::Pilot { left } => {
+                // `left` counts down the pilot pulses still to come.
+                let pulses = match block {
+                    Block::Standard { data, .. } => {
+                        let flag = data.first().copied().unwrap_or(0xff);
+                        if flag < 0x80 {
+                            HEADER_PILOT_PULSES
+                        } else {
+                            DATA_PILOT_PULSES
+                        }
+                    }
+                    Block::Turbo { pilot_pulses, .. } => *pilot_pulses,
+                    _ => 0,
+                } as u64;
+                let done_pulses = pulses.saturating_sub(left as u64);
+                if pulses == 0 {
+                    0
+                } else {
+                    seg.pilot * done_pulses / pulses
+                }
+            }
+            Phase::Sync1 => seg.pilot,
+            Phase::Sync2 => seg.pilot + seg.sync / 2,
+            Phase::Data { byte, .. } | Phase::Direct { byte, .. } => {
+                let len = match block {
+                    Block::Standard { data, .. }
+                    | Block::Turbo { data, .. }
+                    | Block::PureData { data, .. }
+                    | Block::Direct { data, .. } => data.len(),
+                    _ => 0,
+                };
+                let along = if len == 0 {
+                    0
+                } else {
+                    seg.data * byte.min(len) as u64 / len as u64
+                };
+                seg.pilot + seg.sync + along
+            }
+            Phase::Tone { left } => {
+                let count = match block {
+                    Block::PureTone { count, .. } => *count as u64,
+                    _ => 0,
+                };
+                let done = count.saturating_sub(left as u64);
+                if count == 0 {
+                    0
+                } else {
+                    seg.pilot * done / count
+                }
+            }
+            Phase::PulseList { idx } => match block {
+                Block::Pulses(p) => p.iter().take(idx).map(|l| *l as u64).sum(),
+                _ => 0,
+            },
+            Phase::BlockPause { .. } => seg.pilot + seg.sync + seg.data,
+            Phase::Next | Phase::Finished => total,
+        };
+        Some((done as f32 / total as f32).clamp(0.0, 1.0))
     }
 
     /// Index of the next block in `dir` that actually makes a sound.
