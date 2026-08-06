@@ -8,6 +8,7 @@ pub mod disasm;
 pub mod machine;
 pub mod prefs;
 pub mod profiler;
+pub mod resources;
 pub mod screen;
 pub mod snapshot;
 pub mod tape;
