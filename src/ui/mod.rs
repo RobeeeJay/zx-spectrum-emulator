@@ -500,14 +500,14 @@ impl App {
         let mut dialog = rfd::FileDialog::new();
         dialog = match kind {
             Some(FileKind::Rom) => dialog.add_filter("ROM image", &["rom", "bin"]),
-            Some(FileKind::Tape) => dialog.add_filter("Tape", &["tzx", "tap"]),
+            Some(FileKind::Tape) => dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81"]),
             Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80"]),
             None => dialog
                 .add_filter(
                     "Tape, snapshot or ROM",
-                    &["tzx", "tap", "sna", "z80", "rom", "bin"],
+                    &["tzx", "tap", "p", "81", "p81", "sna", "z80", "rom", "bin"],
                 )
-                .add_filter("Tape", &["tzx", "tap"])
+                .add_filter("Tape", &["tzx", "tap", "p", "81", "p81"])
                 .add_filter("Snapshot", &["sna", "z80"])
                 .add_filter("ROM image", &["rom", "bin"]),
         };
@@ -535,6 +535,38 @@ impl App {
         }
     }
 
+    /// Put a tape in the deck of whichever machine is running.
+    fn insert_tape(&mut self, path: &std::path::Path) {
+        match crate::tape::Tape::load(path) {
+            Ok(mut t) => {
+                let blocks = t.blocks.len();
+                let zx81 = matches!(t.blocks.first(), Some(crate::tape::Block::Zx81 { .. }));
+                if self.tape.auto_play_on_load {
+                    t.play(self.machine_t());
+                }
+                let playing = t.playing;
+                let name = t.name.clone();
+                self.set_tape(Some(t));
+                self.show_tape = true;
+                self.tape.scroll_to_current = true;
+                self.tape.last_block = None;
+                self.prefs.remember_file(FileKind::Tape, path);
+                // A ZX81 needs LOAD "" typed at it before the tape means
+                // anything, which is easy to forget.
+                let hint = if playing {
+                    ""
+                } else if zx81 {
+                    " — type LOAD \"\" then press Play"
+                } else {
+                    " — press Play"
+                };
+                let plural = if blocks == 1 { "block" } else { "blocks" };
+                self.set_status(format!("Tape: {name} ({blocks} {plural}){hint}"), false);
+            }
+            Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
+        }
+    }
+
     pub fn load_path(&mut self, path: &std::path::Path) {
         let ext = path
             .extension()
@@ -542,29 +574,16 @@ impl App {
             .unwrap_or("")
             .to_ascii_lowercase();
         match ext.as_str() {
-            "tzx" | "tap" => match crate::tape::Tape::load(path) {
-                Ok(mut t) => {
-                    let blocks = t.blocks.len();
-                    if self.tape.auto_play_on_load {
-                        t.play(self.spec.bus.total_t());
-                    }
-                    let playing = t.playing;
-                    let name = t.name.clone();
-                    self.spec.bus.tape = Some(t);
-                    self.show_tape = true;
-                    self.tape.scroll_to_current = true;
-                    self.tape.last_block = None;
-                    self.prefs.remember_file(FileKind::Tape, path);
-                    self.set_status(
-                        format!(
-                            "Tape: {name} ({blocks} blocks){}",
-                            if playing { "" } else { " — press Play" }
-                        ),
-                        false,
-                    );
+            "tzx" | "tap" => self.insert_tape(path),
+            // A ZX81 program only plays into a ZX81, so bring one up first.
+            "p" | "81" | "p81" => {
+                if !self.on_zx81() {
+                    self.switch_to_zx81(self.zx81_ram);
                 }
-                Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
-            },
+                if self.on_zx81() {
+                    self.insert_tape(path);
+                }
+            }
             "sna" | "z80" => match snapshot::probe_model(path) {
                 Ok(model) => {
                     self.switch_model(model);
@@ -670,6 +689,70 @@ impl App {
         self.zx81.is_some()
     }
 
+    // ---- the tape deck, wherever it currently is ---------------------------
+    //
+    // Both machines have their own deck, because both have their own clock and
+    // a tape is timed in T-states. These pick out whichever one is running so
+    // the tape window does not have to care.
+
+    pub fn tape_ref(&self) -> Option<&crate::tape::Tape> {
+        match &self.zx81 {
+            Some(zx) => zx.bus.tape.as_ref(),
+            None => self.spec.bus.tape.as_ref(),
+        }
+    }
+
+    pub fn tape_mut(&mut self) -> Option<&mut crate::tape::Tape> {
+        match &mut self.zx81 {
+            Some(zx) => zx.bus.tape.as_mut(),
+            None => self.spec.bus.tape.as_mut(),
+        }
+    }
+
+    pub fn set_tape(&mut self, tape: Option<crate::tape::Tape>) {
+        match &mut self.zx81 {
+            Some(zx) => zx.bus.tape = tape,
+            None => self.spec.bus.tape = tape,
+        }
+    }
+
+    pub fn tape_boost(&self) -> bool {
+        match &self.zx81 {
+            Some(zx) => zx.bus.tape_boost,
+            None => self.spec.bus.tape_boost,
+        }
+    }
+
+    pub fn tape_boost_mut(&mut self) -> &mut bool {
+        match &mut self.zx81 {
+            Some(zx) => &mut zx.bus.tape_boost,
+            None => &mut self.spec.bus.tape_boost,
+        }
+    }
+
+    pub fn tape_is_playing(&self) -> bool {
+        self.tape_ref().is_some_and(|t| t.playing)
+    }
+
+    /// Clock of the running machine: tape times are in its T-states, and the
+    /// ZX81's is not the Spectrum's.
+    pub fn cpu_hz(&self) -> f64 {
+        if self.on_zx81() {
+            zx81::CPU_HZ
+        } else {
+            crate::machine::CPU_HZ
+        }
+    }
+
+    /// T-states since power-on for the running machine, which is the timebase
+    /// a tape is played against.
+    pub fn machine_t(&self) -> u64 {
+        match &self.zx81 {
+            Some(zx) => zx.bus.tstates,
+            None => self.spec.bus.total_t(),
+        }
+    }
+
     /// Switch to a ZX81 with the given memory, or back to the Spectrum.
     pub fn switch_to_zx81(&mut self, ram: zx81::Ram) {
         let Some(rom) = self.roms.rom_zx81.clone() else {
@@ -728,7 +811,7 @@ impl App {
 
         let dt = dt.clamp(0.0, 0.1);
         // Loading a real tape takes minutes; run faster while it moves.
-        let boost = if self.spec.bus.tape_boost && self.spec.bus.tape_playing() {
+        let boost = if self.tape_boost() && self.tape_is_playing() {
             8.0
         } else {
             1.0
@@ -832,28 +915,7 @@ impl App {
                 }
                 if ui.button("Load tape…").clicked() {
                     if let Some(path) = self.pick_file(Some(FileKind::Tape)) {
-                        match crate::tape::Tape::load(&path) {
-                            Ok(mut t) => {
-                                let blocks = t.blocks.len();
-                                if self.tape.auto_play_on_load {
-                                    t.play(self.spec.bus.total_t());
-                                }
-                                let playing = t.playing;
-                                let name = t.name.clone();
-                                self.spec.bus.tape = Some(t);
-                                self.show_tape = true;
-                                self.tape.scroll_to_current = true;
-                                self.tape.last_block = None;
-                                self.set_status(
-                                    format!(
-                                        "Tape: {name} ({blocks} blocks){}",
-                                        if playing { "" } else { " — press Play" }
-                                    ),
-                                    false,
-                                );
-                            }
-                            Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
-                        }
+                        self.load_path(&path);
                     }
                     ui.close();
                 }
@@ -1020,11 +1082,11 @@ impl App {
                 ui.checkbox(&mut self.spec.bus.slow.watch_back_buffer, "back buffer");
             });
             ui.separator();
-            if self.spec.bus.tape.is_some() {
-                let playing = self.spec.bus.tape_playing();
+            if self.tape_ref().is_some() {
+                let playing = self.tape_is_playing();
                 if ui.button(if playing { "⏸ Tape" } else { "▶ Tape" }).clicked() {
                     let now = self.spec.bus.total_t();
-                    let t = self.spec.bus.tape.as_mut().unwrap();
+                    let t = self.tape_mut().unwrap();
                     if playing {
                         t.stop();
                     } else {
@@ -1043,13 +1105,22 @@ impl App {
                     .text("vol"),
             );
             ui.separator();
-            ui.label(format!(
-                "{}  frame {}  t={}  screen writes/frame {}",
-                self.spec.bus.model.name(),
-                self.spec.bus.frame,
-                self.spec.bus.tstates,
-                self.spec.bus.screen_writes
-            ));
+            ui.label(match &self.zx81 {
+                Some(zx) => format!(
+                    "{}  frame {}  t={}  characters/frame {}",
+                    self.zx81_ram.name(),
+                    zx.bus.frame,
+                    zx.bus.tstates,
+                    zx.bus.video_bytes
+                ),
+                None => format!(
+                    "{}  frame {}  t={}  screen writes/frame {}",
+                    self.spec.bus.model.name(),
+                    self.spec.bus.frame,
+                    self.spec.bus.tstates,
+                    self.spec.bus.screen_writes
+                ),
+            });
         });
     }
 }
@@ -1075,7 +1146,10 @@ impl App {
         self.advance(dt);
         self.sync_title(&ctx);
         self.remember_window("main", &ctx);
-        self.spec.bus.tape_tick();
+        match &mut self.zx81 {
+            Some(zx) => zx.bus.tape_tick(),
+            None => self.spec.bus.tape_tick(),
+        }
         self.spec.bus.frame_visuals();
         self.draw_screen_texture(&ctx);
 

@@ -1,4 +1,4 @@
-//! TZX (and TAP) tape loading and playback.
+//! TZX, TAP and ZX81 (.p/.81/.p81) tape loading and playback.
 //!
 //! TZX is a pulse-level format, so the player does not decode bytes: it turns
 //! blocks into a stream of pulse lengths in T-states and drives the EAR bit,
@@ -19,6 +19,19 @@ pub const HEADER_PILOT_PULSES: u16 = 8063;
 pub const DATA_PILOT_PULSES: u16 = 3223;
 
 const T_PER_MS: u32 = 3500;
+
+/// ZX81 tape timings, in ZX81 T-states (its clock is 3.25 MHz, so these are
+/// not interchangeable with the Spectrum figures above — but a ZX81 block only
+/// ever plays into a ZX81).
+///
+/// Taken from the ROM's own SAVE routine at $031E: it computes the pulse count
+/// per bit with `AND $05 / ADD A,$04`, giving nine pulses for a 1 and four for
+/// a 0, then delays roughly 150 µs between level changes and about 1300 µs
+/// after the last pulse of each bit.
+pub const ZX81_HALF_PULSE: u16 = 488; // 150 µs
+pub const ZX81_BIT_GAP: u16 = 4225; // 1300 µs
+pub const ZX81_ZERO_PULSES: u8 = 4;
+pub const ZX81_ONE_PULSES: u8 = 9;
 
 #[derive(Clone, Debug)]
 pub enum Block {
@@ -72,6 +85,10 @@ pub enum Block {
     StopIf48k,
     /// ID $2B.
     SetLevel(bool),
+    /// A ZX81 file: the name in ZX81 character codes (the last one with bit 7
+    /// set) followed by RAM from $4009 up. Both parts are one continuous bit
+    /// stream on tape, so they are one block here; `name` is only for display.
+    Zx81 { name: String, data: Vec<u8>, pause_ms: u16 },
     /// Informational blocks: $30, $31, $32, $33, $35, $5A.
     Info(String),
 }
@@ -122,6 +139,9 @@ impl Block {
             Block::Return => "Return".into(),
             Block::StopIf48k => "Stop if 48K".into(),
             Block::SetLevel(l) => format!("Set signal level {}", *l as u8),
+            Block::Zx81 { name, data, .. } => {
+                format!("ZX81      {:5} bytes  \"{}\"", data.len(), name)
+            }
             Block::Info(s) => format!("Info: {s}"),
         }
     }
@@ -210,6 +230,21 @@ impl Block {
                 data: bits(data, *used_bits) * *t_per_sample as u64,
                 pause: pause(*pause_ms),
             },
+            Block::Zx81 { data, pause_ms, .. } => {
+                // Every bit is a burst of pulses then a gap. Assuming an even
+                // mix of 0s and 1s, as the progress bar wants, that averages
+                // 6.5 pulses; each pulse is two half-pulses.
+                let bits = data.len() as u64 * 8;
+                let per_bit = (ZX81_ZERO_PULSES + ZX81_ONE_PULSES) as u64
+                    * ZX81_HALF_PULSE as u64 // 2 halves x average of the two counts
+                    + ZX81_BIT_GAP as u64;
+                Segments {
+                    pilot: 0,
+                    sync: 0,
+                    data: bits * per_bit,
+                    pause: pause(*pause_ms),
+                }
+            }
             Block::Pause(ms) => Segments {
                 pilot: 0,
                 sync: 0,
@@ -235,8 +270,70 @@ impl Block {
                 | Block::Pulses(_)
                 | Block::PureData { .. }
                 | Block::Direct { .. }
+                | Block::Zx81 { .. }
         )
     }
+}
+
+/// The ZX81 character set, for the eleven codes that matter here: a name is
+/// only ever letters, digits and spaces.
+fn zx81_char(c: char) -> Option<u8> {
+    match c.to_ascii_uppercase() {
+        ' ' => Some(0x00),
+        c @ '0'..='9' => Some(0x1c + (c as u8 - b'0')),
+        c @ 'A'..='Z' => Some(0x26 + (c as u8 - b'A')),
+        _ => None,
+    }
+}
+
+fn zx81_char_back(code: u8) -> char {
+    match code & 0x7f {
+        0x00 => ' ',
+        c @ 0x1c..=0x25 => (b'0' + (c - 0x1c)) as char,
+        c @ 0x26..=0x3f => (b'A' + (c - 0x26)) as char,
+        _ => '?',
+    }
+}
+
+/// Turn a host file name into ZX81 name bytes, with bit 7 set on the last one
+/// as the ROM's loader expects. Unrepresentable characters are dropped, and a
+/// name that comes out empty becomes "L" — `LOAD ""` takes whatever it finds
+/// first, so the name only has to exist, not match.
+pub fn zx81_name(stem: &str) -> Vec<u8> {
+    let mut name: Vec<u8> = stem.chars().filter_map(zx81_char).take(127).collect();
+    while name.last() == Some(&0x00) {
+        name.pop(); // trailing spaces would be saved as part of the name
+    }
+    if name.is_empty() {
+        name.push(zx81_char('L').expect("L is in the character set"));
+    }
+    *name.last_mut().expect("not empty") |= 0x80;
+    name
+}
+
+/// Build the single block a ZX81 file plays as: the name, then the program.
+pub fn zx81_block(name: &[u8], program: &[u8]) -> Block {
+    let mut data = name.to_vec();
+    data.extend_from_slice(program);
+    Block::Zx81 {
+        name: name.iter().map(|&c| zx81_char_back(c)).collect(),
+        data,
+        pause_ms: 1000,
+    }
+}
+
+/// A .p81 already starts with the name, terminated by a byte with bit 7 set.
+fn parse_p81(data: &[u8]) -> Result<Vec<Block>, String> {
+    let end = data
+        .iter()
+        .take(128)
+        .position(|b| b & 0x80 != 0)
+        .ok_or("not a .p81: no end-of-name byte in the first 128 bytes")?;
+    let (name, program) = data.split_at(end + 1);
+    if program.is_empty() {
+        return Err("not a .p81: a name but no program".into());
+    }
+    Ok(vec![zx81_block(name, program)])
 }
 
 /// Decode the 17-byte ZX header inside a standard block, if that is what it is.
@@ -533,6 +630,8 @@ enum Phase {
     Tone { left: u32 },
     PulseList { idx: usize },
     Direct { byte: usize, bit: u8 },
+    /// A ZX81 bit: which pulse of the burst, and which half of that pulse.
+    Zx81 { byte: usize, bit: u8, pulse: u8, second: bool },
     /// Silence at the end of a block.
     BlockPause { ms: u16 },
     Next,
@@ -582,9 +681,17 @@ impl Tape {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         let blocks = match ext.as_str() {
             "tzx" => parse_tzx(&data)?,
             "tap" => parse_tap(&data)?,
+            // ZX81 program dumps. A .p has no name on the front, so one is
+            // made up from the file name; a .p81 carries its own.
+            "p" | "81" => vec![zx81_block(&zx81_name(&stem), &data)],
+            "p81" => parse_p81(&data)?,
             // Sniff the signature if the extension is unhelpful.
             _ => {
                 if data.starts_with(b"ZXTape!\x1a") {
@@ -732,6 +839,17 @@ impl Tape {
                 Block::Pulses(p) => p.iter().take(idx).map(|l| *l as u64).sum(),
                 _ => 0,
             },
+            Phase::Zx81 { byte, .. } => {
+                let len = match block {
+                    Block::Zx81 { data, .. } => data.len(),
+                    _ => 0,
+                };
+                if len == 0 {
+                    0
+                } else {
+                    seg.data * byte.min(len) as u64 / len as u64
+                }
+            }
             Phase::BlockPause { .. } => seg.pilot + seg.sync + seg.data,
             Phase::Next | Phase::Finished => total,
         };
@@ -967,6 +1085,53 @@ impl Tape {
                         None => self.phase = Phase::Next,
                     }
                 }
+                Phase::Zx81 {
+                    byte,
+                    bit,
+                    pulse,
+                    second,
+                } => {
+                    let (data, pause_ms) = match &self.blocks[self.block] {
+                        Block::Zx81 { data, pause_ms, .. } => (data, *pause_ms),
+                        _ => {
+                            self.phase = Phase::Next;
+                            continue;
+                        }
+                    };
+                    if byte >= data.len() {
+                        self.phase = Phase::BlockPause { ms: pause_ms };
+                        continue;
+                    }
+                    // Bits go out most significant first, each as a burst of
+                    // four pulses for a 0 or nine for a 1.
+                    let set = data[byte] & (0x80 >> bit) != 0;
+                    let burst = if set { ZX81_ONE_PULSES } else { ZX81_ZERO_PULSES };
+                    if pulse >= burst {
+                        let (byte, bit) = if bit == 7 { (byte + 1, 0) } else { (byte, bit + 1) };
+                        self.phase = Phase::Zx81 {
+                            byte,
+                            bit,
+                            pulse: 0,
+                            second: false,
+                        };
+                        continue;
+                    }
+
+                    // Each pulse is a high half then a low half; the low half
+                    // of the last pulse in a burst carries the gap that tells
+                    // the loader the bit has ended. Two half-pulses per pulse
+                    // keeps the level back at rest when the bit finishes.
+                    let last_half = second && pulse + 1 == burst;
+                    let len = ZX81_HALF_PULSE as u32
+                        + if last_half { ZX81_BIT_GAP as u32 } else { 0 };
+                    self.phase = Phase::Zx81 {
+                        byte,
+                        bit,
+                        pulse: if second { pulse + 1 } else { pulse },
+                        second: !second,
+                    };
+                    return Some(Pulse { len, level: None });
+                }
                 Phase::Direct { byte, bit } => {
                     let (data, t, used_bits, pause_ms) = match &self.blocks[self.block] {
                         Block::Direct {
@@ -1062,6 +1227,15 @@ impl Tape {
             }
             Block::Direct { .. } => {
                 self.phase = Phase::Direct { byte: 0, bit: 0 };
+                None
+            }
+            Block::Zx81 { .. } => {
+                self.phase = Phase::Zx81 {
+                    byte: 0,
+                    bit: 0,
+                    pulse: 0,
+                    second: false,
+                };
                 None
             }
             Block::Pause(ms) => {

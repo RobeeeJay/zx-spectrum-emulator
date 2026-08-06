@@ -369,3 +369,84 @@ fn the_window_shows_a_bar_for_the_current_block() {
         "and one for the block itself: {text}"
     );
 }
+
+// ---- ZX81 tapes ------------------------------------------------------------
+
+fn zx81_app() -> Option<App> {
+    let mut app = test_app();
+    app.roms.rom_zx81 = Some(std::fs::read("roms/zx81.rom").ok()?);
+    app.switch_to_zx81(zx_spectrum_emulator::zx81::Ram::K16);
+    app.on_zx81().then_some(app)
+}
+
+#[test]
+fn a_zx81_program_goes_into_the_zx81s_deck() {
+    let Some(mut app) = zx81_app() else {
+        eprintln!("no ZX81 ROM; skipping");
+        return;
+    };
+    let path = std::path::Path::new("tapes/zx81/1KZXChess.1.ChessQueen.p");
+    if !path.exists() {
+        return;
+    }
+    app.load_path(path);
+
+    assert!(app.tape_ref().is_some(), "no tape in the deck");
+    assert!(
+        app.spec.bus.tape.is_none(),
+        "it went into the Spectrum's deck instead of the ZX81's"
+    );
+    assert!(!app.tape_is_playing(), "a tape should wait to be played");
+    assert!(
+        app.status.contains("LOAD"),
+        "the status should say how to load it, not {:?}",
+        app.status
+    );
+}
+
+#[test]
+fn opening_a_zx81_program_on_a_spectrum_switches_machine() {
+    let mut app = test_app();
+    let Ok(rom) = std::fs::read("roms/zx81.rom") else {
+        return;
+    };
+    app.roms.rom_zx81 = Some(rom);
+    let path = std::path::Path::new("tapes/zx81/1KZXChess.1.ChessQueen.p");
+    if !path.exists() {
+        return;
+    }
+    assert!(!app.on_zx81());
+    app.load_path(path);
+    assert!(app.on_zx81(), "a .p should bring up a ZX81");
+    assert!(app.tape_ref().is_some());
+}
+
+#[test]
+fn the_tape_window_lists_the_zx81_block() {
+    let Some(mut app) = zx81_app() else {
+        return;
+    };
+    let path = std::path::Path::new("tapes/zx81/1KZXChess.1.ChessQueen.p");
+    if !path.exists() {
+        return;
+    }
+    app.load_path(path);
+    let mut harness = harness_for(app);
+    harness.run_steps(3);
+    fn walk(node: &egui_kittest::Node<'_>, out: &mut Vec<String>) {
+        if let Some(l) = node.accesskit_node().label() {
+            out.push(l.to_string());
+        }
+        for c in node.children() {
+            walk(&c, out);
+        }
+    }
+    let mut labels = Vec::new();
+    walk(&harness.root(), &mut labels);
+    let text = labels.join("\n");
+    assert!(text.contains("ZX81"), "no ZX81 block in the window:\n{text}");
+    assert!(
+        text.contains("CHESSQUEEN"),
+        "the block should name the program:\n{text}"
+    );
+}

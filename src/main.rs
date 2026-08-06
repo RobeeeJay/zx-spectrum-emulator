@@ -41,13 +41,18 @@ fn find_roms(prefs: &Prefs, dirs: &[PathBuf]) -> ui::Roms {
 /// Files named on the command line are dispatched by extension:
 /// `.rom` replaces the ROM, `.tzx`/`.tap` load a tape, `.sna`/`.z80` a snapshot.
 /// `--128`, `--48`, `--zx81` and `--zx81-1k` choose the machine.
+///
+/// ZX81 tapes are the exception: they can only go into a ZX81's deck, which
+/// does not exist until the app has switched machines, so they are handed back
+/// to be loaded once it has.
 fn load_cli_files(
     spec: &mut Spectrum,
     roms: &mut ui::Roms,
     dirs: &[PathBuf],
     status: &mut String,
-) -> bool {
+) -> (bool, Option<PathBuf>) {
     let mut opened_tape = false;
+    let mut zx81_tape = None;
     for arg in std::env::args().skip(1) {
         if arg.starts_with("--") {
             continue; // handled before the machine was built
@@ -61,6 +66,7 @@ fn load_cli_files(
             .unwrap_or("")
             .to_ascii_lowercase();
         match ext.as_str() {
+            "p" | "81" | "p81" => zx81_tape = Some(path.clone()),
             "tzx" | "tap" => match Tape::load(&path) {
                 Ok(t) => {
                     // Loaded stopped: the tape waits for Play, like a real one.
@@ -118,7 +124,7 @@ fn load_cli_files(
             _ => *status = format!("Ignoring {arg}: unknown file type"),
         }
     }
-    opened_tape
+    (opened_tape, zx81_tape)
 }
 
 fn main() -> eframe::Result<()> {
@@ -160,12 +166,16 @@ fn main() -> eframe::Result<()> {
         Err(e) => (None, Some(e)),
     };
 
-    let opened_tape = load_cli_files(&mut spec, &mut roms, &dirs, &mut status);
-    let zx81_ram = std::env::args().find_map(|a| match a.as_str() {
+    let (opened_tape, zx81_tape) = load_cli_files(&mut spec, &mut roms, &dirs, &mut status);
+    let mut zx81_ram = std::env::args().find_map(|a| match a.as_str() {
         "--zx81" | "--zx81-16k" => Some(zx_spectrum_emulator::zx81::Ram::K16),
         "--zx81-1k" => Some(zx_spectrum_emulator::zx81::Ram::K1),
         _ => None,
     });
+    // A ZX81 program on the command line implies the machine to run it on.
+    if zx81_tape.is_some() && zx81_ram.is_none() {
+        zx81_ram = Some(zx_spectrum_emulator::zx81::Ram::K16);
+    }
 
     // Put the main window back where it was last time.
     let mut viewport = eframe::egui::ViewportBuilder::default().with_title("ZX Spectrum");
@@ -188,6 +198,9 @@ fn main() -> eframe::Result<()> {
             app.apply_prefs();
             if let Some(ram) = zx81_ram {
                 app.switch_to_zx81(ram);
+            }
+            if let Some(path) = zx81_tape {
+                app.load_path(&path);
             }
             app.show_tape = opened_tape;
             app.audio_error = audio_error;

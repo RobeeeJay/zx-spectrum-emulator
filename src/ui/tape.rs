@@ -4,7 +4,6 @@
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Sense, Stroke, Vec2};
 
-use crate::machine::CPU_HZ;
 use crate::ui::App;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -46,9 +45,9 @@ impl Default for TapeWindowState {
 }
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
-    if app.spec.bus.tape.is_none() {
+    if app.tape_ref().is_none() {
         ui.heading("No tape loaded");
-        ui.label("File ▸ Load tape… opens a .tzx or .tap file.");
+        ui.label("File ▸ Load tape… opens a .tzx or .tap file, or a ZX81 .p, .81 or .p81.");
         return;
     }
 
@@ -63,7 +62,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
     let now = app.spec.bus.total_t();
     let mut action: Option<i32> = None;
     let (name, playing, block, count, pulses, stopped_by_block) = {
-        let t = app.spec.bus.tape.as_ref().unwrap();
+        let t = app.tape_ref().unwrap();
         (
             t.name.clone(),
             t.playing,
@@ -77,7 +76,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
     ui.label(RichText::new(&name).strong());
     ui.horizontal_wrapped(|ui| {
         if ui.button("|◀ Start").on_hover_text("Back to the start of the tape").clicked() {
-            let t = app.spec.bus.tape.as_mut().unwrap();
+            let t = app.tape_mut().unwrap();
             t.rewind();
             t.edges.clear();
         }
@@ -92,7 +91,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
             .button(if playing { "⏸ Pause" } else { "▶ Play" })
             .clicked()
         {
-            let t = app.spec.bus.tape.as_mut().unwrap();
+            let t = app.tape_mut().unwrap();
             if playing {
                 t.stop();
             } else {
@@ -100,7 +99,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
             }
         }
         if ui.button("■ Stop").clicked() {
-            let t = app.spec.bus.tape.as_mut().unwrap();
+            let t = app.tape_mut().unwrap();
             t.stop();
         }
         if ui
@@ -111,14 +110,14 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
             action = Some(1);
         }
         ui.separator();
-        ui.checkbox(&mut app.spec.bus.tape_boost, "Boost speed while playing")
+        ui.checkbox(app.tape_boost_mut(), "Boost speed while playing")
             .on_hover_text("Runs the CPU at 8x while the tape moves, so loading is quick.");
         ui.checkbox(&mut app.tape.auto_play_on_load, "Play on load")
             .on_hover_text("Off by default: a freshly loaded tape waits for Play.");
     });
 
     if let Some(dir) = action {
-        let t = app.spec.bus.tape.as_mut().unwrap();
+        let t = app.tape_mut().unwrap();
         let target = t.next_data_block(dir);
         t.seek(target);
         if t.playing {
@@ -139,12 +138,12 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
 
     // And how far through the block itself.
     let (within, description, seconds) = {
-        let t = app.spec.bus.tape.as_ref().unwrap();
+        let t = app.tape_ref().unwrap();
         let within = t.block_progress();
         let (description, seconds) = match t.blocks.get(t.block) {
             Some(b) => (
                 b.describe(),
-                b.duration_t() as f64 / crate::machine::CPU_HZ,
+                b.duration_t() as f64 / app.cpu_hz(),
             ),
             None => (String::new(), 0.0),
         };
@@ -202,8 +201,8 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
     });
 
     let now = app.spec.bus.total_t();
-    let window_t = ((app.tape.window_us as f64) * CPU_HZ / 1_000_000.0).max(1.0) as u64;
-    let tape = app.spec.bus.tape.as_ref().unwrap();
+    let window_t = ((app.tape.window_us as f64) * app.cpu_hz() / 1_000_000.0).max(1.0) as u64;
+    let tape = app.tape_ref().unwrap();
 
     let height = 150.0;
     let (rect, _resp) = ui.allocate_exact_size(
@@ -336,7 +335,7 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.small("Click a block to move the tape there.");
 
-    let current = app.spec.bus.tape.as_ref().unwrap().block;
+    let current = app.tape_ref().unwrap().block;
     // Scroll whenever playback moves on to another block.
     if app.tape.last_block != Some(current) {
         app.tape.last_block = Some(current);
@@ -345,10 +344,7 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     let rows: Vec<(usize, String, bool)> = app
-        .spec
-        .bus
-        .tape
-        .as_ref()
+        .tape_ref()
         .unwrap()
         .blocks
         .iter()
@@ -391,7 +387,7 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
 
     if let Some(i) = clicked {
         let now = app.spec.bus.total_t();
-        let t = app.spec.bus.tape.as_mut().unwrap();
+        let t = app.tape_mut().unwrap();
         t.seek(i);
         if t.playing {
             t.play(now);

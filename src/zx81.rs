@@ -11,6 +11,7 @@
 //! makes it cycle exact, and is why programs that abuse the mechanism for
 //! high-resolution graphics work without any special handling.
 
+use crate::tape::Tape;
 use crate::z80::{Bus, Z80};
 
 /// The ZX81's Z80A runs a little faster than a Spectrum's.
@@ -85,6 +86,14 @@ pub struct Zx81Bus {
     pub halted: bool,
     /// Bytes the ULA turned into pixels this frame, for the tests and the UI.
     pub video_bytes: u32,
+
+    /// The tape in the deck, if any. The ZX81 reads it on bit 7 of port $FE.
+    pub tape: Option<Tape>,
+    /// Run faster while the tape plays: the ZX81 loads at about 50 bytes a
+    /// second, so a game is several minutes of real time.
+    pub tape_boost: bool,
+    /// Scratch space for edges on their way out of the tape.
+    tape_edge_scratch: Vec<(u64, bool)>,
 }
 
 impl Zx81Bus {
@@ -108,6 +117,9 @@ impl Zx81Bus {
             i: 0x1e,
             halted: false,
             video_bytes: 0,
+            tape: None,
+            tape_boost: true,
+            tape_edge_scratch: Vec::new(),
         }
     }
 
@@ -198,15 +210,46 @@ impl Zx81Bus {
     /// Keyboard: a read of port $FE returns the half-rows selected by the high
     /// address byte, and starts the vertical sync when the NMI generator is
     /// off — which is how the ROM times the picture.
-    fn keyboard(&self, port: u16) -> u8 {
+    fn keyboard(&self, port: u16, tape: bool) -> u8 {
         let mut result = 0x1f;
         for row in 0..8 {
             if port & (1 << (8 + row)) == 0 {
                 result &= self.keys[row] & 0x1f;
             }
         }
-        // Bit 6 reads the tape input, bit 7 is the 50/60 Hz jumper: both high.
-        result | 0xc0
+        // Bit 6 is the 50/60 Hz jumper, high for a 50 Hz machine. Bit 7 is the
+        // tape input, which the ROM's loader tests with RLA at $035B.
+        result | 0x40 | (u8::from(tape) << 7)
+    }
+
+    // ---- tape --------------------------------------------------------------
+
+    pub fn tape_playing(&self) -> bool {
+        self.tape.as_ref().is_some_and(|t| t.playing)
+    }
+
+    /// Tape level now, advancing the tape to the present. The edges are
+    /// collected but not mixed anywhere: the ZX81 has no sound hardware, so
+    /// they only feed the tape window's oscilloscope.
+    fn tape_level(&mut self) -> bool {
+        let now = self.tstates;
+        let Some(tape) = self.tape.as_mut() else {
+            return false;
+        };
+        let level = tape.level_at(now);
+        let mut edges = std::mem::take(&mut self.tape_edge_scratch);
+        edges.clear();
+        tape.take_pending_edges(&mut edges);
+        self.tape_edge_scratch = edges;
+        level
+    }
+
+    /// Keep the tape moving even while the CPU is not polling the port, so it
+    /// does not stall between the loader's reads.
+    pub fn tape_tick(&mut self) {
+        if self.tape_playing() {
+            self.tape_level();
+        }
     }
 
     pub fn start_vsync(&mut self) {
@@ -276,7 +319,8 @@ impl Bus for Zx81Bus {
             if !self.nmi_on {
                 self.start_vsync();
             }
-            self.keyboard(port)
+            let tape = self.tape_level();
+            self.keyboard(port, tape)
         } else {
             0xff
         }
