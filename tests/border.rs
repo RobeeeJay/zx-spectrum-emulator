@@ -116,13 +116,22 @@ fn run_border_break() -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// Rows of `tapes/bb.png`, as (row, left border runs, right border runs) in
-/// colour numbers — black is 0 and the demo's red is 2.
-const REFERENCE_ROWS: &[(usize, &[(u8, usize)], &[(u8, usize)])] = &[
+/// A run of one border colour: the colour number and how many pixels of it.
+type Run = (u8, usize);
+/// One row of the reference photo: which row, then the runs down the left and
+/// right borders. Black is colour 0 and the demo's red is 2.
+type ReferenceRow = (usize, &'static [Run], &'static [Run]);
+
+/// Rows of `tapes/bb.png`.
+const REFERENCE_ROWS: &[ReferenceRow] = &[
     (40, &[(0, 64)], &[(0, 64)]),
     (100, &[(0, 64)], &[(2, 32), (0, 24), (2, 8)]),
     (181, &[(2, 16), (0, 48)], &[(2, 32), (0, 24), (2, 8)]),
-    (200, &[(0, 8), (2, 24), (0, 32)], &[(2, 32), (0, 24), (2, 8)]),
+    (
+        200,
+        &[(0, 8), (2, 24), (0, 32)],
+        &[(2, 32), (0, 24), (2, 8)],
+    ),
     (257, &[(2, 64)], &[(2, 64)]),
 ];
 

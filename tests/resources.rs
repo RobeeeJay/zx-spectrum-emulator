@@ -160,7 +160,10 @@ fn a_relative_file_argument_resolves_against_the_search_path() {
     // error message names what the user actually typed.
     let abs = tmp.join("absolute.tap");
     assert_eq!(resolve(&dirs, &abs), abs);
-    assert_eq!(resolve(&dirs, Path::new("missing.tap")), Path::new("missing.tap"));
+    assert_eq!(
+        resolve(&dirs, Path::new("missing.tap")),
+        Path::new("missing.tap")
+    );
 }
 
 fn tmp_dir(name: &str) -> PathBuf {

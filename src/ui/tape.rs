@@ -75,7 +75,11 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
 
     ui.label(RichText::new(&name).strong());
     ui.horizontal_wrapped(|ui| {
-        if ui.button("|◀ Start").on_hover_text("Back to the start of the tape").clicked() {
+        if ui
+            .button("|◀ Start")
+            .on_hover_text("Back to the start of the tape")
+            .clicked()
+        {
             let t = app.tape_mut().unwrap();
             t.rewind();
             t.edges.clear();
@@ -141,10 +145,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         let t = app.tape_ref().unwrap();
         let within = t.block_progress();
         let (description, seconds) = match t.blocks.get(t.block) {
-            Some(b) => (
-                b.describe(),
-                b.duration_t() as f64 / app.cpu_hz(),
-            ),
+            Some(b) => (b.describe(), b.duration_t() as f64 / app.cpu_hz()),
             None => (String::new(), 0.0),
         };
         (within, description, seconds)
@@ -205,10 +206,8 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
     let tape = app.tape_ref().unwrap();
 
     let height = 150.0;
-    let (rect, _resp) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), height),
-        Sense::hover(),
-    );
+    let (rect, _resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2.0, Color32::from_rgb(8, 14, 10));
 
@@ -218,7 +217,10 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
     let grid = Stroke::new(1.0, Color32::from_rgb(24, 48, 32));
     for i in 0..=10 {
         let x = rect.left() + rect.width() * i as f32 / 10.0;
-        painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], grid);
+        painter.line_segment(
+            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+            grid,
+        );
     }
     // The trigger threshold: the EAR line is a single bit, so mid-scale.
     painter.line_segment(
@@ -282,7 +284,10 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         drew = true;
     }
     painter.line_segment(
-        [Pos2::new(x, y_of(level)), Pos2::new(rect.right(), y_of(level))],
+        [
+            Pos2::new(x, y_of(level)),
+            Pos2::new(rect.right(), y_of(level)),
+        ],
         trace,
     );
 
@@ -369,11 +374,7 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                 let resp = ui.selectable_label(is_current, rich);
                 if is_current {
                     let visible = ui.clip_rect().contains_rect(resp.rect);
-                    if needs_scroll(
-                        app.tape.scroll_to_current,
-                        app.tape.follow_current,
-                        visible,
-                    ) {
+                    if needs_scroll(app.tape.scroll_to_current, app.tape.follow_current, visible) {
                         resp.scroll_to_me(Some(egui::Align::Center));
                         app.tape.scroll_requested_for = Some(i);
                     }

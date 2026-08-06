@@ -46,7 +46,10 @@ fn heat_maps_record_reads_and_writes_and_then_fade() {
     let t = &s.bus.tracker;
     assert!(t.write_count[back] > 0, "back buffer never written");
     assert!(t.write_count[screen] > 0, "video RAM never written");
-    assert!(t.exec_heat[loop_start] > 0, "main loop never marked as executed");
+    assert!(
+        t.exec_heat[loop_start] > 0,
+        "main loop never marked as executed"
+    );
 
     // Nothing touches $C000, so it must stay cold.
     assert_eq!(t.read_count[untouched], 0);

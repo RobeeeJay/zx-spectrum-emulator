@@ -356,7 +356,8 @@ fn the_run_list_shows_the_start_time_and_can_be_reselected() {
     assert_eq!(h.state().spec.profiler.selected, Some(1), "newest selected");
 
     // Rows are labelled with their index and start time.
-    h.get_by_label_contains(&format!("1  {first_label}")).click();
+    h.get_by_label_contains(&format!("1  {first_label}"))
+        .click();
     h.run_steps(3);
     assert_eq!(h.state().spec.profiler.selected, Some(0));
 }

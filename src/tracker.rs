@@ -225,7 +225,7 @@ impl Tracker {
                     start: (page << 8) as u16,
                     len: (span * PAGE_SIZE) as u16,
                 };
-                if best.map_or(true, |(_, c)| conf > c) {
+                if best.is_none_or(|(_, c)| conf > c) {
                     best = Some((region, conf));
                 }
             }

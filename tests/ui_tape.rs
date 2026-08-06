@@ -57,7 +57,10 @@ fn loading_a_tape_leaves_it_stopped() {
     app.load_path(&path);
 
     let tape = app.spec.bus.tape.as_ref().expect("tape should be loaded");
-    assert!(!tape.playing, "a freshly loaded tape must not start playing");
+    assert!(
+        !tape.playing,
+        "a freshly loaded tape must not start playing"
+    );
     assert!(!app.spec.bus.tape_playing());
     assert_eq!(tape.block, 0, "and should be at the start");
     assert!(
@@ -104,7 +107,10 @@ fn play_on_load_is_off_by_default_but_can_be_turned_on() {
 fn the_block_list_follows_playback() {
     // Following is on by default, and a row that has scrolled out of view is
     // brought back; a visible row is left alone so manual scrolling sticks.
-    assert!(needs_scroll(false, true, false), "off-screen row must scroll");
+    assert!(
+        needs_scroll(false, true, false),
+        "off-screen row must scroll"
+    );
     assert!(!needs_scroll(false, true, true), "visible row must not");
     assert!(needs_scroll(true, false, true), "an explicit request wins");
     assert!(
@@ -224,7 +230,8 @@ fn following_can_be_turned_off() {
     h.state_mut().spec.bus.tape.as_mut().unwrap().seek(54);
     h.step();
     assert_eq!(
-        h.state().tape.scroll_requested_for, None,
+        h.state().tape.scroll_requested_for,
+        None,
         "with following off the list should stay where the user left it"
     );
 }
@@ -233,8 +240,10 @@ fn following_can_be_turned_off() {
 // progress through the current block
 // ---------------------------------------------------------------------------
 
-use zx_spectrum_emulator::tape::{DATA_PILOT_PULSES, HEADER_PILOT_PULSES, ONE_PULSE, PILOT_PULSE,
-    SYNC1_PULSE, SYNC2_PULSE, ZERO_PULSE};
+use zx_spectrum_emulator::tape::{
+    DATA_PILOT_PULSES, HEADER_PILOT_PULSES, ONE_PULSE, PILOT_PULSE, SYNC1_PULSE, SYNC2_PULSE,
+    ZERO_PULSE,
+};
 
 #[test]
 fn a_blocks_length_adds_up() {
@@ -287,7 +296,10 @@ fn block_progress_runs_from_nothing_to_everything() {
         t += total / 200;
         tape.level_at(t);
         let p = tape.block_progress().unwrap_or(1.0);
-        assert!(p >= last - 0.001, "progress went backwards: {last} then {p}");
+        assert!(
+            p >= last - 0.001,
+            "progress went backwards: {last} then {p}"
+        );
         if (0.4..0.6).contains(&p) {
             seen_middle = true;
         }
@@ -444,7 +456,10 @@ fn the_tape_window_lists_the_zx81_block() {
     let mut labels = Vec::new();
     walk(&harness.root(), &mut labels);
     let text = labels.join("\n");
-    assert!(text.contains("ZX81"), "no ZX81 block in the window:\n{text}");
+    assert!(
+        text.contains("ZX81"),
+        "no ZX81 block in the window:\n{text}"
+    );
     assert!(
         text.contains("CHESSQUEEN"),
         "the block should name the program:\n{text}"

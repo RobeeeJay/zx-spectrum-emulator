@@ -205,7 +205,10 @@ fn the_toolbar_toggles_the_debug_windows() {
     assert!(!h.state().show_tape);
     h.get_by_label("Tape").click();
     h.run_steps(3);
-    assert!(h.state().show_tape, "the Tape toggle should open the window");
+    assert!(
+        h.state().show_tape,
+        "the Tape toggle should open the window"
+    );
 }
 
 #[test]
@@ -289,7 +292,8 @@ fn a_loaded_rom_is_remembered_for_later_switches() {
     let mut h = harness_for(app);
     h.run_steps(3);
 
-    h.state_mut().load_path(&temp_rom("128-remember", 0x8000, 0xd5));
+    h.state_mut()
+        .load_path(&temp_rom("128-remember", 0x8000, 0xd5));
     h.run_steps(3);
     assert_eq!(h.state().spec.bus.model, Model::Spectrum128);
 
@@ -315,7 +319,11 @@ fn an_odd_sized_rom_is_reported_rather_than_silently_truncated() {
     h.run_steps(3);
     h.state_mut().load_path(&path);
     h.run_steps(3);
-    assert!(h.state().status_is_error, "status says: {}", h.state().status);
+    assert!(
+        h.state().status_is_error,
+        "status says: {}",
+        h.state().status
+    );
     assert_eq!(
         h.state().spec.bus.model,
         Model::Spectrum48,

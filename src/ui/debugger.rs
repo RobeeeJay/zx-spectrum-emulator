@@ -282,40 +282,47 @@ fn ay_registers(app: &mut App, ui: &mut egui::Ui) {
     ui.collapsing("AY-3-8912", |ui| {
         let hex: String = regs.iter().map(|r| format!("{r:02X} ")).collect();
         ui.label(RichText::new(format!("R0-15  {hex}")).monospace());
-        ui.label(
-            RichText::new(format!("selected R{}", ay.selected)).monospace(),
-        );
+        ui.label(RichText::new(format!("selected R{}", ay.selected)).monospace());
 
-        egui::Grid::new("ay-channels").num_columns(4).show(ui, |ui| {
-            ui.label(RichText::new("ch").monospace().strong());
-            ui.label(RichText::new("period").monospace().strong());
-            ui.label(RichText::new("freq").monospace().strong());
-            ui.label(RichText::new("volume").monospace().strong());
-            ui.end_row();
-            for (i, name) in ["A", "B", "C"].iter().enumerate() {
-                let period =
-                    ((regs[i * 2 + 1] as u32 & 0x0f) << 8) | regs[i * 2] as u32;
-                let freq = if period == 0 {
-                    0.0
-                } else {
-                    clock / (16.0 * period as f64)
-                };
-                let amp = regs[8 + i];
-                let vol = if amp & 0x10 != 0 {
-                    "env".to_string()
-                } else {
-                    format!("{}", amp & 0x0f)
-                };
-                let mixer = regs[7];
-                let tone = if mixer & (1 << i) == 0 { "tone" } else { "----" };
-                let noise = if mixer & (8 << i) == 0 { "noise" } else { "-----" };
-                ui.label(RichText::new(format!("{name} {tone} {noise}")).monospace());
-                ui.label(RichText::new(format!("{period:4}")).monospace());
-                ui.label(RichText::new(format!("{freq:7.1} Hz")).monospace());
-                ui.label(RichText::new(vol).monospace());
+        egui::Grid::new("ay-channels")
+            .num_columns(4)
+            .show(ui, |ui| {
+                ui.label(RichText::new("ch").monospace().strong());
+                ui.label(RichText::new("period").monospace().strong());
+                ui.label(RichText::new("freq").monospace().strong());
+                ui.label(RichText::new("volume").monospace().strong());
                 ui.end_row();
-            }
-        });
+                for (i, name) in ["A", "B", "C"].iter().enumerate() {
+                    let period = ((regs[i * 2 + 1] as u32 & 0x0f) << 8) | regs[i * 2] as u32;
+                    let freq = if period == 0 {
+                        0.0
+                    } else {
+                        clock / (16.0 * period as f64)
+                    };
+                    let amp = regs[8 + i];
+                    let vol = if amp & 0x10 != 0 {
+                        "env".to_string()
+                    } else {
+                        format!("{}", amp & 0x0f)
+                    };
+                    let mixer = regs[7];
+                    let tone = if mixer & (1 << i) == 0 {
+                        "tone"
+                    } else {
+                        "----"
+                    };
+                    let noise = if mixer & (8 << i) == 0 {
+                        "noise"
+                    } else {
+                        "-----"
+                    };
+                    ui.label(RichText::new(format!("{name} {tone} {noise}")).monospace());
+                    ui.label(RichText::new(format!("{period:4}")).monospace());
+                    ui.label(RichText::new(format!("{freq:7.1} Hz")).monospace());
+                    ui.label(RichText::new(vol).monospace());
+                    ui.end_row();
+                }
+            });
 
         let noise_p = regs[6] & 0x1f;
         let env_p = ((regs[12] as u32) << 8) | regs[11] as u32;
@@ -371,14 +378,25 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                     .iter()
                     .map(|b| format!("{b:02X} "))
                     .collect::<String>();
-                let text = format!("{}{:04X}  {:<12}{}", if has_bp { "●" } else { " " }, addr, bytes, insn.text);
+                let text = format!(
+                    "{}{:04X}  {:<12}{}",
+                    if has_bp { "●" } else { " " },
+                    addr,
+                    bytes,
+                    insn.text
+                );
                 let mut rich = RichText::new(text).monospace();
                 if is_pc {
-                    rich = rich.color(Color32::BLACK).background_color(Color32::from_rgb(255, 210, 0));
+                    rich = rich
+                        .color(Color32::BLACK)
+                        .background_color(Color32::from_rgb(255, 210, 0));
                 } else if has_bp {
                     rich = rich.color(Color32::from_rgb(255, 120, 120));
                 }
-                if ui.add(egui::Label::new(rich).sense(egui::Sense::click())).clicked() {
+                if ui
+                    .add(egui::Label::new(rich).sense(egui::Sense::click()))
+                    .clicked()
+                {
                     clicked = Some(addr);
                 }
                 addr = addr.wrapping_add(insn.len.max(1) as u16);
@@ -459,12 +477,19 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
                 let addr = base.wrapping_add(row * 8);
                 let mut line = format!("{addr:04X}  ");
                 for i in 0..8u16 {
-                    line.push_str(&format!("{:02X} ", app.spec.bus.peek_raw(addr.wrapping_add(i))));
+                    line.push_str(&format!(
+                        "{:02X} ",
+                        app.spec.bus.peek_raw(addr.wrapping_add(i))
+                    ));
                 }
                 line.push(' ');
                 for i in 0..8u16 {
                     let b = app.spec.bus.peek_raw(addr.wrapping_add(i));
-                    line.push(if (0x20..0x7f).contains(&b) { b as char } else { '.' });
+                    line.push(if (0x20..0x7f).contains(&b) {
+                        b as char
+                    } else {
+                        '.'
+                    });
                 }
                 ui.monospace(line);
             }

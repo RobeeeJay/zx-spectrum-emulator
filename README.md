@@ -219,7 +219,8 @@ it into `$4000`, and the detector finds it within a couple of seconds.
 
 ## Tapes
 
-**File ▸ Load tape…** opens `.tzx` and `.tap` files. TZX is a pulse-level
+**File ▸ Load tape…** opens `.tzx` and `.tap` files, and the ZX81's `.p`, `.81`
+and `.p81`. TZX is a pulse-level
 format, so the player does not decode bytes: it turns blocks into a stream of
 pulse lengths in T-states and drives the EAR bit through port `$FE`, exactly
 like a real tape feeding the ULA. Ordinary ROM loading, turbo loaders and
@@ -236,6 +237,25 @@ sequence ($13), pure data ($14), direct recording ($15), pause and stop-the-tape
 return ($26/$27), stop-if-48K ($2A), set signal level ($2B), and the
 informational blocks ($30–$35, $5A). CSW and generalized-data blocks ($18/$19)
 are skipped over rather than played.
+
+### ZX81 tapes
+
+`.p`, `.81` and `.p81` files play as the pulse train a real ZX81 would have
+saved, so they load through the ROM's own loader rather than being poked into
+memory. Bits go out most significant first: a burst of four pulses for a 0 and
+nine for a 1, each pulse a 150 µs high half and a 150 µs low half, with a
+1300 µs gap closing every bit. Those come from the ROM's SAVE routine at
+`$031E`, which works out the burst length with `AND $05 / ADD A,$04`.
+
+A `.p` carries no file name, so one is made from the host file name in ZX81
+character codes with bit 7 marking the last; a `.p81` brings its own. Opening
+one while a Spectrum is running switches to a ZX81 first. Then it is the 1982
+ritual: type `LOAD ""`, press NEWLINE, press Play. At roughly 50 bytes a second
+a 16K game is several minutes, so leave the speed boost on.
+
+Both machines have their own deck, because a tape is timed in the T-states of
+the machine playing it and the ZX81's 3.25 MHz clock is not the Spectrum's
+3.5 MHz. The tape window follows whichever machine is running.
 
 ### Tape window
 
@@ -290,8 +310,11 @@ Memory follows the machine's sparse decoding: an 8K ROM appears twice in the
 bottom page, 1K of RAM repeats sixteen times through its own page, and the whole
 lot is mirrored above `$8000`, which is what lets the display routine execute the
 display file with A15 set. A 16K ROM image fills the bottom page instead of
-mirroring. `.p` files load as an image at `$4009`, and one too large for 1K is
-refused rather than silently truncated.
+mirroring. `.p` files can also be loaded straight in as an image at `$4009`,
+and one too large for 1K is refused rather than silently truncated.
+
+Tape input arrives on bit 7 of port `$FE`, which the ROM's loader tests with
+`RLA` at `$035B`; bit 6 is the 50/60 Hz jumper.
 
 ## Preferences
 
@@ -327,7 +350,21 @@ again at the next launch, so the machines stay available between sessions.
 
 The 48K ROM is copyrighted and not included. Drop one at `roms/48.rom` (or use
 **File ▸ Load ROM…**) and it is picked up at startup; without one, the built-in
-demo ROM above runs instead.
+demo ROM above runs instead. The names looked for are `48.rom` (16K), `128.rom`
+(32K), `plus3.rom` (64K) and `zx81.rom` (8K).
+
+A shipped app cannot rely on the working directory — a double-clicked macOS
+`.app` runs with it set to `/` — so ROMs are looked for in several places, in
+order, each also with a `roms` subdirectory:
+
+* the working directory, for `cargo run` or a shell launch
+* beside the executable, for an unzip-and-run build
+* `../Resources`, inside a macOS `.app`
+* `../share/zx-spectrum-emulator`, for a Unix `bin`/`share` install
+* the configuration directory, which survives replacing the app
+
+A name outranks proximity, so a `128.rom` anywhere beats a `128k.rom` nearby.
+The directory a ROM was last opened from is scanned too.
 
 **File ▸ Load snapshot…** loads `.sna` and `.z80` (v1/v2/v3) for 48K, 128K and
 +3. Snapshots carry their machine type, so loading one switches the emulator to
@@ -339,6 +376,10 @@ Files can also be named on the command line, dispatched by extension:
 ```
 cargo run --release -- "tapes/Jetpac (1983)(Ultimate Play The Game)[16K].tzx"
 ```
+
+`--48`, `--128`, `--plus2a`, `--plus3`, `--zx81` (or `--zx81-16k`) and
+`--zx81-1k` choose the machine; a `.p` on the command line brings up a ZX81 on
+its own.
 
 ## Sound
 
@@ -526,6 +567,41 @@ loops and stop blocks), and then does the real thing twice over: it calls the
 matches the tape byte for byte, and it types `LOAD ""` on the emulated keyboard
 and loads a whole game from a real TZX. Tests that need `roms/48.rom` or
 `tapes/` skip themselves when those are absent.
+
+## Building a release
+
+`packaging/macos-app.sh` builds `ZX Spectrum.app` and a `.dmg` around it,
+generating the `.icns` from `packaging/icon.png` with `sips` and `iconutil`.
+The app is unsigned unless `MACOS_SIGN_IDENTITY` names a Developer ID, and
+notarisation is left to whoever cuts the release — without it macOS refuses to
+open the app on another machine until the quarantine flag is cleared:
+
+    xattr -dr com.apple.quarantine "/Applications/ZX Spectrum.app"
+
+`.github/workflows/release.yml` runs the tests, `cargo fmt --check` and
+`cargo clippy -D warnings` on macOS, Linux and Windows, then packages a `.dmg`
+for the two macOS architectures, a `.tar.gz` for Linux and a `.zip` for
+Windows, attaching them to a release on a `v*` tag.
+
+`packaging/make-icon.py` draws the icon — a `ZX` over the four Spectrum colour
+bars — writing both `icon.png` and a multi-size `icon.ico`. It has no
+dependencies, not even Pillow: it rasterises the shapes itself and writes the
+PNG chunks by hand.
+
+Things worth knowing per platform:
+
+* **macOS** — the binary links only system frameworks, so there is nothing to
+  bundle beyond the app itself.
+* **Linux** — `cpal` links `libasound.so.2` (build with `libasound2-dev`), and
+  the file dialogs go through `xdg-desktop-portal`. An AppImage or Flatpak
+  carries both; a bare tarball expects the host to have them.
+* **Windows** — the binary is built with `windows_subsystem = "windows"`, so no
+  console window opens behind it. Cross-compiling from macOS is not worth the
+  trouble; use the CI runner.
+
+No ROM images are shipped: they are still under copyright. A packaged build
+therefore starts with the machines disabled until ROMs are put where it looks —
+see **ROMs and snapshots**.
 
 ## Layout
 

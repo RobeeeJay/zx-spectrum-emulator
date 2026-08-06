@@ -16,11 +16,6 @@ fn machine(ram: Ram) -> Option<Zx81> {
     Some(zx)
 }
 
-/// Non-blank pixels in the picture last completed.
-fn ink(zx: &Zx81) -> usize {
-    zx.bus.fb_prev.iter().filter(|p| **p != 0).count()
-}
-
 // ---------------------------------------------------------------------------
 // memory
 // ---------------------------------------------------------------------------
@@ -143,7 +138,11 @@ fn the_line_counter_picks_the_row_of_the_character() {
     let mut zx = Zx81::new(Ram::K16);
     zx.cpu.i = 0x1e;
     // A different pattern on each of the eight rows.
-    set_char(&mut zx, 0x01, [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01]);
+    set_char(
+        &mut zx,
+        0x01,
+        [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01],
+    );
     zx.bus.poke(0x4000, 0x01);
 
     for lcnt in 0..8u8 {
@@ -323,7 +322,7 @@ fn synthetic_display() -> Zx81 {
     rom[15] = 0x00;
     rom[16] = 0xc1;
     rom[17] = 0xe9; // JP (HL)      hand the display file to the ULA
-    // The interrupt handler drops the return address and starts the next line.
+                    // The interrupt handler drops the return address and starts the next line.
     rom[0x38] = 0xe1; // POP HL
     rom[0x39] = 0xfb; // EI
     rom[0x3a] = 0xc3; // JP $000A
@@ -373,7 +372,10 @@ fn a_row_of_characters_lands_contiguously_and_in_the_same_place_each_line() {
         }
     }
 
-    assert!(counts.len() >= 4, "expected several drawn lines, got {counts:?}");
+    assert!(
+        counts.len() >= 4,
+        "expected several drawn lines, got {counts:?}"
+    );
     assert!(
         counts.iter().all(|c| *c == 32),
         "every line should draw all 32 characters, got {counts:?}"

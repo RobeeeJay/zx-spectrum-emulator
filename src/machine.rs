@@ -334,12 +334,7 @@ impl SpectrumBus {
             ((self.page_reg >> 4) & 0x01) as usize
         };
         let bank = (self.page_reg & 0x07) as usize;
-        self.slots = [
-            Slot::Rom(rom),
-            Slot::Ram(5),
-            Slot::Ram(2),
-            Slot::Ram(bank),
-        ];
+        self.slots = [Slot::Rom(rom), Slot::Ram(5), Slot::Ram(2), Slot::Ram(bank)];
     }
 
     /// Write to port $7FFD.
@@ -769,7 +764,8 @@ impl SpectrumBus {
         // Keep the finished frame; the renderer needs it for the part of the
         // screen the ULA has not redrawn yet.
         let bank = self.screen_bank() * 0x4000;
-        self.screen_prev.copy_from_slice(&self.ram[bank..bank + 6912]);
+        self.screen_prev
+            .copy_from_slice(&self.ram[bank..bank + 6912]);
         std::mem::swap(&mut self.border_events, &mut self.border_prev);
         self.border_prev_start = self.border_start;
         self.border_start = self.border;
@@ -1042,9 +1038,10 @@ impl Spectrum {
             let elapsed = now.saturating_sub(t0);
             let (pc1, sp1) = (self.cpu.pc, self.cpu.sp);
             let bus = &self.bus;
-            self.profiler.on_instruction(pc0, sp0, pc1, sp1, now, elapsed, |a| {
-                u16::from_le_bytes([bus.peek_raw(a), bus.peek_raw(a.wrapping_add(1))])
-            });
+            self.profiler
+                .on_instruction(pc0, sp0, pc1, sp1, now, elapsed, |a| {
+                    u16::from_le_bytes([bus.peek_raw(a), bus.peek_raw(a.wrapping_add(1))])
+                });
         }
     }
 

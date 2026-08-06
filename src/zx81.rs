@@ -383,9 +383,7 @@ impl Zx81Bus {
         for row in 0..view.h {
             for col in 0..view.w {
                 let (sx, sy) = (view.x + col, view.y + row);
-                let ink = sx < RASTER_W
-                    && sy < RASTER_H
-                    && self.fb_prev[sy * RASTER_W + sx] != 0;
+                let ink = sx < RASTER_W && sy < RASTER_H && self.fb_prev[sy * RASTER_W + sx] != 0;
                 let c = if ink { BLACK } else { WHITE };
                 let i = (row * view.w + col) * 4;
                 out[i] = c[0];

@@ -1,0 +1,135 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The tests that need a ROM or a tape skip themselves when the file is not
+  # there, so the suite is meaningful on CI even though roms/ and tapes/ are
+  # not in the repository.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # cpal links against ALSA, and rfd talks to the desktop portal.
+      - name: Install Linux audio and dialog libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --release
+
+  package:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux audio and dialog libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Build the app bundle
+        if: runner.os == 'macOS'
+        run: packaging/macos-app.sh ${{ matrix.target }}
+
+      - name: Build
+        if: runner.os != 'macOS'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Everything but macOS ships as a plain archive: the binary, the ROM
+      # directory it searches, and the licence.
+      - name: Stage the archive
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          out="zx-spectrum-emulator-${{ matrix.name }}"
+          mkdir -p "$out/roms"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/zx-spectrum-emulator.exe" "$out/"
+          else
+            cp "target/${{ matrix.target }}/release/zx-spectrum-emulator" "$out/"
+          fi
+          cp README.md "$out/"
+          cat > "$out/roms/README.txt" <<'TXT'
+          Put ROM images here: 48.rom (16K), 128.rom (32K), plus3.rom (64K),
+          zx81.rom (8K). None are included: they are still under copyright.
+          TXT
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$out.zip" "$out"
+          else
+            tar czf "$out.tar.gz" "$out"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            zx-spectrum-emulator-*.tar.gz
+            zx-spectrum-emulator-*.zip
+            target/packaging/*.dmg
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.tar.gz
+            *.zip
+            *.dmg
+          body: |
+            No ROM images are included — they are still under copyright. Put
+            yours next to the binary (or in `roms/`), or open one with
+            File ▸ Load ROM…
+
+            The macOS build is not signed or notarised, so Gatekeeper will
+            refuse it until you clear the quarantine flag:
+
+                xattr -dr com.apple.quarantine "/Applications/ZX Spectrum.app"

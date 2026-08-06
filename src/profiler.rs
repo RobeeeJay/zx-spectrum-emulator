@@ -86,9 +86,7 @@ impl ProfileRun {
     pub fn total(&self, metric: Metric) -> u64 {
         match metric {
             // Self time plus the time outside any call is the whole run.
-            Metric::SelfTime => {
-                self.funcs.values().map(|f| f.self_t).sum::<u64>() + self.outside_t
-            }
+            Metric::SelfTime => self.funcs.values().map(|f| f.self_t).sum::<u64>() + self.outside_t,
             Metric::Inclusive => self.emulated_t,
         }
     }
@@ -258,6 +256,9 @@ impl Profiler {
     /// Offer one executed instruction to the profiler.
     ///
     /// `peek` reads memory without side effects, used to see what was pushed.
+    // The arguments are the CPU state either side of one instruction; bundling
+    // them into a struct would only move the same fields somewhere else.
+    #[allow(clippy::too_many_arguments)]
     pub fn on_instruction(
         &mut self,
         pc_before: u16,

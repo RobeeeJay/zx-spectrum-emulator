@@ -70,11 +70,7 @@ fn load_cli_files(
             "tzx" | "tap" => match Tape::load(&path) {
                 Ok(t) => {
                     // Loaded stopped: the tape waits for Play, like a real one.
-                    *status = format!(
-                        "Tape: {} ({} blocks) — press Play",
-                        t.name,
-                        t.blocks.len()
-                    );
+                    *status = format!("Tape: {} ({} blocks) — press Play", t.name, t.blocks.len());
                     spec.bus.tape = Some(t);
                     opened_tape = true;
                 }

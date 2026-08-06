@@ -35,8 +35,7 @@ fn every_tape_in_the_tapes_directory_parses() {
         return;
     }
     for path in files {
-        let tape = Tape::load(&path)
-            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let tape = Tape::load(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(
             !tape.blocks.is_empty(),
             "{}: parsed no blocks",
@@ -188,26 +187,17 @@ fn loops_jumps_and_stops_are_honoured() {
         "test".into(),
         vec![
             Block::LoopStart(3),
-            Block::PureTone {
-                len: 100,
-                count: 2,
-            },
+            Block::PureTone { len: 100, count: 2 },
             Block::LoopEnd,
             Block::Pause(0), // stop the tape
-            Block::PureTone {
-                len: 100,
-                count: 2,
-            },
+            Block::PureTone { len: 100, count: 2 },
         ],
     );
     let pulses = pulses_of(&mut tape, 100);
     // Three passes of two pulses; the gaps between them are all 100T.
     assert!(pulses.len() >= 5, "got {} pulses", pulses.len());
     assert!(pulses.iter().take(5).all(|p| *p == 100));
-    assert!(
-        !tape.playing,
-        "a pause-of-zero block must stop the tape"
-    );
+    assert!(!tape.playing, "a pause-of-zero block must stop the tape");
     assert!(tape.stopped_by_block);
 }
 
@@ -277,7 +267,10 @@ fn the_rom_loader_reads_a_header_from_a_real_tzx() {
     let mut spent = 0u64;
     let mut returned = false;
     while spent < 60_000_000 {
-        if matches!(spec.run(FRAME_T), zx_spectrum_emulator::machine::Stop::Breakpoint(SENTINEL)) {
+        if matches!(
+            spec.run(FRAME_T),
+            zx_spectrum_emulator::machine::Stop::Breakpoint(SENTINEL)
+        ) {
             returned = true;
             break;
         }

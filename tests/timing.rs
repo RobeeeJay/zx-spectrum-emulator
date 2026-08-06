@@ -1,7 +1,7 @@
 //! Per-instruction T-state counts, checked against the published Z80 timings,
 //! plus a few ULA contention checks.
 
-use zx_spectrum_emulator::machine::{Model, Spectrum};
+use zx_spectrum_emulator::machine::Spectrum;
 use zx_spectrum_emulator::z80::{Bus, Z80};
 
 /// Uncontended flat memory, so a test measures the instruction alone.
@@ -269,5 +269,8 @@ fn a_full_frame_is_69888_tstates() {
         (frame..frame + 24).contains(&total),
         "frame took {total} T-states"
     );
-    assert!(s.bus.irq_pending, "the ULA raises /INT at the frame boundary");
+    assert!(
+        s.bus.irq_pending,
+        "the ULA raises /INT at the frame boundary"
+    );
 }

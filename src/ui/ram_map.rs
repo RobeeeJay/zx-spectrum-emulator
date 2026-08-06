@@ -221,7 +221,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     match &mut app.ram.tex {
         Some(t) => t.set(img, TextureOptions::NEAREST),
         None => {
-            app.ram.tex = Some(ui.ctx().load_texture("ram-map", img, TextureOptions::NEAREST))
+            app.ram.tex = Some(
+                ui.ctx()
+                    .load_texture("ram-map", img, TextureOptions::NEAREST),
+            )
         }
     }
 
@@ -260,9 +263,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 
     ui.separator();
     ui.small(match app.ram.view {
-        View::AddressSpace => {
-            "Each pixel is one byte of the address space; each row is 256 bytes."
-        }
+        View::AddressSpace => "Each pixel is one byte of the address space; each row is 256 bytes.",
         View::AllMemory => {
             "Each block is a 16K bank or ROM page (64 rows of 256 bytes). \
              Bright outlines mark what is paged in where."
@@ -311,10 +312,7 @@ fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
     let value = match hover.addr {
         Some(addr) => app.spec.bus.peek_raw(addr),
         // Not paged in: read it straight out of the bank.
-        None => app
-            .spec
-            .bus
-            .bank_byte(hover.phys / BANK_SIZE, hover.offset),
+        None => app.spec.bus.bank_byte(hover.phys / BANK_SIZE, hover.offset),
     };
     let where_ = match hover.addr {
         Some(addr) => format!("@ ${addr:04X}"),
@@ -323,11 +321,7 @@ fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
     let t = &app.spec.bus.tracker;
     ui.monospace(format!(
         "{} +${:04X} {}  = ${value:02X}   reads {}   writes {}",
-        hover.what,
-        hover.offset,
-        where_,
-        t.read_count[hover.phys],
-        t.write_count[hover.phys],
+        hover.what, hover.offset, where_, t.read_count[hover.phys], t.write_count[hover.phys],
     ));
     if response.clicked() {
         if let Some(addr) = hover.addr {
@@ -433,7 +427,10 @@ fn all_memory_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale: f3
                 Color32::from_rgb(120, 210, 255),
                 format!("{} → ${:04X}", chunk.label, (slot as u32) << 14),
             ),
-            None => (Color32::from_gray(110), format!("{} (paged out)", chunk.label)),
+            None => (
+                Color32::from_gray(110),
+                format!("{} (paged out)", chunk.label),
+            ),
         };
         if shows_screen {
             text.push_str("  (screen)");

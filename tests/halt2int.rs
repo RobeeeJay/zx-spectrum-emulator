@@ -22,7 +22,11 @@ fn screen_text(spec: &Spectrum) -> Vec<String> {
             for y in 0..8u16 {
                 cell[y as usize] = spec.bus.video(screen_bitmap_offset(row * 8 + y, col));
             }
-            let mut ch = if cell.iter().all(|b| *b == 0) { ' ' } else { '?' };
+            let mut ch = if cell.iter().all(|b| *b == 0) {
+                ' '
+            } else {
+                '?'
+            };
             'find: for page in 0..spec.bus.rom.len() / 0x4000 {
                 for c in 32u8..128 {
                     let base = page * 0x4000 + 0x3d00 + (c as usize - 32) * 8;
@@ -228,5 +232,8 @@ fn leaving_the_halt_state_pushes_the_address_after_it() {
     assert!(!spec.cpu.halted, "the interrupt wakes it");
     assert_eq!(spec.cpu.pc, 0x0039, "and runs the handler at $0038");
     let pushed = u16::from_le_bytes([spec.bus.peek_raw(0xbffe), spec.bus.peek_raw(0xbfff)]);
-    assert_eq!(pushed, 0x8001, "the return address is the byte after the HALT");
+    assert_eq!(
+        pushed, 0x8001,
+        "the return address is the byte after the HALT"
+    );
 }

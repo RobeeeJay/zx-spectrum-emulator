@@ -12,9 +12,9 @@ use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportI
 use crate::audio_out::AudioOut;
 use crate::machine::{Model, Spectrum, Stop};
 use crate::prefs::{FileKind, Prefs, WindowRect};
-use crate::zx81::{self, Zx81};
 use crate::screen;
 use crate::snapshot;
+use crate::zx81::{self, Zx81};
 
 /// T-state of the pixel at (`px`, `py`), clamped into the frame.
 fn beam_at(bus: &crate::machine::SpectrumBus, view: screen::View, px: usize, py: usize) -> u32 {
@@ -330,10 +330,7 @@ impl App {
         } else {
             format!("; also found {}", also.join(", "))
         };
-        self.set_status(
-            format!("Loaded {name} as a {}{extra}", model.name()),
-            false,
-        );
+        self.set_status(format!("Loaded {name} as a {}{extra}", model.name()), false);
     }
 
     /// Fill in ROMs for machines that have none from the images in `dir`.
@@ -448,10 +445,7 @@ impl App {
                     }
                     None => {
                         self.spec.reset();
-                        self.set_status(
-                            format!("Reset ({})", self.spec.bus.model.name()),
-                            false,
-                        );
+                        self.set_status(format!("Reset ({})", self.spec.bus.model.name()), false);
                     }
                 }
             }
@@ -658,10 +652,7 @@ impl App {
     /// Save the layout if it has changed and has been still for a moment.
     fn save_window_state_if_settled(&mut self) {
         const SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
-        if self
-            .last_save_at
-            .is_some_and(|at| at.elapsed() < SETTLE)
-        {
+        if self.last_save_at.is_some_and(|at| at.elapsed() < SETTLE) {
             return;
         }
         self.prefs.display_scale = Some(self.scale);
@@ -757,8 +748,7 @@ impl App {
     pub fn switch_to_zx81(&mut self, ram: zx81::Ram) {
         let Some(rom) = self.roms.rom_zx81.clone() else {
             self.set_status(
-                "Cannot switch to a ZX81: no ROM. Put an 8K ZX81 ROM at roms/zx81.rom"
-                    .into(),
+                "Cannot switch to a ZX81: no ROM. Put an 8K ZX81 ROM at roms/zx81.rom".into(),
                 true,
             );
             return;
@@ -823,8 +813,8 @@ impl App {
         } else {
             1.0
         };
-        let want = self.spec.bus.model.cpu_hz() as f32 * dt * self.speed * boost * pace
-            + self.leftover;
+        let want =
+            self.spec.bus.model.cpu_hz() as f32 * dt * self.speed * boost * pace + self.leftover;
         let budget = want.max(0.0) as u32;
         self.leftover = want - budget as f32;
 
@@ -863,8 +853,9 @@ impl App {
                 self.screen_pixels = vec![0; view.buffer_len()];
                 self.screen_tex = None;
             }
-            let zx = self.zx81.as_ref().expect("checked above");
-            zx.bus.render(view, &mut self.screen_pixels);
+            if let Some(zx) = self.zx81.as_ref() {
+                zx.bus.render(view, &mut self.screen_pixels);
+            }
             let img = ColorImage::from_rgba_unmultiplied([view.w, view.h], &self.screen_pixels);
             match &mut self.screen_tex {
                 Some(t) => t.set(img, TextureOptions::NEAREST),
@@ -882,19 +873,13 @@ impl App {
             self.screen_tex = None; // the texture has to be remade at the new size
         }
         match self.beam_t.filter(|_| self.race_the_beam) {
-            Some(beam) => screen::render_racing(
-                &self.spec.bus,
-                view,
-                &mut self.screen_pixels,
-                flash,
-                beam,
-            ),
+            Some(beam) => {
+                screen::render_racing(&self.spec.bus, view, &mut self.screen_pixels, flash, beam)
+            }
             None => screen::render(&self.spec.bus, view, &mut self.screen_pixels, flash),
         }
-        let img = ColorImage::from_rgba_unmultiplied(
-            [view.width(), view.height()],
-            &self.screen_pixels,
-        );
+        let img =
+            ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels);
         match &mut self.screen_tex {
             Some(t) => t.set(img, TextureOptions::NEAREST),
             None => {
@@ -925,9 +910,7 @@ impl App {
                             Ok(model) => {
                                 self.switch_model(model);
                                 match snapshot::load(&mut self.spec, &path) {
-                                    Ok(()) => {
-                                        self.status = format!("Loaded {}", path.display())
-                                    }
+                                    Ok(()) => self.status = format!("Loaded {}", path.display()),
                                     Err(e) => {
                                         self.set_status(format!("Snapshot load failed: {e}"), true)
                                     }
@@ -980,10 +963,7 @@ impl App {
                     {
                         self.spec.bus.set_late_timing(late);
                         self.set_status(
-                            format!(
-                                "48K {} timing",
-                                if late { "late" } else { "early" }
-                            ),
+                            format!("48K {} timing", if late { "late" } else { "early" }),
                             false,
                         );
                     }
@@ -1084,7 +1064,10 @@ impl App {
             ui.separator();
             if self.tape_ref().is_some() {
                 let playing = self.tape_is_playing();
-                if ui.button(if playing { "⏸ Tape" } else { "▶ Tape" }).clicked() {
+                if ui
+                    .button(if playing { "⏸ Tape" } else { "▶ Tape" })
+                    .clicked()
+                {
                     let now = self.spec.bus.total_t();
                     let t = self.tape_mut().unwrap();
                     if playing {

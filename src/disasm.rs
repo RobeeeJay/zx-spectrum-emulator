@@ -4,7 +4,9 @@ const R: [&str; 8] = ["B", "C", "D", "E", "H", "L", "(HL)", "A"];
 const RP: [&str; 4] = ["BC", "DE", "HL", "SP"];
 const RP2: [&str; 4] = ["BC", "DE", "HL", "AF"];
 const CC: [&str; 8] = ["NZ", "Z", "NC", "C", "PO", "PE", "P", "M"];
-const ALU: [&str; 8] = ["ADD A,", "ADC A,", "SUB ", "SBC A,", "AND ", "XOR ", "OR ", "CP "];
+const ALU: [&str; 8] = [
+    "ADD A,", "ADC A,", "SUB ", "SBC A,", "AND ", "XOR ", "OR ", "CP ",
+];
 const ROT: [&str; 8] = ["RLC", "RRC", "RL", "RR", "SLA", "SRA", "SLL", "SRL"];
 
 pub struct Insn {
@@ -158,17 +160,26 @@ impl<F: Fn(u16) -> u8> Cursor<'_, F> {
                     1 => "EX AF,AF'".into(),
                     2 => {
                         let d = self.next() as i8;
-                        let t = self.addr.wrapping_add(self.len as u16).wrapping_add(d as i16 as u16);
+                        let t = self
+                            .addr
+                            .wrapping_add(self.len as u16)
+                            .wrapping_add(d as i16 as u16);
                         format!("DJNZ {}", hex16(t))
                     }
                     3 => {
                         let d = self.next() as i8;
-                        let t = self.addr.wrapping_add(self.len as u16).wrapping_add(d as i16 as u16);
+                        let t = self
+                            .addr
+                            .wrapping_add(self.len as u16)
+                            .wrapping_add(d as i16 as u16);
                         format!("JR {}", hex16(t))
                     }
                     _ => {
                         let d = self.next() as i8;
-                        let t = self.addr.wrapping_add(self.len as u16).wrapping_add(d as i16 as u16);
+                        let t = self
+                            .addr
+                            .wrapping_add(self.len as u16)
+                            .wrapping_add(d as i16 as u16);
                         format!("JR {},{}", CC[(y - 4) as usize], hex16(t))
                     }
                 },
@@ -351,8 +362,9 @@ impl<F: Fn(u16) -> u8> Cursor<'_, F> {
                     }
                 }
                 6 => format!("IM {}", [0, 0, 1, 2, 0, 0, 1, 2][y as usize]),
-                _ => ["LD I,A", "LD R,A", "LD A,I", "LD A,R", "RRD", "RLD", "NOP", "NOP"]
-                    [y as usize]
+                _ => [
+                    "LD I,A", "LD R,A", "LD A,I", "LD A,R", "RRD", "RLD", "NOP", "NOP",
+                ][y as usize]
                     .into(),
             },
             2 if z <= 3 && y >= 4 => {

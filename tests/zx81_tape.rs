@@ -58,7 +58,10 @@ fn a_p81_file_carries_its_own_name() {
     let tape = Tape::load(&dir.join("whatever.p81")).unwrap();
     match &tape.blocks[0] {
         Block::Zx81 { name, data, .. } => {
-            assert_eq!(name, "AB", "the name comes from the file, not the file name");
+            assert_eq!(
+                name, "AB",
+                "the name comes from the file, not the file name"
+            );
             assert_eq!(data, &file);
         }
         other => panic!("expected a ZX81 block, got {other:?}"),
@@ -161,7 +164,10 @@ fn the_bit_gap_is_long_enough_to_be_seen_as_the_end_of_a_burst() {
     // sit between the two.
     let gap = ZX81_BIT_GAP as u64 + ZX81_HALF_PULSE as u64;
     assert!(gap > 26 * 51, "gap of {gap}T is too short to end a bit");
-    assert!(gap < 17_000, "gap of {gap}T would look like the end of the tape");
+    assert!(
+        gap < 17_000,
+        "gap of {gap}T would look like the end of the tape"
+    );
     // And the low half of an ordinary pulse must not end a bit by itself.
     assert!((ZX81_HALF_PULSE as u64) < 26 * 51);
 }
@@ -310,7 +316,10 @@ fn the_tape_reports_progress_as_it_plays() {
             break;
         }
     }
-    assert!(seen.windows(2).all(|w| w[1] >= w[0]), "progress went backwards");
+    assert!(
+        seen.windows(2).all(|w| w[1] >= w[0]),
+        "progress went backwards"
+    );
     assert!(
         seen.last().copied().unwrap_or(0.0) > 0.9,
         "progress only reached {:?}",

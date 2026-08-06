@@ -663,9 +663,8 @@ fn ed(cpu: &mut Z80, bus: &mut impl Bus) {
                     cpu.a = cpu.i;
                     let iff2 = cpu.iff2;
                     let a = cpu.a;
-                    cpu.f = (cpu.f & CF)
-                        | super::tables::SZ53[a as usize]
-                        | if iff2 { PF } else { 0 };
+                    cpu.f =
+                        (cpu.f & CF) | super::tables::SZ53[a as usize] | if iff2 { PF } else { 0 };
                     cpu.touched_flags();
                 }
                 3 => {
@@ -673,9 +672,8 @@ fn ed(cpu: &mut Z80, bus: &mut impl Bus) {
                     cpu.a = cpu.r_full();
                     let iff2 = cpu.iff2;
                     let a = cpu.a;
-                    cpu.f = (cpu.f & CF)
-                        | super::tables::SZ53[a as usize]
-                        | if iff2 { PF } else { 0 };
+                    cpu.f =
+                        (cpu.f & CF) | super::tables::SZ53[a as usize] | if iff2 { PF } else { 0 };
                     cpu.touched_flags();
                 }
                 4 => {

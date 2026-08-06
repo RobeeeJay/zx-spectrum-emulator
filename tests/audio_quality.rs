@@ -19,7 +19,9 @@ fn samples(q: &SharedQueue) -> Vec<f32> {
 /// Count how often the signal crosses zero, which for a square wave is twice
 /// per cycle.
 fn crossings(s: &[f32]) -> usize {
-    s.windows(2).filter(|w| (w[0] > 0.0) != (w[1] > 0.0)).count()
+    s.windows(2)
+        .filter(|w| (w[0] > 0.0) != (w[1] > 0.0))
+        .count()
 }
 
 /// A machine playing a 1 kHz tone off tape, whose ROM never reads port $FE.

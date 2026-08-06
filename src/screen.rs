@@ -115,18 +115,20 @@ pub const STALE_BRIGHTNESS: f32 = 2.0 / 3.0;
 /// it draws whichever bank the ULA is showing. `flash_on` alternates every 16
 /// frames, as the ULA does.
 pub fn render(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool) {
-    draw(out, view, flash_on, true, bus, &|offset| bus.video(offset), None);
+    draw(
+        out,
+        view,
+        flash_on,
+        true,
+        bus,
+        &|offset| bus.video(offset),
+        None,
+    );
 }
 
 /// Render with the beam part-way through the frame: everything up to T-state
 /// `beam` is this frame, the rest is what was on the screen before, dimmed.
-pub fn render_racing(
-    bus: &SpectrumBus,
-    view: View,
-    out: &mut [u8],
-    flash_on: bool,
-    beam: u32,
-) {
+pub fn render_racing(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool, beam: u32) {
     draw(
         out,
         view,
@@ -141,13 +143,7 @@ pub fn render_racing(
 /// T-state at which the ULA emits the pixel at (`px`, `py`) of a rendered
 /// frame. The inverse of what [`draw`] does, so the cursor and the raster
 /// agree on where the beam is.
-pub fn t_at_pixel(
-    view: View,
-    first_pixel_t: u32,
-    t_per_line: u32,
-    px: usize,
-    py: usize,
-) -> i64 {
+pub fn t_at_pixel(view: View, first_pixel_t: u32, t_per_line: u32, px: usize, py: usize) -> i64 {
     let line = py as i64 - view.border_top as i64;
     let x = px as i64 - view.border_x as i64;
     first_pixel_t as i64 + line * t_per_line as i64 + x.div_euclid(2) + DISPLAY_LEAD_T

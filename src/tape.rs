@@ -36,7 +36,10 @@ pub const ZX81_ONE_PULSES: u8 = 9;
 #[derive(Clone, Debug)]
 pub enum Block {
     /// ID $10, and every block of a .tap file.
-    Standard { pause_ms: u16, data: Vec<u8> },
+    Standard {
+        pause_ms: u16,
+        data: Vec<u8>,
+    },
     /// ID $11.
     Turbo {
         pilot: u16,
@@ -50,7 +53,10 @@ pub enum Block {
         data: Vec<u8>,
     },
     /// ID $12.
-    PureTone { len: u16, count: u16 },
+    PureTone {
+        len: u16,
+        count: u16,
+    },
     /// ID $13.
     Pulses(Vec<u16>),
     /// ID $14.
@@ -88,7 +94,11 @@ pub enum Block {
     /// A ZX81 file: the name in ZX81 character codes (the last one with bit 7
     /// set) followed by RAM from $4009 up. Both parts are one continuous bit
     /// stream on tape, so they are one block here; `name` is only for display.
-    Zx81 { name: String, data: Vec<u8>, pause_ms: u16 },
+    Zx81 {
+        name: String,
+        data: Vec<u8>,
+        pause_ms: u16,
+    },
     /// Informational blocks: $30, $31, $32, $33, $35, $5A.
     Info(String),
 }
@@ -354,7 +364,13 @@ fn header_summary(data: &[u8]) -> String {
     };
     let name: String = data[2..12]
         .iter()
-        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { ' ' })
+        .map(|&b| {
+            if (0x20..0x7f).contains(&b) {
+                b as char
+            } else {
+                ' '
+            }
+        })
         .collect();
     format!("{kind} \"{}\"", name.trim_end())
 }
@@ -397,7 +413,10 @@ impl<'a> Reader<'a> {
     }
     fn bytes(&mut self, n: usize) -> Result<Vec<u8>, String> {
         if self.left() < n {
-            return Err(format!("block claims {n} bytes but only {} remain", self.left()));
+            return Err(format!(
+                "block claims {n} bytes but only {} remain",
+                self.left()
+            ));
         }
         let v = self.d[self.p..self.p + n].to_vec();
         self.p += n;
@@ -586,7 +605,10 @@ fn archive_info(body: &[u8]) -> String {
             break;
         }
         if id == 0x00 {
-            return format!("title: {}", String::from_utf8_lossy(&body[p..p + len]).trim());
+            return format!(
+                "title: {}",
+                String::from_utf8_lossy(&body[p..p + len]).trim()
+            );
         }
         p += len;
     }
@@ -623,17 +645,37 @@ pub fn parse_tap(data: &[u8]) -> Result<Vec<Block>, String> {
 enum Phase {
     /// Nothing loaded into the pulse generator yet.
     Enter,
-    Pilot { left: u32 },
+    Pilot {
+        left: u32,
+    },
     Sync1,
     Sync2,
-    Data { byte: usize, bit: u8, second: bool },
-    Tone { left: u32 },
-    PulseList { idx: usize },
-    Direct { byte: usize, bit: u8 },
+    Data {
+        byte: usize,
+        bit: u8,
+        second: bool,
+    },
+    Tone {
+        left: u32,
+    },
+    PulseList {
+        idx: usize,
+    },
+    Direct {
+        byte: usize,
+        bit: u8,
+    },
     /// A ZX81 bit: which pulse of the burst, and which half of that pulse.
-    Zx81 { byte: usize, bit: u8, pulse: u8, second: bool },
+    Zx81 {
+        byte: usize,
+        bit: u8,
+        pulse: u8,
+        second: bool,
+    },
     /// Silence at the end of a block.
-    BlockPause { ms: u16 },
+    BlockPause {
+        ms: u16,
+    },
     Next,
     Finished,
 }
@@ -764,7 +806,8 @@ impl Tape {
 
     /// Move to the previous or next block, keeping playback going.
     pub fn skip(&mut self, delta: i32, now: u64) {
-        let target = (self.block as i32 + delta).clamp(0, self.blocks.len().saturating_sub(1) as i32);
+        let target =
+            (self.block as i32 + delta).clamp(0, self.blocks.len().saturating_sub(1) as i32);
         self.seek(target as usize);
         if self.playing {
             self.next_edge = now;
@@ -800,11 +843,7 @@ impl Tape {
                     _ => 0,
                 } as u64;
                 let done_pulses = pulses.saturating_sub(left as u64);
-                if pulses == 0 {
-                    0
-                } else {
-                    seg.pilot * done_pulses / pulses
-                }
+                seg.pilot.checked_mul(done_pulses).unwrap_or(0) / pulses.max(1)
             }
             Phase::Sync1 => seg.pilot,
             Phase::Sync2 => seg.pilot + seg.sync / 2,
@@ -829,11 +868,7 @@ impl Tape {
                     _ => 0,
                 };
                 let done = count.saturating_sub(left as u64);
-                if count == 0 {
-                    0
-                } else {
-                    seg.pilot * done / count
-                }
+                seg.pilot.checked_mul(done).unwrap_or(0) / count.max(1)
             }
             Phase::PulseList { idx } => match block {
                 Block::Pulses(p) => p.iter().take(idx).map(|l| *l as u64).sum(),
@@ -1105,9 +1140,17 @@ impl Tape {
                     // Bits go out most significant first, each as a burst of
                     // four pulses for a 0 or nine for a 1.
                     let set = data[byte] & (0x80 >> bit) != 0;
-                    let burst = if set { ZX81_ONE_PULSES } else { ZX81_ZERO_PULSES };
+                    let burst = if set {
+                        ZX81_ONE_PULSES
+                    } else {
+                        ZX81_ZERO_PULSES
+                    };
                     if pulse >= burst {
-                        let (byte, bit) = if bit == 7 { (byte + 1, 0) } else { (byte, bit + 1) };
+                        let (byte, bit) = if bit == 7 {
+                            (byte + 1, 0)
+                        } else {
+                            (byte, bit + 1)
+                        };
                         self.phase = Phase::Zx81 {
                             byte,
                             bit,
@@ -1122,8 +1165,8 @@ impl Tape {
                     // the loader the bit has ended. Two half-pulses per pulse
                     // keeps the level back at rest when the bit finishes.
                     let last_half = second && pulse + 1 == burst;
-                    let len = ZX81_HALF_PULSE as u32
-                        + if last_half { ZX81_BIT_GAP as u32 } else { 0 };
+                    let len =
+                        ZX81_HALF_PULSE as u32 + if last_half { ZX81_BIT_GAP as u32 } else { 0 };
                     self.phase = Phase::Zx81 {
                         byte,
                         bit,
@@ -1208,9 +1251,7 @@ impl Tape {
                 None
             }
             Block::PureTone { count, .. } => {
-                self.phase = Phase::Tone {
-                    left: count as u32,
-                };
+                self.phase = Phase::Tone { left: count as u32 };
                 None
             }
             Block::Pulses(_) => {

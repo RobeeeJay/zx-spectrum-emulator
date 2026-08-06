@@ -63,7 +63,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             if let Ok(a) =
                 u16::from_str_radix(app.back.manual_text.trim().trim_start_matches('$'), 16)
             {
-                app.spec.bus.tracker.manual = Some(Region { start: a, len: 6912 });
+                app.spec.bus.tracker.manual = Some(Region {
+                    start: a,
+                    len: 6912,
+                });
             }
         }
         if ui.button("Use detected").clicked() {
@@ -81,7 +84,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 
     ui.horizontal(|ui| {
         ui.checkbox(&mut app.spec.bus.slow.enabled, "Slow draw");
-        ui.checkbox(&mut app.spec.bus.slow.watch_back_buffer, "watch back buffer");
+        ui.checkbox(
+            &mut app.spec.bus.slow.watch_back_buffer,
+            "watch back buffer",
+        );
         ui.checkbox(&mut app.spec.bus.slow.watch_screen, "watch video RAM");
         ui.add(
             egui::Slider::new(&mut app.spec.bus.slow.writes_per_slice, 1..=4096)
@@ -98,11 +104,8 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     match region {
         Some(r) => {
             ui.label(
-                RichText::new(format!(
-                    "Previewing ${:04X} as a 6912-byte screen",
-                    r.start
-                ))
-                .monospace(),
+                RichText::new(format!("Previewing ${:04X} as a 6912-byte screen", r.start))
+                    .monospace(),
             );
             let view = app.view();
             if app.back.pixels.len() != view.buffer_len() {
@@ -117,15 +120,16 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 (app.spec.bus.frame / 16) % 2 == 1,
                 false,
             );
-            let img = ColorImage::from_rgba_unmultiplied(
-                [view.width(), view.height()],
-                &app.back.pixels,
-            );
+            let img =
+                ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &app.back.pixels);
             match &mut app.back.tex {
                 Some(t) => t.set(img, TextureOptions::NEAREST),
                 None => {
-                    app.back.tex =
-                        Some(ui.ctx().load_texture("back-buffer", img, TextureOptions::NEAREST))
+                    app.back.tex = Some(ui.ctx().load_texture(
+                        "back-buffer",
+                        img,
+                        TextureOptions::NEAREST,
+                    ))
                 }
             }
             ui.add(egui::Slider::new(&mut app.back.scale, 0.5..=3.0).text("zoom"));

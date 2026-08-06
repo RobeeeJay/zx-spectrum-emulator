@@ -186,7 +186,8 @@ impl Z80 {
     pub fn ccf(&mut self) {
         let yx = (self.q_prev() ^ self.f) | self.a;
         let c = self.f & CF;
-        self.f = (self.f & (SF | ZF | PF)) | (if c != 0 { HF } else { 0 }) | (c ^ CF) | (yx & (F3 | F5));
+        self.f =
+            (self.f & (SF | ZF | PF)) | (if c != 0 { HF } else { 0 }) | (c ^ CF) | (yx & (F3 | F5));
         self.touched_flags();
     }
 

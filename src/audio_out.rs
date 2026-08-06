@@ -95,7 +95,9 @@ impl AudioOut {
         }
         .map_err(|e| format!("could not open audio stream: {e}"))?;
 
-        stream.play().map_err(|e| format!("could not start audio: {e}"))?;
+        stream
+            .play()
+            .map_err(|e| format!("could not start audio: {e}"))?;
 
         Ok(AudioOut {
             _stream: stream,

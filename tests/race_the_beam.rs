@@ -66,7 +66,10 @@ fn the_beam_splits_the_picture_between_two_frames() {
         (white[1] as f32 * screen::STALE_BRIGHTNESS) as u8,
         (white[2] as f32 * screen::STALE_BRIGHTNESS) as u8,
     ];
-    assert_eq!(below, expected, "below the beam should be the old frame, dimmed");
+    assert_eq!(
+        below, expected,
+        "below the beam should be the old frame, dimmed"
+    );
     assert!(
         (below[0] as f32 / white[0] as f32 - 2.0 / 3.0).abs() < 0.01,
         "dimming should take off a third: {below:?} against {white:?}"

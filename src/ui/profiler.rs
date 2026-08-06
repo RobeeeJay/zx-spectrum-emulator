@@ -93,7 +93,10 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             app.stop_profiling();
         }
         if ui
-            .add_enabled(!running && !app.spec.profiler.runs.is_empty(), egui::Button::new("Clear runs"))
+            .add_enabled(
+                !running && !app.spec.profiler.runs.is_empty(),
+                egui::Button::new("Clear runs"),
+            )
             .clicked()
         {
             app.spec.profiler.clear();
@@ -102,8 +105,12 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         ui.label("Rank by:");
         ui.selectable_value(&mut app.spec.profiler.metric, Metric::SelfTime, "Self time")
             .on_hover_text("Time in the function itself, excluding what it called");
-        ui.selectable_value(&mut app.spec.profiler.metric, Metric::Inclusive, "Inclusive")
-            .on_hover_text("Time between entry and return, callees included");
+        ui.selectable_value(
+            &mut app.spec.profiler.metric,
+            Metric::Inclusive,
+            "Inclusive",
+        )
+        .on_hover_text("Time between entry and return, callees included");
     });
 
     if running {
@@ -128,9 +135,7 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             .color(Color32::from_rgb(255, 170, 90)),
         );
     } else {
-        ui.label(
-            RichText::new("stopped — press Start to record a run").monospace(),
-        );
+        ui.label(RichText::new("stopped — press Start to record a run").monospace());
     }
 }
 
@@ -249,11 +254,7 @@ fn bars(app: &mut App, ui: &mut egui::Ui, run_index: usize) {
         return;
     }
 
-    let biggest = ranked
-        .first()
-        .map(|f| f.time(metric))
-        .unwrap_or(1)
-        .max(1);
+    let biggest = ranked.first().map(|f| f.time(metric)).unwrap_or(1).max(1);
     let bar_width = app.profiler.bar_width;
     let limit = app.profiler.limit;
     let mut jump_to = None;
@@ -298,7 +299,10 @@ fn row(
         // The entry point is the clickable part, so a bar can be followed
         // straight into the disassembler.
         if ui
-            .selectable_label(false, RichText::new(format!("${:04X}", f.entry)).monospace())
+            .selectable_label(
+                false,
+                RichText::new(format!("${:04X}", f.entry)).monospace(),
+            )
             .on_hover_text(format!(
                 "{} — {} calls, self {}, inclusive {}{}",
                 where_label(app, f.entry),

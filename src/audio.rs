@@ -9,8 +9,8 @@ pub type SharedQueue = Arc<Mutex<VecDeque<f32>>>;
 
 /// The AY's 16 volume steps are logarithmic, roughly 3 dB apart.
 const AY_LEVELS: [f32; 16] = [
-    0.0000, 0.0137, 0.0205, 0.0291, 0.0423, 0.0618, 0.0847, 0.1369, 0.1691, 0.2647, 0.3527,
-    0.4499, 0.5704, 0.6873, 0.8482, 1.0000,
+    0.0000, 0.0137, 0.0205, 0.0291, 0.0423, 0.0618, 0.0847, 0.1369, 0.1691, 0.2647, 0.3527, 0.4499,
+    0.5704, 0.6873, 0.8482, 1.0000,
 ];
 
 /// AY-3-8912 (the 8910 without the second I/O port), as fitted to the 128K.
@@ -69,7 +69,7 @@ impl Ay {
         let value = match r {
             1 | 3 | 5 | 13 => value & 0x0f,
             6 => value & 0x1f,
-            8 | 9 | 10 => value & 0x1f,
+            8..=10 => value & 0x1f,
             _ => value,
         };
         self.regs[r] = value;

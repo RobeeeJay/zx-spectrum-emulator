@@ -37,12 +37,7 @@ fn env_of(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<Str
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    move |key: &str| {
-        owned
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.clone())
-    }
+    move |key: &str| owned.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
 }
 
 #[test]
@@ -267,22 +262,19 @@ fn adopting_never_replaces_a_rom_that_is_already_loaded() {
 
 #[test]
 fn loading_a_tape_remembers_its_directory() {
-    let Some(tape) = std::fs::read_dir("tapes")
-        .ok()
-        .and_then(|e| {
-            let mut v: Vec<PathBuf> = e
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| {
-                    matches!(
-                        p.extension().and_then(|x| x.to_str()),
-                        Some("tzx") | Some("tap")
-                    )
-                })
-                .collect();
-            v.sort();
-            v.into_iter().next()
-        })
-    else {
+    let Some(tape) = std::fs::read_dir("tapes").ok().and_then(|e| {
+        let mut v: Vec<PathBuf> = e
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                matches!(
+                    p.extension().and_then(|x| x.to_str()),
+                    Some("tzx") | Some("tap")
+                )
+            })
+            .collect();
+        v.sort();
+        v.into_iter().next()
+    }) else {
         eprintln!("no tapes/; skipping");
         return;
     };
@@ -414,5 +406,8 @@ fn closing_writes_the_layout_out() {
     let back = Prefs::load_or_create_in(dir.path());
     assert_eq!(back.display_scale, Some(1.5));
     assert_eq!(back.overscan, Some(false));
-    assert_eq!(back.window("main").map(|r| (r.w, r.h)), Some((700.0, 500.0)));
+    assert_eq!(
+        back.window("main").map(|r| (r.w, r.h)),
+        Some((700.0, 500.0))
+    );
 }

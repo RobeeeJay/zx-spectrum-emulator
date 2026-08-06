@@ -85,10 +85,19 @@ pub struct WindowRect {
 impl WindowRect {
     fn parse(text: &str) -> Option<WindowRect> {
         let mut n = text.split(',').map(|p| p.trim().parse::<f32>());
-        let (x, y, w, h) = (n.next()?.ok()?, n.next()?.ok()?, n.next()?.ok()?, n.next()?.ok()?);
+        let (x, y, w, h) = (
+            n.next()?.ok()?,
+            n.next()?.ok()?,
+            n.next()?.ok()?,
+            n.next()?.ok()?,
+        );
         // A window with no area is not worth restoring.
-        (w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite())
-            .then_some(WindowRect { x, y, w, h })
+        (w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite()).then_some(WindowRect {
+            x,
+            y,
+            w,
+            h,
+        })
     }
 
     fn to_text(self) -> String {
@@ -204,10 +213,7 @@ impl Prefs {
         if !self.windows.is_empty() {
             s.push_str("\n# Window geometry, as x,y,width,height in points.\n");
             for (name, rect) in &self.windows {
-                s.push_str(&format!(
-                    "{WINDOW_PREFIX}{name} = \"{}\"\n",
-                    rect.to_text()
-                ));
+                s.push_str(&format!("{WINDOW_PREFIX}{name} = \"{}\"\n", rect.to_text()));
             }
         }
         for (k, v) in &self.other {

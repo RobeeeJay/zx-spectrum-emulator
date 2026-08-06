@@ -129,7 +129,12 @@ fn the_all_memory_view_lists_every_bank_and_rom_page() {
     app.ram.view = View::AllMemory;
     let blocks = chunks(&app);
     // A 128K has two ROM pages and eight RAM banks.
-    assert_eq!(blocks.len(), 10, "got {:?}", blocks.iter().map(|c| c.label.clone()).collect::<Vec<_>>());
+    assert_eq!(
+        blocks.len(),
+        10,
+        "got {:?}",
+        blocks.iter().map(|c| c.label.clone()).collect::<Vec<_>>()
+    );
     assert_eq!(blocks[0].label, "ROM0");
     assert_eq!(blocks[1].label, "ROM1");
     assert_eq!(blocks[2].label, "RAM0");

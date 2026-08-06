@@ -210,7 +210,10 @@ fn the_beeper_makes_a_square_wave() {
     // milliseconds) the wave sits symmetrically about zero.
     let tail = &samples[samples.len() / 2..];
     let mean = tail.iter().sum::<f32>() / tail.len() as f32;
-    assert!(mean.abs() < 0.05, "the output should be centred, mean {mean}");
+    assert!(
+        mean.abs() < 0.05,
+        "the output should be centred, mean {mean}"
+    );
     // A 1 kHz square wave crosses zero 2000 times a second; over the ~100 ms
     // generated here that is about 200 crossings.
     let crossings = samples
@@ -245,7 +248,8 @@ fn the_beeper_reaches_the_mixer_through_port_fe() {
     // Toggle the speaker bit for a while.
     for i in 0..400 {
         spec.bus.tstates = (i * 100) % 60_000;
-        spec.bus.io_write(0xfe, if i % 2 == 0 { 0x10 } else { 0x00 });
+        spec.bus
+            .io_write(0xfe, if i % 2 == 0 { 0x10 } else { 0x00 });
         spec.bus.frame = i as u64 / 8;
     }
     spec.bus.audio_sync();
@@ -411,7 +415,10 @@ fn a_128k_program_can_play_the_ay() {
     let samples: Vec<f32> = q.lock().unwrap().iter().copied().collect();
     assert!(samples.len() > 3000, "got {} samples", samples.len());
     let peak = samples.iter().cloned().fold(0.0f32, f32::max);
-    assert!(peak > 0.05, "the AY produced no audible output (peak {peak})");
+    assert!(
+        peak > 0.05,
+        "the AY produced no audible output (peak {peak})"
+    );
 }
 
 #[test]
@@ -478,7 +485,10 @@ fn special_paging_maps_four_ram_banks_and_no_rom() {
             spec.bus.ram[bank * 0x4000] = 0xb0 + bank as u8;
         }
         spec.bus.io_write(0x1ffd, 0x01 | ((config as u8) << 1));
-        assert!(spec.bus.special_paging(), "config {config} should be special");
+        assert!(
+            spec.bus.special_paging(),
+            "config {config} should be special"
+        );
         for (slot, bank) in banks.iter().enumerate() {
             let addr = (slot as u16) << 14;
             assert_eq!(
