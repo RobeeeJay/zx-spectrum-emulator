@@ -6,21 +6,24 @@ use zx_spectrum_emulator::{
 /// Look for ROM images in ./roms. The 48K one is needed to boot anything real;
 /// without it the built-in demo ROM runs instead.
 fn find_roms(prefs: &Prefs) -> ui::Roms {
-    let read = |names: &[&str]| -> Option<Vec<u8>> {
+    // Spectrum ROMs are 16K or more; the ZX81's is 8K, so it needs its own
+    // floor rather than being quietly rejected as too small.
+    let read_min = |names: &[&str], min: usize| -> Option<Vec<u8>> {
         for n in names {
             if let Ok(d) = std::fs::read(n) {
-                if d.len() >= 0x4000 {
+                if d.len() >= min {
                     return Some(d);
                 }
             }
         }
         None
     };
+    let read = |names: &[&str]| read_min(names, 0x4000);
     let mut roms = ui::Roms {
         rom48: read(&["roms/48.rom", "roms/48k.rom", "48.rom"]),
         rom128: read(&["roms/128.rom", "roms/128k.rom", "128.rom"]),
         rom_plus3: read(&["roms/plus3.rom", "roms/plus2a.rom", "plus3.rom"]),
-        rom_zx81: read(&["roms/zx81.rom", "zx81.rom"]),
+        rom_zx81: read_min(&["roms/zx81.rom", "zx81.rom"], 0x2000),
     };
 
     // Then whatever is in the directory the last ROM was opened from, so the
@@ -39,7 +42,7 @@ fn find_roms(prefs: &Prefs) -> ui::Roms {
 
 /// Files named on the command line are dispatched by extension:
 /// `.rom` replaces the ROM, `.tzx`/`.tap` load a tape, `.sna`/`.z80` a snapshot.
-/// `--128` / `--48` choose the machine.
+/// `--128`, `--48`, `--zx81` and `--zx81-1k` choose the machine.
 fn load_cli_files(spec: &mut Spectrum, roms: &mut ui::Roms, status: &mut String) -> bool {
     let mut opened_tape = false;
     for arg in std::env::args().skip(1) {
@@ -152,6 +155,11 @@ fn main() -> eframe::Result<()> {
     };
 
     let opened_tape = load_cli_files(&mut spec, &mut roms, &mut status);
+    let zx81_ram = std::env::args().find_map(|a| match a.as_str() {
+        "--zx81" | "--zx81-16k" => Some(zx_spectrum_emulator::zx81::Ram::K16),
+        "--zx81-1k" => Some(zx_spectrum_emulator::zx81::Ram::K1),
+        _ => None,
+    });
 
     // Put the main window back where it was last time.
     let mut viewport = eframe::egui::ViewportBuilder::default().with_title("ZX Spectrum");
@@ -172,6 +180,9 @@ fn main() -> eframe::Result<()> {
             let mut app = ui::App::with_roms(spec, status, roms, audio_out);
             app.prefs = prefs;
             app.apply_prefs();
+            if let Some(ram) = zx81_ram {
+                app.switch_to_zx81(ram);
+            }
             app.show_tape = opened_tape;
             app.audio_error = audio_error;
             Ok(Box::new(app))

@@ -429,6 +429,161 @@ fn the_line_counter_walks_the_rows_of_the_character() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// the real ROM
+// ---------------------------------------------------------------------------
+
+/// Extent of the ink in the last completed picture, as (x0, x1, y0, y1).
+fn ink_extent(zx: &Zx81) -> Option<(usize, usize, usize, usize)> {
+    let (mut x0, mut x1, mut y0, mut y1) = (RASTER_W, 0usize, RASTER_H, 0usize);
+    let mut any = false;
+    for y in 0..RASTER_H {
+        for x in 0..RASTER_W {
+            if zx.bus.fb_prev[y * RASTER_W + x] != 0 {
+                any = true;
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+                y0 = y0.min(y);
+                y1 = y1.max(y);
+            }
+        }
+    }
+    any.then_some((x0, x1, y0, y1))
+}
+
+fn booted(ram: Ram) -> Option<Zx81> {
+    let mut zx = machine(ram)?;
+    for _ in 0..200 {
+        zx.run(zx.frame_t());
+    }
+    Some(zx)
+}
+
+#[test]
+fn the_rom_boots_and_syncs_the_picture() {
+    let Some(zx) = booted(Ram::K16) else {
+        eprintln!("no roms/zx81.rom; skipping");
+        return;
+    };
+    // The ROM drives the sync itself, so frames should come at about the rate
+    // the raster does rather than from the emulator timing out.
+    assert!(
+        (150..=260).contains(&zx.bus.frame),
+        "expected roughly one frame per frame's worth of time, got {}",
+        zx.bus.frame
+    );
+    assert!(!zx.bus.vsync, "and not be stuck in the sync pulse");
+}
+
+#[test]
+fn the_rom_draws_the_cursor_at_the_bottom_left() {
+    let Some(zx) = booted(Ram::K16) else {
+        return;
+    };
+    let (x0, x1, y0, y1) = ink_extent(&zx).expect("nothing was drawn");
+
+    // A freshly booted ZX81 shows one thing: the inverse K cursor on the input
+    // line, which lives at the bottom of the screen.
+    assert_eq!(x1 - x0 + 1, 8, "the cursor is one character wide");
+    assert_eq!(y1 - y0 + 1, 8, "and one character tall");
+    assert!(
+        (100..140).contains(&x0),
+        "at the left of the display area, got x {x0}"
+    );
+    assert!(
+        y0 > 180,
+        "and near the bottom, where the input line is, got y {y0}"
+    );
+}
+
+#[test]
+fn every_drawn_line_starts_at_the_same_point() {
+    let Some(mut zx) = booted(Ram::K16) else {
+        return;
+    };
+
+    // Watch a whole frame and note where each line's characters begin.
+    let frame = zx.bus.frame;
+    let mut starts = std::collections::BTreeSet::new();
+    let mut counts = Vec::new();
+    let (mut count, mut first, mut last_line) = (0u32, None, zx.bus.line);
+    while zx.bus.frame == frame {
+        let before = zx.bus.video_bytes;
+        let (line, t) = (zx.bus.line, zx.bus.t_in_line);
+        zx.step_instruction();
+        if zx.bus.video_bytes > before {
+            if line != last_line {
+                if count > 0 {
+                    counts.push(count);
+                }
+                count = 0;
+                first = None;
+                last_line = line;
+            }
+            if first.is_none() {
+                first = Some(t);
+                starts.insert(t);
+            }
+            count += 1;
+        }
+    }
+    if count > 0 {
+        counts.push(count);
+    }
+
+    assert!(!counts.is_empty(), "no line drew anything");
+    assert_eq!(
+        starts.len(),
+        1,
+        "the rows must all begin at the same T-state, got {starts:?}"
+    );
+    assert!(
+        counts.iter().all(|c| *c == 32),
+        "a line of the display file is 32 characters, got {counts:?}"
+    );
+}
+
+#[test]
+fn the_unexpanded_machine_boots_too() {
+    let Some(zx) = booted(Ram::K1) else {
+        return;
+    };
+    assert!(
+        zx.bus.frame > 150,
+        "the 1K machine should sync as well, got {}",
+        zx.bus.frame
+    );
+    assert!(ink_extent(&zx).is_some(), "and draw its cursor");
+}
+
+#[test]
+fn typing_puts_something_on_the_screen() {
+    let Some(mut zx) = booted(Ram::K16) else {
+        return;
+    };
+    let before = zx.bus.fb_prev.iter().filter(|p| **p != 0).count();
+
+    // Hold a key long enough for the ROM to see it, then let go.
+    for phase in 0..2 {
+        zx.bus.keys = [0xff; 8];
+        if phase == 0 {
+            zx.bus.keys[3] &= !1; // the "1" key
+        }
+        for _ in 0..30 {
+            zx.run(zx.frame_t());
+        }
+    }
+    for _ in 0..30 {
+        zx.run(zx.frame_t());
+    }
+
+    let after = zx.bus.fb_prev.iter().filter(|p| **p != 0).count();
+    assert!(
+        after > before,
+        "pressing a key should put a character on the screen ({before} then {after} pixels)"
+    );
+}
+
 #[test]
 fn a_program_too_big_for_1k_is_refused() {
     let mut zx = Zx81::new(Ram::K1);

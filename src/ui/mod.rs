@@ -176,7 +176,7 @@ pub struct App {
     /// True when `status` is a failure the user should notice.
     pub status_is_error: bool,
     /// Model shown in the window title, so a switch is always visible.
-    title_model: Option<Model>,
+    title_shown: String,
 
     /// How far ahead of the sound device to stay, in seconds.
     pub audio_latency_target: f32,
@@ -237,7 +237,7 @@ impl App {
             last_stop: None,
             leftover: 0.0,
             status_is_error: false,
-            title_model: None,
+            title_shown: String::new(),
             audio_latency_target: 0.06,
             zx81: None,
             zx81_ram: zx81::Ram::K16,
@@ -255,7 +255,6 @@ impl App {
     pub fn switch_model(&mut self, model: Model) {
         if self.zx81.take().is_some() {
             // Coming back from the ZX81; the Spectrum is still as it was.
-            self.title_model = None;
             self.running = true;
             self.set_status(format!("Switched to {}", model.name()), false);
             if self.spec.bus.model == model {
@@ -313,7 +312,6 @@ impl App {
         if self.spec.bus.model == model {
             self.spec.load_rom(&data);
             self.spec.reset();
-            self.title_model = None; // force the title to refresh
         } else {
             self.spec.set_model(model, &data);
             self.leftover = 0.0;
@@ -369,22 +367,14 @@ impl App {
     /// Keep the window title in step with the machine, so switching is
     /// visible even if the screen happens to look similar.
     fn sync_title(&mut self, ctx: &egui::Context) {
-        let model = self.spec.bus.model;
-        if self.zx81.is_some() {
-            if self.title_model.is_some() {
-                self.title_model = None;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(
-                    self.zx81_ram.name().to_string(),
-                ));
-            }
-            return;
-        }
-        if self.title_model != Some(model) {
-            self.title_model = Some(model);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                "ZX Spectrum {}",
-                model.name()
-            )));
+        let want = if self.zx81.is_some() {
+            self.zx81_ram.name().to_string()
+        } else {
+            format!("ZX Spectrum {}", self.spec.bus.model.name())
+        };
+        if self.title_shown != want {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(want.clone()));
+            self.title_shown = want;
         }
     }
 
@@ -699,7 +689,6 @@ impl App {
         machine.reset();
         self.zx81 = Some(machine);
         self.zx81_ram = ram;
-        self.title_model = None;
         self.running = true;
         self.set_status(format!("Switched to a {}", ram.name()), false);
     }
