@@ -12,6 +12,7 @@ use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportI
 use crate::audio_out::AudioOut;
 use crate::machine::{Model, Spectrum, Stop};
 use crate::prefs::{FileKind, Prefs, WindowRect};
+use crate::zx81::{self, Zx81};
 use crate::screen;
 use crate::snapshot;
 
@@ -28,6 +29,8 @@ pub struct Roms {
     pub rom128: Option<Vec<u8>>,
     /// The 64K four-ROM image shared by the +2A and +3.
     pub rom_plus3: Option<Vec<u8>>,
+    /// The ZX81's ROM, which is a different machine entirely.
+    pub rom_zx81: Option<Vec<u8>>,
 }
 
 impl Roms {
@@ -178,6 +181,11 @@ pub struct App {
     /// How far ahead of the sound device to stay, in seconds.
     pub audio_latency_target: f32,
 
+    /// The ZX81, when that is the machine in use.
+    pub zx81: Option<Zx81>,
+    /// Which RAM the ZX81 has fitted, remembered across switches.
+    pub zx81_ram: zx81::Ram,
+
     /// Remembered settings, including the directories files were opened from.
     pub prefs: Prefs,
     /// Windows whose saved geometry has been applied, so a restore happens
@@ -231,6 +239,8 @@ impl App {
             status_is_error: false,
             title_model: None,
             audio_latency_target: 0.06,
+            zx81: None,
+            zx81_ram: zx81::Ram::K16,
             prefs: Prefs::default(),
             restored: std::collections::HashSet::new(),
             last_saved: None,
@@ -243,6 +253,15 @@ impl App {
 
     /// Switch between the 48K and 128K machines, which needs the matching ROM.
     pub fn switch_model(&mut self, model: Model) {
+        if self.zx81.take().is_some() {
+            // Coming back from the ZX81; the Spectrum is still as it was.
+            self.title_model = None;
+            self.running = true;
+            self.set_status(format!("Switched to {}", model.name()), false);
+            if self.spec.bus.model == model {
+                return;
+            }
+        }
         if self.spec.bus.model == model {
             self.set_status(format!("Already running as {}", model.name()), false);
             return;
@@ -351,6 +370,15 @@ impl App {
     /// visible even if the screen happens to look similar.
     fn sync_title(&mut self, ctx: &egui::Context) {
         let model = self.spec.bus.model;
+        if self.zx81.is_some() {
+            if self.title_model.is_some() {
+                self.title_model = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+                    self.zx81_ram.name().to_string(),
+                ));
+            }
+            return;
+        }
         if self.title_model != Some(model) {
             self.title_model = Some(model);
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
@@ -392,6 +420,27 @@ impl App {
                 }
             }
 
+            for ram in [zx81::Ram::K1, zx81::Ram::K16] {
+                let current = self.zx81.is_some() && self.zx81_ram == ram;
+                let have_rom = self.roms.rom_zx81.is_some();
+                let label = if have_rom {
+                    ram.name().to_string()
+                } else {
+                    format!("{} (no ROM)", ram.name())
+                };
+                if ui
+                    .selectable_label(current, label)
+                    .on_hover_text(if have_rom {
+                        format!("Switch to a {} and reset", ram.name())
+                    } else {
+                        "Needs roms/zx81.rom".to_string()
+                    })
+                    .clicked()
+                {
+                    self.switch_to_zx81(ram);
+                }
+            }
+
             ui.separator();
             if ui
                 .button("Load…")
@@ -401,8 +450,20 @@ impl App {
                 self.load_any_file();
             }
             if ui.button("Reset").clicked() {
-                self.spec.reset();
-                self.set_status(format!("Reset ({})", self.spec.bus.model.name()), false);
+                match &mut self.zx81 {
+                    Some(zx) => {
+                        zx.reset();
+                        let name = self.zx81_ram.name();
+                        self.set_status(format!("Reset ({name})"), false);
+                    }
+                    None => {
+                        self.spec.reset();
+                        self.set_status(
+                            format!("Reset ({})", self.spec.bus.model.name()),
+                            false,
+                        );
+                    }
+                }
             }
 
             ui.separator();
@@ -614,6 +675,35 @@ impl App {
         }
     }
 
+    /// True when the ZX81 is the machine in use.
+    pub fn on_zx81(&self) -> bool {
+        self.zx81.is_some()
+    }
+
+    /// Switch to a ZX81 with the given memory, or back to the Spectrum.
+    pub fn switch_to_zx81(&mut self, ram: zx81::Ram) {
+        let Some(rom) = self.roms.rom_zx81.clone() else {
+            self.set_status(
+                "Cannot switch to a ZX81: no ROM. Put an 8K ZX81 ROM at roms/zx81.rom"
+                    .into(),
+                true,
+            );
+            return;
+        };
+        if self.zx81.is_some() && self.zx81_ram == ram {
+            self.set_status(format!("Already running as a {}", ram.name()), false);
+            return;
+        }
+        let mut machine = Zx81::new(ram);
+        machine.load_rom(&rom);
+        machine.reset();
+        self.zx81 = Some(machine);
+        self.zx81_ram = ram;
+        self.title_model = None;
+        self.running = true;
+        self.set_status(format!("Switched to a {}", ram.name()), false);
+    }
+
     /// How much border to draw.
     pub fn view(&self) -> screen::View {
         if self.overscan {
@@ -630,6 +720,19 @@ impl App {
     /// Advance the emulation by however much wall-clock time has passed.
     fn advance(&mut self, dt: f32) {
         if !self.running {
+            return;
+        }
+        if let Some(zx) = &mut self.zx81 {
+            let dt = dt.clamp(0.0, 0.1);
+            let want = zx81::CPU_HZ as f32 * dt * self.speed + self.leftover;
+            let budget = want.max(0.0) as u64;
+            self.leftover = want - budget as f32;
+            // Cap the work per host frame, as for the Spectrum.
+            let budget = budget.min(zx.frame_t() * 24);
+            if let Some(pc) = zx.run(budget) {
+                self.running = false;
+                self.set_status(format!("Breakpoint at ${pc:04X}"), false);
+            }
             return;
         }
         self.spec.bus.slow.begin_slice();
@@ -678,6 +781,28 @@ impl App {
     }
 
     fn draw_screen_texture(&mut self, ctx: &egui::Context) {
+        if self.zx81.is_some() {
+            let view = if self.overscan {
+                zx81::View::OVERSCAN
+            } else {
+                zx81::View::CROPPED
+            };
+            if self.screen_pixels.len() != view.buffer_len() {
+                self.screen_pixels = vec![0; view.buffer_len()];
+                self.screen_tex = None;
+            }
+            let zx = self.zx81.as_ref().expect("checked above");
+            zx.bus.render(view, &mut self.screen_pixels);
+            let img = ColorImage::from_rgba_unmultiplied([view.w, view.h], &self.screen_pixels);
+            match &mut self.screen_tex {
+                Some(t) => t.set(img, TextureOptions::NEAREST),
+                None => {
+                    self.screen_tex =
+                        Some(ctx.load_texture("zx81-screen", img, TextureOptions::NEAREST))
+                }
+            }
+            return;
+        }
         let view = self.view();
         let flash = self.flash_on();
         if self.screen_pixels.len() != view.buffer_len() {
@@ -986,11 +1111,15 @@ impl App {
         let mut beam = None;
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(tex) = &self.screen_tex {
-                let view = self.view();
-                let size = egui::vec2(
-                    view.width() as f32 * self.scale,
-                    view.height() as f32 * self.scale,
-                );
+                let (w, h) = match &self.zx81 {
+                    Some(_) if self.overscan => (zx81::View::OVERSCAN.w, zx81::View::OVERSCAN.h),
+                    Some(_) => (zx81::View::CROPPED.w, zx81::View::CROPPED.h),
+                    None => {
+                        let v = self.view();
+                        (v.width(), v.height())
+                    }
+                };
+                let size = egui::vec2(w as f32 * self.scale, h as f32 * self.scale);
                 // Take the whole panel and put the picture in the middle of it,
                 // so the space around the display is equal on all four sides.
                 let (area, response) =
@@ -1006,14 +1135,20 @@ impl App {
                 );
 
                 // Where is the beam? Wherever the cursor is over the picture.
-                beam = response
-                    .hover_pos()
-                    .filter(|p| picture.contains(*p))
-                    .map(|p| {
-                        let px = ((p.x - picture.left()) / self.scale) as usize;
-                        let py = ((p.y - picture.top()) / self.scale) as usize;
-                        beam_at(&self.spec.bus, view, px, py)
-                    });
+                // The ZX81 draws with the CPU, so there is no beam to race.
+                let spectrum_view = self.view();
+                beam = (self.zx81.is_none())
+                    .then(|| {
+                        response
+                            .hover_pos()
+                            .filter(|p| picture.contains(*p))
+                            .map(|p| {
+                                let px = ((p.x - picture.left()) / self.scale) as usize;
+                                let py = ((p.y - picture.top()) / self.scale) as usize;
+                                beam_at(&self.spec.bus, spectrum_view, px, py)
+                            })
+                    })
+                    .flatten();
             }
         });
         self.beam_t = beam;
@@ -1216,6 +1351,11 @@ impl App {
                 press(4, 2);
             }
         });
-        self.spec.bus.keys = matrix;
+        match &mut self.zx81 {
+            // The ZX81's matrix is wired the same way, minus the bottom row's
+            // shift keys.
+            Some(zx) => zx.bus.keys = matrix,
+            None => self.spec.bus.keys = matrix,
+        }
     }
 }

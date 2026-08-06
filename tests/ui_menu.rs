@@ -21,6 +21,7 @@ fn test_app() -> App {
         rom48: Some(vec![0x00; 0x4000]),
         rom128: Some(vec![0x00; 0x8000]),
         rom_plus3: Some(vec![0x00; 0x10000]),
+        rom_zx81: Some(vec![0x00; 0x2000]),
     };
     let mut app = App::with_roms(Spectrum::new(), String::new(), roms, None);
     app.show_ram_map = false;
@@ -405,4 +406,52 @@ fn race_the_beam_is_off_until_switched_on() {
     h.get_by_label("Race the beam").click();
     h.run_steps(3);
     assert!(!h.state().race_the_beam);
+}
+
+#[test]
+fn the_zx81_can_be_selected_and_left_again() {
+    use zx_spectrum_emulator::zx81::Ram;
+
+    let mut h = harness();
+    h.run_steps(3);
+    assert!(!h.state().on_zx81(), "starts as a Spectrum");
+
+    h.get_by_label("ZX81 16K").click();
+    h.run_steps(3);
+    assert!(h.state().on_zx81(), "status says: {}", h.state().status);
+    assert_eq!(h.state().zx81_ram, Ram::K16);
+
+    // The unexpanded machine is a separate choice.
+    h.get_by_label("ZX81 1K").click();
+    h.run_steps(3);
+    assert_eq!(h.state().zx81_ram, Ram::K1);
+    assert_eq!(
+        h.state().zx81.as_ref().unwrap().bus.ram.len(),
+        1024,
+        "1K really means 1K"
+    );
+
+    // And back to a Spectrum.
+    h.get_by_label("128K").click();
+    h.run_steps(3);
+    assert!(!h.state().on_zx81());
+    assert_eq!(h.state().spec.bus.model, Model::Spectrum128);
+}
+
+#[test]
+fn without_a_zx81_rom_the_buttons_say_so() {
+    let mut app = test_app();
+    app.roms.rom_zx81 = None;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+
+    h.get_by_label("ZX81 16K (no ROM)").click();
+    h.run_steps(3);
+    assert!(!h.state().on_zx81(), "must not switch without a ROM");
+    assert!(h.state().status_is_error);
+    assert!(
+        h.state().status.contains("zx81.rom"),
+        "and name the file: {}",
+        h.state().status
+    );
 }

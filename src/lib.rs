@@ -14,3 +14,4 @@ pub mod tape;
 pub mod tracker;
 pub mod ui;
 pub mod z80;
+pub mod zx81;

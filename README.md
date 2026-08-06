@@ -260,6 +260,39 @@ are skipped over rather than played.
   drawn across the middle. The sweep width goes from 50 µs — individual pulses
   of a turbo loader — up to 40 ms.
 
+## ZX81
+
+**ZX81 1K** and **ZX81 16K** in the machine row switch to a ZX81, which needs an
+8K ROM at `roms/zx81.rom`.
+
+The ZX81 has no video hardware to speak of: the picture is produced by the CPU
+walking the display file while the ULA watches the bus. An opcode fetched from
+an address with A15 set whose byte has bit 6 clear is fed to the CPU as a NOP,
+while the ULA takes that byte as a character code, fetches its bitmap from
+`(I<<8) | (char&0x3F)<<3 | LCNT` during the refresh half of the same M1 cycle,
+and shifts out eight pixels — two per T-state, the same as a Spectrum's border.
+A byte with bit 6 set is a `HALT`, which the CPU really executes, ending the
+line.
+
+Emulating it at that level rather than drawing a character grid is what makes it
+cycle exact, and it means programs that abuse the mechanism for high-resolution
+graphics need no special handling: they get whatever their fetches put on the
+screen.
+
+Around that sit the rest of the ULA's jobs: the three-bit line counter that
+picks the row within a character and is held in reset while the vertical sync is
+low, the sync itself (started by reading port `$FE`, ended by any `OUT`), the NMI
+generator that times the borders in SLOW mode (`$FE` on, `$FD` off, firing once
+a line), and the interrupt, which comes from bit 6 of the refresh register
+falling — which is how the ROM counts out a character row.
+
+Memory follows the machine's sparse decoding: an 8K ROM appears twice in the
+bottom page, 1K of RAM repeats sixteen times through its own page, and the whole
+lot is mirrored above `$8000`, which is what lets the display routine execute the
+display file with A15 set. A 16K ROM image fills the bottom page instead of
+mirroring. `.p` files load as an image at `$4009`, and one too large for 1K is
+refused rather than silently truncated.
+
 ## Preferences
 
 A preferences file is created the first time the emulator runs, in the usual
@@ -405,6 +438,13 @@ its directory are created on launch, that settings round-trip while hand-added
 keys survive, that ROM scanning recognises images by size and prefers a name
 that mentions the machine, and that opening a ROM or a tape remembers the right
 directory without replacing ROMs already loaded.
+
+`tests/zx81.rs` covers the ZX81: the mirroring of ROM and of 1K and 16K RAM, a
+fetch above `$8000` drawing a character and running as a NOP in four T-states,
+inverse video, the line counter picking the row, `HALT` passing through, the
+sync and NMI ports, the interrupt from the refresh register, and — driven by a
+display routine in the same shape as the ROM's — a whole row of 32 characters
+landing contiguously as 256 pixels in the same place on every line.
 
 `tests/race_the_beam.rs` checks that the beam splits the picture between the
 two frames at the right place — including part-way along a single line — that

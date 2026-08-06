@@ -13,6 +13,7 @@ fn test_app() -> App {
         rom48: Some(vec![0x00; 0x4000]),
         rom128: Some(vec![0x00; 0x8000]),
         rom_plus3: Some(vec![0x00; 0x10000]),
+        rom_zx81: Some(vec![0x00; 0x2000]),
     };
     let mut app = App::with_roms(Spectrum::new(), String::new(), roms, None);
     app.show_ram_map = false;

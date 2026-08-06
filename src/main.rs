@@ -20,6 +20,7 @@ fn find_roms(prefs: &Prefs) -> ui::Roms {
         rom48: read(&["roms/48.rom", "roms/48k.rom", "48.rom"]),
         rom128: read(&["roms/128.rom", "roms/128k.rom", "128.rom"]),
         rom_plus3: read(&["roms/plus3.rom", "roms/plus2a.rom", "plus3.rom"]),
+        rom_zx81: read(&["roms/zx81.rom", "zx81.rom"]),
     };
 
     // Then whatever is in the directory the last ROM was opened from, so the
