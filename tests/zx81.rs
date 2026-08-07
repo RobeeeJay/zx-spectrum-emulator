@@ -2,7 +2,18 @@
 //! real ROM.
 
 use zx_spectrum_emulator::z80::Bus;
-use zx_spectrum_emulator::zx81::{Ram, Zx81, LINE_T, RASTER_H, RASTER_W, SYNC_TO_PICTURE_T};
+use zx_spectrum_emulator::zx81::{
+    Ram, Zx81, LINE_T, PICTURE_X, RASTER_H, RASTER_W, SYNC_TO_PICTURE_T,
+};
+
+/// Where a character fetched this far into a line lands. The line's T-states
+/// are counted from the interrupt that starts it, a little before the visible
+/// picture begins.
+fn pixel_x(t_in_line: u32) -> usize {
+    (t_in_line as usize * 2)
+        .checked_sub(PICTURE_X)
+        .expect("that fetch is in the blanking, off the left of the picture")
+}
 
 fn rom() -> Option<Vec<u8>> {
     std::fs::read("roms/zx81.rom").ok()
@@ -113,7 +124,7 @@ fn a_fetch_above_8000_draws_a_character_and_runs_as_a_nop() {
 
     // Eight pixels, alternating, starting two per T-state along the line.
     let y = 10;
-    let x0 = 20 * 2;
+    let x0 = pixel_x(20);
     let row: Vec<u8> = (0..8).map(|i| zx.bus.fb[y * RASTER_W + x0 + i]).collect();
     assert_eq!(row, vec![1, 0, 1, 0, 1, 0, 1, 0]);
 }
@@ -126,10 +137,11 @@ fn bit_seven_of_a_character_inverts_it() {
     zx.bus.poke(0x4000, 0x81); // character 1, inverted
     zx.cpu.pc = 0xc000;
     zx.bus.line = 5;
-    zx.bus.t_in_line = 0;
+    zx.bus.t_in_line = 40;
     zx.step_instruction();
 
-    let row: Vec<u8> = (0..8).map(|i| zx.bus.fb[5 * RASTER_W + i]).collect();
+    let x0 = pixel_x(40);
+    let row: Vec<u8> = (0..8).map(|i| zx.bus.fb[5 * RASTER_W + x0 + i]).collect();
     assert_eq!(row, vec![0, 0, 1, 1, 1, 1, 1, 1], "inverse video");
 }
 
@@ -149,12 +161,13 @@ fn the_line_counter_picks_the_row_of_the_character() {
         zx.bus.fb.iter_mut().for_each(|p| *p = 0);
         zx.bus.lcnt = lcnt;
         zx.bus.line = lcnt as u32;
-        zx.bus.t_in_line = 0;
+        zx.bus.t_in_line = 40;
         zx.cpu.pc = 0xc000;
         zx.step_instruction();
 
+        let x0 = pixel_x(40);
         let row: Vec<usize> = (0..8)
-            .filter(|i| zx.bus.fb[lcnt as usize * RASTER_W + i] != 0)
+            .filter(|i| zx.bus.fb[lcnt as usize * RASTER_W + x0 + i] != 0)
             .collect();
         assert_eq!(row, vec![lcnt as usize], "row {lcnt} of the character");
     }
@@ -576,9 +589,12 @@ fn the_rom_draws_the_cursor_at_the_bottom_left() {
     // line, which lives at the bottom of the screen.
     assert_eq!(x1 - x0 + 1, 8, "the cursor is one character wide");
     assert_eq!(y1 - y0 + 1, 8, "and one character tall");
+    // The picture is centred in the raster, so its first column is at
+    // (RASTER_W - 256) / 2.
+    let first_column = (RASTER_W - 256) / 2;
     assert!(
-        (100..140).contains(&x0),
-        "at the left of the display area, got x {x0}"
+        (first_column..first_column + 40).contains(&x0),
+        "at the left of the display area, which starts at {first_column}, got x {x0}"
     );
     assert!(
         y0 > 180,

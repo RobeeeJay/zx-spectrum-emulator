@@ -307,6 +307,12 @@ generator that times the borders in SLOW mode (`$FE` on, `$FD` off, firing once
 a line), and the interrupt, which comes from bit 6 of the refresh register
 falling — which is how the ROM counts out a character row.
 
+A line's T-states are counted from the interrupt that starts it, which is a
+little before the visible part of the line begins, so the picture is shifted
+back by the difference when it is drawn: the 256x192 picture then sits in the
+middle of the 414x312 raster with 79 pixels of border either side, where a
+television shows it. The cropped view is centred on it in turn.
+
 The sync is treated the way a television treats it. Releasing it puts the beam
 at a fixed point in the line, because the ULA holds its counters in reset while
 the sync is low; and only a sync held for at least a line's worth of time pulls

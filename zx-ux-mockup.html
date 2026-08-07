@@ -615,98 +615,164 @@ body{
       <div class="win-body">
         <div class="deck">
           <div class="cassette">
-            <svg viewBox="0 0 300 192" xmlns="http://www.w3.org/2000/svg">
+            <svg viewBox="0 0 300 340" xmlns="http://www.w3.org/2000/svg">
               <defs>
-                <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stop-color="#f1eee2"/>
-                  <stop offset="1" stop-color="#cfc9b4"/>
+                <linearGradient id="shell" x1="0" y1="0" x2="0.3" y2="1">
+                  <stop offset="0" stop-color="#d9d7d1"/>
+                  <stop offset="0.5" stop-color="#c3c1ba"/>
+                  <stop offset="1" stop-color="#a7a59d"/>
+                </linearGradient>
+                <linearGradient id="bezel" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#d4d2cb"/>
+                  <stop offset="1" stop-color="#aeaca4"/>
                 </linearGradient>
                 <linearGradient id="window" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stop-color="#211f1c"/>
-                  <stop offset="1" stop-color="#070706"/>
+                  <stop offset="0" stop-color="#221f1c"/>
+                  <stop offset="1" stop-color="#080706"/>
                 </linearGradient>
                 <radialGradient id="screw" cx="0.35" cy="0.3" r="0.8">
-                  <stop offset="0" stop-color="#d8d3c0"/>
-                  <stop offset="1" stop-color="#726c5a"/>
+                  <stop offset="0" stop-color="#e6e2d4"/>
+                  <stop offset="1" stop-color="#7c7666"/>
                 </radialGradient>
-                <radialGradient id="hub" cx="0.35" cy="0.3" r="0.9">
-                  <stop offset="0" stop-color="#e3ded0"/>
-                  <stop offset="1" stop-color="#9b9581"/>
+                <radialGradient id="hub" cx="0.35" cy="0.3" r="0.95">
+                  <stop offset="0" stop-color="#eae6d8"/>
+                  <stop offset="1" stop-color="#a29c88"/>
                 </radialGradient>
-                <radialGradient id="tapeSupply" cx="0.35" cy="0.3" r="0.85">
-                  <stop offset="0" stop-color="#94674080" />
-                  <stop offset="0" stop-color="#8a5f3c"/>
-                  <stop offset="1" stop-color="#3b2410"/>
+                <radialGradient id="tapeSupply" cx="0.4" cy="0.35" r="0.8">
+                  <stop offset="0" stop-color="#9c7148"/>
+                  <stop offset="1" stop-color="#40260f"/>
                 </radialGradient>
-                <radialGradient id="tapeTake" cx="0.35" cy="0.3" r="0.85">
-                  <stop offset="0" stop-color="#8a5f3c"/>
-                  <stop offset="1" stop-color="#3b2410"/>
+                <radialGradient id="tapeTake" cx="0.4" cy="0.35" r="0.8">
+                  <stop offset="0" stop-color="#9c7148"/>
+                  <stop offset="1" stop-color="#40260f"/>
                 </radialGradient>
               </defs>
 
-              <!-- shell body -->
-              <rect x="3" y="3" width="294" height="186" rx="9" fill="url(#shell)" stroke="#7d775f" stroke-width="1"/>
+              <!-- shell body: rounded top, chamfered bottom corners, centre notch -->
+              <path fill="url(#shell)" stroke="#87826f" stroke-width="1.5" d="
+                M 32,12
+                A 16,16 0 0 0 18,26
+                L 18,298
+                L 46,326
+                L 112,326
+                L 128,296
+                L 172,296
+                L 188,326
+                L 254,326
+                L 282,298
+                L 282,26
+                A 16,16 0 0 0 268,12
+                Z"/>
 
-              <!-- label -->
-              <rect x="18" y="12" width="264" height="86" rx="3" fill="#faf8f0" stroke="#c9c3ac" stroke-width="1"/>
-              <rect x="18" y="88" width="264" height="10" fill="#c81f1f"/>
-              <rect x="24" y="22" width="46" height="18" rx="2" fill="#c81f1f"/>
-              <text x="47" y="35" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="12" fill="#fff">TDK</text>
-              <text x="258" y="34" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="10.5" letter-spacing="1" fill="#4c4738">D&#8201;·&#8201;90</text>
-              <line x1="24" y1="46" x2="276" y2="46" stroke="#d6d0ba" stroke-width="1"/>
-              <text class="hw-title" x="34" y="76" font-size="26" fill="#1f3f8f" transform="rotate(-2 150 68)">Manic Miner</text>
-              <line x1="24" y1="82" x2="276" y2="82" stroke="#d6d0ba" stroke-width="1"/>
-
-              <!-- top screws -->
-              <circle cx="42" cy="106" r="4.5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
-              <circle cx="258" cy="106" r="4.5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
-              <line x1="39" y1="106" x2="45" y2="106" stroke="#4a4636" stroke-width="0.75"/>
-              <line x1="255" y1="106" x2="261" y2="106" stroke="#4a4636" stroke-width="0.75"/>
-
-              <!-- reel window -->
-              <rect x="42" y="98" width="216" height="76" rx="38" fill="url(#window)" stroke="#000" stroke-width="1"/>
-
-              <!-- supply reel (left) : 5/14 played, most tape remains -->
-              <g transform="translate(102,136)">
-                <circle r="26" fill="url(#tapeSupply)" stroke="#1c0f04" stroke-width="0.75"/>
-                <circle r="26" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
-                <circle r="19" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
-                <circle r="12" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
-                <circle r="10.5" fill="url(#hub)" stroke="#4a4636" stroke-width="0.75"/>
-                <circle r="3" fill="#0d0c0b"/>
-                <g fill="#0d0c0b">
-                  <rect x="-1.1" y="-9.5" width="2.2" height="4" rx="0.6"/>
-                  <rect x="-1.1" y="5.5" width="2.2" height="4" rx="0.6" transform="rotate(120)"/>
-                  <rect x="-1.1" y="5.5" width="2.2" height="4" rx="0.6" transform="rotate(240)"/>
-                </g>
+              <!-- corner + notch screws -->
+              <circle cx="31" cy="27" r="5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
+              <circle cx="269" cy="27" r="5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
+              <circle cx="38" cy="308" r="4.5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
+              <circle cx="262" cy="308" r="4.5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
+              <circle cx="150" cy="309" r="4.5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
+              <g stroke="#5c5745" stroke-width="0.7">
+                <line x1="28" y1="27" x2="34" y2="27"/><line x1="31" y1="24" x2="31" y2="30"/>
+                <line x1="266" y1="27" x2="272" y2="27"/><line x1="269" y1="24" x2="269" y2="30"/>
+                <line x1="35" y1="308" x2="41" y2="308"/><line x1="38" y1="305" x2="38" y2="311"/>
+                <line x1="259" y1="308" x2="265" y2="308"/><line x1="262" y1="305" x2="262" y2="311"/>
+                <line x1="147" y1="309" x2="153" y2="309"/><line x1="150" y1="306" x2="150" y2="312"/>
               </g>
 
-              <!-- take-up reel (right) : less tape wound on yet -->
-              <g transform="translate(198,136)">
+              <!-- sensing / capstan-access holes in the notch -->
+              <circle cx="136" cy="306" r="4" fill="#0d0c0b"/>
+              <rect x="146" y="300" width="8" height="8" rx="1" fill="#0d0c0b"/>
+              <rect x="158" y="300" width="8" height="8" rx="2" fill="#0d0c0b"/>
+              <circle cx="178" cy="306" r="4" fill="#0d0c0b" opacity="0.85"/>
+
+              <!-- paper label -->
+              <rect x="42" y="28" width="216" height="114" rx="3" fill="#f9f7ef" stroke="#c9c3ac" stroke-width="1"/>
+              <rect x="50" y="38" width="26" height="26" fill="none" stroke="#181818" stroke-width="2"/>
+              <text x="63" y="59" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="18" fill="#181818">A</text>
+              <g stroke="#c7c1a9" stroke-width="1">
+                <line x1="86" y1="46" x2="248" y2="46"/>
+                <line x1="86" y1="59" x2="248" y2="59"/>
+                <line x1="86" y1="72" x2="248" y2="72"/>
+                <line x1="86" y1="85" x2="248" y2="85"/>
+                <line x1="86" y1="98" x2="248" y2="98"/>
+                <line x1="86" y1="111" x2="248" y2="111"/>
+                <line x1="86" y1="124" x2="248" y2="124"/>
+              </g>
+              <text class="hw-title" x="90" y="80" font-family="'Caveat', cursive" font-weight="700" font-size="25" fill="#1f3f8f">Manic Miner</text>
+
+              <!-- brand stripe -->
+              <rect x="42" y="142" width="216" height="6" fill="#151515"/>
+              <rect x="42" y="148" width="216" height="6" fill="#c81f1f"/>
+
+              <!-- bias / noise-reduction text, printed on the shell -->
+              <text x="50" y="172" font-family="Arial, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#2a2a28">Normal Bias</text>
+              <text x="50" y="186" font-family="Arial, Helvetica, sans-serif" font-size="9.5" fill="#2a2a28">EQ-120&#181;s</text>
+
+              <text x="258" y="168" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="9.5" fill="#2a2a28">Noise Reduction</text>
+              <rect x="234" y="176" width="8" height="8" fill="none" stroke="#2a2a28" stroke-width="1"/>
+              <text x="246" y="184" font-family="Arial, Helvetica, sans-serif" font-size="9.5" fill="#2a2a28">IN</text>
+              <rect x="234" y="190" width="8" height="8" fill="none" stroke="#2a2a28" stroke-width="1"/>
+              <text x="246" y="198" font-family="Arial, Helvetica, sans-serif" font-size="9.5" fill="#2a2a28">OUT</text>
+
+              <!-- D-C90 / TDK branding -->
+              <text x="50" y="218" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="20" fill="#181818">D-</text>
+              <text x="73" y="218" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="20" fill="#3ea431">C90</text>
+              <text x="118" y="207" font-family="Georgia, serif" font-style="italic" font-size="7" fill="#3a3936">Compact Cassette</text>
+              <text x="118" y="216" font-family="Arial, Helvetica, sans-serif" font-size="6.5" fill="#3a3936">Made in Japan</text>
+              <g transform="translate(188,205)" fill="#181818">
+                <path d="M5,0 L10,8.5 L0,8.5 Z" transform="rotate(0 5 4.25)"/>
+                <path d="M5,0 L10,8.5 L0,8.5 Z" transform="rotate(120 5 4.25)"/>
+                <path d="M5,0 L10,8.5 L0,8.5 Z" transform="rotate(240 5 4.25)"/>
+              </g>
+              <text x="203" y="218" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="19" fill="#181818">TDK</text>
+              <text x="256" y="207" font-family="Arial, Helvetica, sans-serif" font-size="8" fill="#181818">&#174;</text>
+
+              <!-- reel window bezel -->
+              <rect x="52" y="222" width="196" height="76" rx="14" fill="url(#bezel)" stroke="#7c7869" stroke-width="1"/>
+              <rect x="59" y="228" width="182" height="63" rx="10" fill="url(#window)"/>
+
+              <!-- centre guide strip between the reels -->
+              <rect x="142" y="232" width="16" height="55" fill="#3a3733" opacity="0.7"/>
+              <rect x="148" y="232" width="3" height="55" fill="#8f8a7a" opacity="0.5"/>
+
+              <!-- supply reel (left): tape mostly still here. Tape is drawn as a
+                   ring around a fixed-size hub, so the hub/gear never changes
+                   size — only the ring's outer radius moves with progress. -->
+              <g transform="translate(105,259.5)">
+                <circle r="21" fill="url(#tapeSupply)" stroke="#1c0f04" stroke-width="0.75"/>
+                <circle r="21" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
+                <circle r="17" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.4"/>
+                <rect x="-2" y="-21" width="4" height="42" fill="#ffffff" opacity="0.12" transform="rotate(18)"/>
+                <circle r="13" fill="url(#hub)" stroke="#5c5745" stroke-width="0.75"/>
+                <g fill="#6f6a58">
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(60)"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(120)"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(180)"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(240)"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(300)"/>
+                </g>
+                <circle r="6.5" fill="none" stroke="#6f6a58" stroke-width="0.75"/>
+                <circle r="3.5" fill="#0d0c0b"/>
+                <rect x="-1" y="-6.5" width="2" height="3" fill="#0d0c0b"/>
+              </g>
+
+              <!-- take-up reel (right): less wound on yet, same fixed hub -->
+              <g transform="translate(195,259.5)">
                 <circle r="17.5" fill="url(#tapeTake)" stroke="#1c0f04" stroke-width="0.75"/>
                 <circle r="17.5" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
-                <circle r="12" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
-                <circle r="10.5" fill="url(#hub)" stroke="#4a4636" stroke-width="0.75"/>
-                <circle r="3" fill="#0d0c0b"/>
-                <g fill="#0d0c0b">
-                  <rect x="-1.1" y="-9.5" width="2.2" height="4" rx="0.6"/>
-                  <rect x="-1.1" y="5.5" width="2.2" height="4" rx="0.6" transform="rotate(120)"/>
-                  <rect x="-1.1" y="5.5" width="2.2" height="4" rx="0.6" transform="rotate(240)"/>
+                <circle r="13" fill="url(#hub)" stroke="#5c5745" stroke-width="0.75"/>
+                <g fill="#6f6a58">
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(60)"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(120)"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(180)"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(240)"/>
+                  <path d="M0,-9 L2.6,-13 L-2.6,-13 Z" transform="rotate(300)"/>
                 </g>
+                <circle r="6.5" fill="none" stroke="#6f6a58" stroke-width="0.75"/>
+                <circle r="3.5" fill="#0d0c0b"/>
+                <rect x="-1" y="-6.5" width="2" height="3" fill="#0d0c0b"/>
               </g>
-
-              <!-- tape leader across the mouth of the cassette -->
-              <path d="M 80,158 Q 150,180 220,156" fill="none" stroke="#b98d5d" stroke-width="1.6"/>
-              <circle cx="84" cy="160" r="3" fill="url(#hub)" stroke="#4a4636" stroke-width="0.6"/>
-              <circle cx="216" cy="158" r="3" fill="url(#hub)" stroke="#4a4636" stroke-width="0.6"/>
-              <rect x="140" y="176" width="20" height="7" rx="1.5" fill="#0d0c0b"/>
-
-              <!-- bottom screws + write-protect tabs -->
-              <circle cx="150" cy="184" r="4" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
-              <rect x="26" y="176" width="20" height="11" rx="2" fill="#d9d4c1" stroke="#8f8a76" stroke-width="0.75"/>
-              <rect x="254" y="176" width="20" height="11" rx="2" fill="#d9d4c1" stroke="#8f8a76" stroke-width="0.75"/>
-              <circle cx="30" cy="181.5" r="3.2" fill="url(#screw)" stroke="#5c5745" stroke-width="0.6"/>
-              <circle cx="270" cy="181.5" r="3.2" fill="url(#screw)" stroke="#5c5745" stroke-width="0.6"/>
             </svg>
           </div>
 

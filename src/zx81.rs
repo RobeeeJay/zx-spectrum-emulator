@@ -18,6 +18,16 @@ use crate::z80::{Bus, Z80};
 pub const CPU_HZ: f64 = 3_250_000.0;
 /// T-states in one television line.
 pub const LINE_T: u32 = 207;
+/// How far into a line the visible picture begins, in pixels, measured from the
+/// interrupt that starts the line. A line's T-states are counted from there,
+/// but the picture proper starts a little later; taking this off puts the
+/// 256-pixel picture in the middle of the 414-pixel raster, which is where a
+/// television shows it — 79 pixels of border either side.
+///
+/// The ROM reaches its first character column 58 T-states, or 116 pixels, after
+/// the interrupt, so this is 116 - 79.
+pub const PICTURE_X: usize = 37;
+
 /// Where the beam is when the sync is released. The sync pulse and the back
 /// porch that follows it occupy the start of a raster line, so a program that
 /// drives the sync itself is not at the left edge when it lets go.
@@ -220,10 +230,18 @@ impl Zx81Bus {
         }
 
         let y = self.line as usize;
-        let x0 = self.t_in_line as usize * 2;
+        // A line's T-states are counted from the interrupt that starts it,
+        // which is a little before the visible part begins; taking that off
+        // puts the picture in the middle of the raster, where a television
+        // shows it, rather than hard against the right.
+        let x0 = self.t_in_line as isize * 2 - PICTURE_X as isize;
         if y < RASTER_H {
             for bit in 0..8usize {
-                let x = x0 + bit;
+                let x = x0 + bit as isize;
+                let x = match usize::try_from(x) {
+                    Ok(x) => x,
+                    Err(_) => continue, // still in the blanking at the left
+                };
                 if x < RASTER_W {
                     self.fb[y * RASTER_W + x] = u8::from(bits & (0x80 >> bit) != 0);
                 }
@@ -404,10 +422,11 @@ impl View {
         w: RASTER_W,
         h: 312,
     };
-    /// The picture plus a modest border.
+    /// The picture plus an even border all round: 320x240 around the 256x192
+    /// picture at (79, 56) leaves 32 pixels either side and 24 above and below.
     pub const CROPPED: View = View {
-        x: 60,
-        y: 24,
+        x: 47,
+        y: 32,
         w: 320,
         h: 240,
     };
