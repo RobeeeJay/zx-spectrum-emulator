@@ -307,10 +307,12 @@ generator that times the borders in SLOW mode (`$FE` on, `$FD` off, firing once
 a line), and the interrupt, which comes from bit 6 of the refresh register
 falling — which is how the ROM counts out a character row.
 
-The sync is treated the way a television treats it. Releasing it starts a line
-from the left edge, because the ULA holds its counters in reset while the sync
-is low; and only a sync held for at least a line's worth of time pulls the
-picture back to the top. That matters for the hi-res games, which pace
+The sync is treated the way a television treats it. Releasing it puts the beam
+at a fixed point in the line, because the ULA holds its counters in reset while
+the sync is low; and only a sync held for at least a line's worth of time pulls
+the picture back to the top. That fixed point is not the left edge — the sync
+pulse and the back porch after it take up the start of a raster line — and it is
+what makes a program that paces itself land where the ROM's display does. That matters for the hi-res games, which pace
 themselves by raising and dropping the sync once per row rather than leaving it
 to the ROM: taking each of those pulses for a vertical sync restarts the picture
 hundreds of times a second and draws nothing but the first row, and ignoring

@@ -2,7 +2,7 @@
 //! real ROM.
 
 use zx_spectrum_emulator::z80::Bus;
-use zx_spectrum_emulator::zx81::{Ram, Zx81, LINE_T, RASTER_H, RASTER_W};
+use zx_spectrum_emulator::zx81::{Ram, Zx81, LINE_T, RASTER_H, RASTER_W, SYNC_TO_PICTURE_T};
 
 fn rom() -> Option<Vec<u8>> {
     std::fs::read("roms/zx81.rom").ok()
@@ -392,21 +392,21 @@ fn synthetic_display_with(sync_pulses: bool) -> Zx81 {
 fn synthetic_display_hires() -> Zx81 {
     let mut zx = Zx81::new(Ram::K16);
     let mut rom = vec![0u8; 8192];
-    let driver: [u8; 28] = [
+    // Twenty-eight T-states pass between releasing the sync and the first
+    // character, which is what Forty Niner's routine takes.
+    let driver: [u8; 22] = [
         0x3e, 0x1e, // LD A,$1E     character set at $1E00
         0xed, 0x47, // LD I,A
         0xf3, // DI
         0x31, 0xff, 0x4f, // LD SP,$4FFF
         0x00, 0x00, // padding, so the line loop starts at $000A
         // line:
-        0xdb, 0xfe, // IN A,($FE)   sync low
-        0xd3, 0xff, // OUT ($FF),A  released: the line starts here
-        // Ten NOPs, so a turn of the loop is a little longer than the 207
-        // T-states of a line and the raster moves down one row per line, as it
-        // does for the real games — which emit exactly one sync per row.
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x00,
-        0xc1, // LD HL,$C100
-        0xe9, // JP (HL)
+        0xdb, 0xfe, // IN A,($FE)   sync low                     11T
+        0xd3, 0xff, // OUT ($FF),A  released                     11T
+        0x3e, 0x00, // LD A,$00                                   7T
+        0x3e, 0x00, // LD A,$00                                   7T
+        0x21, 0x00, 0xc1, // LD HL,$C100                         10T
+        0xe9, // JP (HL)                                          4T
     ];
     rom[..driver.len()].copy_from_slice(&driver);
     for row in 0..8 {
@@ -418,10 +418,16 @@ fn synthetic_display_hires() -> Zx81 {
     for i in 0..32u16 {
         zx.bus.poke(0x4100 + i, 0x01);
     }
-    // $C3 has bit 6 set, so this is executed rather than displayed.
-    zx.bus.poke(0x4120, 0xc3); // JP $000A
-    zx.bus.poke(0x4121, 0x0a);
-    zx.bus.poke(0x4122, 0x00);
+    // Bit 6 set means the ULA executes these rather than displaying them.
+    // Five LD B,B pad a turn of the loop past the 207 T-states of a line, so
+    // the raster moves down one row per turn as it does for the real games,
+    // which emit exactly one sync per row.
+    for i in 0..5 {
+        zx.bus.poke(0x4120 + i, 0x40); // LD B,B
+    }
+    zx.bus.poke(0x4125, 0xc3); // JP $000A
+    zx.bus.poke(0x4126, 0x0a);
+    zx.bus.poke(0x4127, 0x00);
     zx
 }
 
@@ -586,6 +592,13 @@ fn every_drawn_line_starts_at_the_same_point() {
         return;
     };
 
+    // Start at a frame boundary, so a whole picture is watched rather than
+    // whatever is left of the one in progress.
+    let frame = zx.bus.frame;
+    while zx.bus.frame == frame {
+        zx.step_instruction();
+    }
+
     // Watch a whole frame and note where each line's characters begin.
     let frame = zx.bus.frame;
     let mut starts = std::collections::BTreeSet::new();
@@ -716,9 +729,11 @@ fn sync_pulses_between_lines_do_not_stop_the_picture_being_drawn() {
 }
 
 #[test]
-fn releasing_the_sync_starts_a_line_from_the_left_edge() {
-    // However far into a line the sync is released, the next line begins at
-    // the left: the ULA holds its counters in reset while the sync is low.
+fn releasing_the_sync_puts_the_beam_at_a_fixed_point_in_the_line() {
+    // However far into a line the sync is released, the beam ends up in the
+    // same place: the ULA holds its counters in reset while the sync is low.
+    // That place is not the left edge, because the sync pulse and back porch
+    // take up the start of the line.
     for offset in [0, 7, 33, 101, 206] {
         let mut zx = Zx81::new(Ram::K16);
         zx.bus.tick_for_test(offset);
@@ -726,10 +741,38 @@ fn releasing_the_sync_starts_a_line_from_the_left_edge() {
         zx.bus.tick_for_test(LINE_T * 4); // held: a vertical sync
         zx.bus.io_write(0xff, 0); // released
         assert_eq!(
-            zx.bus.t_in_line, 0,
+            zx.bus.t_in_line, SYNC_TO_PICTURE_T,
             "released {offset} T-states into a line and the raster kept the offset"
         );
     }
+}
+
+#[test]
+fn a_program_drawing_its_own_lines_lands_where_the_rom_does() {
+    // The hi-res routines pace themselves from their own sync rather than from
+    // the interrupt the ROM uses. Both have to put the picture in the same
+    // place, or switching between a hi-res screen and an ordinary one shifts
+    // the display sideways.
+    let column0 = |zx: &Zx81| -> Option<usize> {
+        (0..RASTER_H)
+            .filter_map(|y| (0..RASTER_W).find(|x| zx.bus.fb_prev[y * RASTER_W + x] != 0))
+            .min()
+    };
+
+    let mut interrupt_paced = synthetic_display();
+    let mut sync_paced = synthetic_display_hires();
+    for _ in 0..400 {
+        interrupt_paced.run(interrupt_paced.frame_t());
+        sync_paced.run(sync_paced.frame_t());
+    }
+    let (a, b) = (
+        column0(&interrupt_paced).expect("nothing drawn"),
+        column0(&sync_paced).expect("nothing drawn"),
+    );
+    assert!(
+        a.abs_diff(b) <= 2,
+        "the interrupt-paced picture starts at {a} and the sync-paced one at {b}"
+    );
 }
 
 #[test]

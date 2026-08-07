@@ -18,6 +18,17 @@ use crate::z80::{Bus, Z80};
 pub const CPU_HZ: f64 = 3_250_000.0;
 /// T-states in one television line.
 pub const LINE_T: u32 = 207;
+/// Where the beam is when the sync is released. The sync pulse and the back
+/// porch that follows it occupy the start of a raster line, so a program that
+/// drives the sync itself is not at the left edge when it lets go.
+///
+/// Calibrated against the machine's own display: the ROM's lines are paced by
+/// the interrupt, which starts a line here, and its first character column
+/// lands at T-state 58. The hi-res routines pace themselves from their own sync
+/// and reach their first column 32 T-states after releasing it, so the release
+/// has to be 26 T-states into the line for the two to line up.
+pub const SYNC_TO_PICTURE_T: u32 = 26;
+
 /// How long the sync has to be held to count as a vertical sync rather than a
 /// stray pulse. The ROM holds it for several lines; the shortest an IN/OUT pair
 /// can manage is a couple of dozen T-states.
@@ -295,11 +306,11 @@ impl Zx81Bus {
         }
         self.vsync = false;
         // The ULA holds its counters in reset while the sync is low, so
-        // releasing it starts a line from the left edge. Without that the
-        // picture lands wherever in the line the sync happened to end, which
-        // moves by a few T-states from frame to frame and makes the whole
-        // image jitter sideways.
-        self.t_in_line = 0;
+        // releasing it puts the beam at a fixed point in the line. Without
+        // that the picture lands wherever in the line the sync happened to
+        // end, which moves by a few T-states from frame to frame and makes the
+        // whole image jitter sideways.
+        self.t_in_line = SYNC_TO_PICTURE_T;
         // Only a sync held for a while pulls the picture back to the top. A
         // program that reads the keyboard and then writes a port — which is
         // what the hi-res routines do, several times a line — raises the sync
