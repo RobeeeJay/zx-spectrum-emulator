@@ -5,6 +5,7 @@ pub mod debugger;
 pub mod profiler;
 pub mod ram_map;
 pub mod tape;
+pub mod theme;
 
 use eframe::egui;
 use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportId};
@@ -199,6 +200,8 @@ pub struct App {
     pub roms: Roms,
     /// Kept alive for as long as the app runs; dropping it stops the sound.
     pub audio_out: Option<AudioOut>,
+    /// Whether the theme has been applied to the context yet.
+    styled: bool,
     pub audio_error: Option<String>,
 }
 
@@ -247,6 +250,7 @@ impl App {
             last_save_at: None,
             roms,
             audio_out,
+            styled: false,
             audio_error: None,
         }
     }
@@ -380,7 +384,7 @@ impl App {
     /// entry, so no popup has to stay open for a click to land.
     fn machine_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Machine:");
+            theme::group_label(ui, "Machine");
             for model in [
                 Model::Spectrum48,
                 Model::Spectrum128,
@@ -451,7 +455,7 @@ impl App {
             }
 
             ui.separator();
-            ui.label("Windows:");
+            theme::group_label(ui, "Windows");
             ui.toggle_value(&mut self.show_ram_map, "RAM map");
             ui.toggle_value(&mut self.show_debugger, "Debugger");
             ui.toggle_value(&mut self.show_tape, "Tape");
@@ -459,7 +463,7 @@ impl App {
             ui.toggle_value(&mut self.show_profiler, "Profiler");
 
             ui.separator();
-            ui.label("Zoom:");
+            theme::group_label(ui, "Zoom");
             for scale in screen::SCALES {
                 let label = if scale.fract() == 0.0 {
                     format!("{scale:.0}x")
@@ -1162,7 +1166,7 @@ impl App {
                 self.running = !self.running;
             }
             ui.separator();
-            ui.label("Speed:");
+            theme::group_label(ui, "Speed");
             for (name, mult) in SPEED_PRESETS {
                 if ui
                     .selectable_label((self.speed - mult).abs() < f32::EPSILON, name)
@@ -1258,6 +1262,10 @@ impl App {
     /// impl so tests can drive it without a real window.
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        if !self.styled {
+            theme::apply(&ctx);
+            self.styled = true;
+        }
         let dt = ctx.input(|i| i.stable_dt);
         self.read_keyboard(&ctx);
         self.advance(dt);
@@ -1288,11 +1296,16 @@ impl App {
         egui::Panel::bottom("status").show(ui, |ui| {
             self.controls_row(ui);
             let status = self.status.clone();
-            if self.status_is_error {
-                ui.colored_label(egui::Color32::from_rgb(255, 120, 120), status);
-            } else {
-                ui.label(status);
-            }
+            ui.horizontal(|ui| {
+                if self.status_is_error {
+                    ui.colored_label(theme::RED, status);
+                } else {
+                    ui.colored_label(theme::DIM, status);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    theme::rainbow(ui);
+                });
+            });
         });
         let mut beam = None;
         egui::CentralPanel::default().show(ui, |ui| {
@@ -1311,8 +1324,24 @@ impl App {
                 let (area, response) =
                     ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
                 let painter = ui.painter_at(area);
-                painter.rect_filled(area, 0.0, egui::Color32::BLACK);
+                // The picture sits in a bevelled surround rather than on bare
+                // black, as a set does in its case.
+                painter.rect_filled(area, 0.0, theme::CASE_DARK);
                 let picture = screen::centred(area, size);
+                let bezel = picture.expand(10.0);
+                painter.rect_filled(bezel, 6.0, egui::Color32::from_rgb(0x1a, 0x17, 0x13));
+                painter.rect_stroke(
+                    bezel,
+                    6.0,
+                    egui::Stroke::new(1.0, egui::Color32::BLACK),
+                    egui::StrokeKind::Inside,
+                );
+                painter.rect_stroke(
+                    picture.expand(1.0),
+                    2.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3a, 0x35, 0x2d)),
+                    egui::StrokeKind::Outside,
+                );
                 painter.image(
                     tex.id(),
                     picture,

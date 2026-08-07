@@ -11,7 +11,7 @@ use egui::{Color32, ColorImage, Rect, Sense, Stroke, TextureHandle, TextureOptio
 
 use crate::machine::Slot;
 use crate::tracker::{ram_phys, rom_phys, Region, BANK_SIZE, SCREEN_END, SCREEN_START};
-use crate::ui::App;
+use crate::ui::{theme, App};
 
 /// Rows of 256 bytes in one 16K bank.
 pub const ROWS_PER_BANK: usize = BANK_SIZE / 256;
@@ -219,11 +219,11 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.label("Show:");
         ui.checkbox(&mut app.ram.show_read, "Read");
-        ui.colored_label(Color32::from_rgb(0, 255, 0), "■");
+        ui.colored_label(theme::GREEN, "■");
         ui.checkbox(&mut app.ram.show_write, "Write");
-        ui.colored_label(Color32::from_rgb(255, 0, 0), "■");
+        ui.colored_label(theme::RED, "■");
         ui.checkbox(&mut app.ram.show_exec, "Execute");
-        ui.colored_label(Color32::from_rgb(80, 80, 255), "■");
+        ui.colored_label(theme::BLUE, "■");
         ui.separator();
         ui.checkbox(&mut app.ram.show_overlays, "Overlays");
     });
@@ -401,7 +401,7 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
         outline(
             painter,
             r,
-            Color32::from_rgb(140, 150, 170),
+            theme::DIM,
             &name,
             egui::Align2::RIGHT_TOP,
             r.right_top() + Vec2::new(-3.0, 1.0),
@@ -412,7 +412,7 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
     outline(
         painter,
         r,
-        Color32::from_rgb(255, 220, 0),
+        theme::YELLOW,
         "video RAM",
         egui::Align2::LEFT_TOP,
         r.left_top() + Vec2::new(3.0, 1.0),
@@ -423,7 +423,7 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
         outline(
             painter,
             r,
-            Color32::from_rgb(0, 220, 255),
+            theme::CYAN,
             "back buffer",
             egui::Align2::LEFT_TOP,
             r.left_top() + Vec2::new(3.0, 1.0),
@@ -493,7 +493,7 @@ fn all_memory_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale: f3
             painter.rect_stroke(
                 sr,
                 0.0,
-                Stroke::new(1.0, Color32::from_rgb(255, 220, 0)),
+                Stroke::new(1.0, theme::YELLOW),
                 egui::StrokeKind::Inside,
             );
         }
@@ -508,7 +508,7 @@ fn all_memory_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale: f3
             painter.rect_stroke(
                 br,
                 0.0,
-                Stroke::new(1.0, Color32::from_rgb(0, 220, 255)),
+                Stroke::new(1.0, theme::CYAN),
                 egui::StrokeKind::Inside,
             );
         }
@@ -550,7 +550,7 @@ fn zx81_overlays(
     band: &dyn Fn(u32, u32) -> Rect,
     outline: Outline<'_>,
 ) {
-    let grey = Color32::from_rgb(140, 150, 170);
+    let grey = theme::DIM;
     for (start, end, name) in [
         (0x0000u32, 0x4000u32, "$0000  ROM"),
         (0x4000, 0x8000, "$4000  RAM"),
@@ -576,7 +576,7 @@ fn zx81_overlays(
         outline(
             painter,
             r,
-            Color32::from_rgb(255, 220, 0),
+            theme::YELLOW,
             "display file",
             egui::Align2::LEFT_TOP,
             r.left_top() + Vec2::new(3.0, 1.0),

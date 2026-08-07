@@ -4,7 +4,7 @@
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Sense, Stroke, Vec2};
 
-use crate::ui::App;
+use crate::ui::{theme, App};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Trigger {
@@ -217,12 +217,12 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
     let (rect, _resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, Color32::from_rgb(8, 14, 10));
+    painter.rect_filled(rect, 2.0, theme::LCD_BG);
 
     let y_high = rect.top() + 18.0;
     let y_low = rect.bottom() - 18.0;
     let y_mid = (y_high + y_low) * 0.5;
-    let grid = Stroke::new(1.0, Color32::from_rgb(24, 48, 32));
+    let grid = Stroke::new(1.0, theme::LCD_GRID);
     for i in 0..=10 {
         let x = rect.left() + rect.width() * i as f32 / 10.0;
         painter.line_segment(
@@ -236,7 +236,7 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
             Pos2::new(rect.left(), y_mid),
             Pos2::new(rect.right(), y_mid),
         ],
-        Stroke::new(1.0, Color32::from_rgb(90, 70, 20)),
+        Stroke::new(1.0, Color32::from_rgb(0x5a, 0x46, 0x14)),
     );
 
     // Pick the sweep start: the newest edge of the chosen slope that has a
@@ -271,7 +271,7 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         .map(|(_, l)| *l)
         .unwrap_or(false);
 
-    let trace = Stroke::new(1.5, Color32::from_rgb(120, 255, 140));
+    let trace = Stroke::new(1.5, theme::LCD_FG);
     let mut x = rect.left();
     let mut drew = false;
     for &(t, l) in tape.edges.iter() {
@@ -306,14 +306,14 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
                 Pos2::new(rect.left() + 1.0, rect.top()),
                 Pos2::new(rect.left() + 1.0, rect.bottom()),
             ],
-            Stroke::new(1.0, Color32::from_rgb(255, 190, 0)),
+            Stroke::new(1.0, theme::AMBER),
         );
         painter.text(
             Pos2::new(rect.left() + 4.0, rect.top() + 2.0),
             egui::Align2::LEFT_TOP,
             "trig",
             egui::FontId::monospace(10.0),
-            Color32::from_rgb(255, 190, 0),
+            theme::AMBER,
         );
     }
     painter.text(
@@ -321,7 +321,7 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         egui::Align2::RIGHT_TOP,
         format!("{:.0} µs/div", app.tape.window_us / 10.0),
         egui::FontId::monospace(10.0),
-        Color32::from_rgb(120, 200, 140),
+        theme::GREEN,
     );
     if !drew && !tape.playing {
         painter.text(
@@ -329,7 +329,7 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
             egui::Align2::CENTER_CENTER,
             "no signal",
             egui::FontId::monospace(12.0),
-            Color32::from_rgb(70, 110, 80),
+            Color32::from_rgb(0x2a, 0x5a, 0x3c),
         );
     }
 }
@@ -375,7 +375,7 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                 let is_current = i == current;
                 let mut rich = RichText::new(format!("{:3}  {text}", i + 1)).monospace();
                 if !is_data && !is_current {
-                    rich = rich.color(Color32::from_gray(140));
+                    rich = rich.color(theme::DIM);
                 }
                 // A selectable row rather than a label: it highlights the block
                 // being played and behaves like the clickable thing it is.

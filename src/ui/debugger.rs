@@ -5,7 +5,7 @@ use egui::{Color32, RichText};
 
 use crate::disasm;
 use crate::machine::{Slot, Stop, FRAME_T};
-use crate::ui::{App, SPEED_PRESETS};
+use crate::ui::{theme, App, SPEED_PRESETS};
 
 pub struct DebuggerState {
     pub follow_pc: bool,
@@ -147,9 +147,9 @@ impl App {
 
 fn flag_chip(ui: &mut egui::Ui, name: &str, on: bool) {
     let color = if on {
-        Color32::from_rgb(120, 255, 120)
+        theme::RED
     } else {
-        Color32::from_gray(90)
+        Color32::from_rgb(0x4a, 0x46, 0x3f)
     };
     ui.label(RichText::new(name).monospace().color(color));
 }
@@ -215,8 +215,13 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn registers(app: &mut App, ui: &mut egui::Ui) {
+    theme::lcd().show(ui, |ui| registers_lcd(app, ui));
+}
+
+fn registers_lcd(app: &mut App, ui: &mut egui::Ui) {
     let c = app.cpu();
-    let mono = |ui: &mut egui::Ui, s: String| ui.label(RichText::new(s).monospace());
+    let mono =
+        |ui: &mut egui::Ui, s: String| ui.label(RichText::new(s).monospace().color(theme::LCD_FG));
 
     egui::Grid::new("regs").num_columns(4).show(ui, |ui| {
         mono(ui, format!("AF  {:04X}", c.af()));
@@ -256,7 +261,7 @@ fn registers(app: &mut App, ui: &mut egui::Ui) {
         flag_chip(ui, "IFF1", c.iff1);
         flag_chip(ui, "IFF2", c.iff2);
         if c.halted {
-            ui.label(RichText::new("HALTED").color(Color32::YELLOW).monospace());
+            ui.label(RichText::new("HALTED").color(theme::AMBER).monospace());
         }
     });
 
@@ -456,11 +461,9 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                 );
                 let mut rich = RichText::new(text).monospace();
                 if is_pc {
-                    rich = rich
-                        .color(Color32::BLACK)
-                        .background_color(Color32::from_rgb(255, 210, 0));
+                    rich = rich.color(Color32::BLACK).background_color(theme::AMBER);
                 } else if has_bp {
-                    rich = rich.color(Color32::from_rgb(255, 120, 120));
+                    rich = rich.color(theme::RED);
                 }
                 if ui
                     .add(egui::Label::new(rich).sense(egui::Sense::click()))

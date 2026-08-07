@@ -361,6 +361,24 @@ Tape sound works too. The ZX81 has no sound hardware of its own, so what you
 hear is the monitor from the recorder while a tape loads, mixed at the T-state
 of each edge like everything else.
 
+## How it looks
+
+The interface follows `zx-ux-mockup.html`: dark case plastic, near-black
+outlines and the machine's own seven colours. It is monospace throughout, on
+the grounds that the thing being emulated displayed nothing else.
+
+`src/ui/theme.rs` holds the palette and applies it to egui's visuals, and
+everything drawn by hand takes its colours from there rather than from a
+literal — the oscilloscope's phosphor green, the RAM map's read/write/execute
+key, the profiler's yellow-to-red bars, the flags that light red when set. The
+debugger's registers sit on a sunken LCD panel, the display has a bevelled
+surround instead of bare black, and the status line ends with the seven-colour
+flash the machine wears on its case.
+
+Two things in the mockup are not reproduced: the title bars are the operating
+system's, so they have no rivets, and the headings use the built-in monospace
+font rather than Press Start 2P, which would mean shipping a font file.
+
 ## Preferences
 
 A preferences file is created the first time the emulator runs, in the usual

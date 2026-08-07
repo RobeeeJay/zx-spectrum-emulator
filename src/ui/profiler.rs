@@ -6,7 +6,7 @@ use egui::{Color32, RichText, Sense, Stroke, Vec2};
 
 use crate::machine::Slot;
 use crate::profiler::{format_duration, FuncStats, Metric};
-use crate::ui::App;
+use crate::ui::{theme, App};
 
 pub struct ProfilerWindowState {
     /// Width the bars are drawn in.
@@ -132,7 +132,7 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
                 "recording…  call depth {depth}, in {inner}, {seen} functions seen"
             ))
             .monospace()
-            .color(Color32::from_rgb(255, 170, 90)),
+            .color(theme::AMBER),
         );
     } else {
         ui.label(RichText::new("stopped — press Start to record a run").monospace());
@@ -183,7 +183,7 @@ fn run_list(app: &mut App, ui: &mut egui::Ui) {
             for (i, text, in_progress) in rows {
                 let mut rich = RichText::new(text).monospace();
                 if in_progress {
-                    rich = rich.color(Color32::from_rgb(255, 170, 90));
+                    rich = rich.color(theme::AMBER);
                 }
                 if ui
                     .selectable_label(app.spec.profiler.selected == Some(i), rich)
@@ -322,22 +322,25 @@ fn row(
 
         let (rect, _) = ui.allocate_exact_size(Vec2::new(bar_width, 14.0), Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 2.0, Color32::from_gray(38));
+        painter.rect_filled(rect, 2.0, theme::EDGE);
         let filled = egui::Rect::from_min_size(
             rect.min,
             Vec2::new((rect.width() * share).max(1.0), rect.height()),
         );
-        // Ramp from blue for the small fry to orange for the hot spots.
+        // Ramp from the border yellow for the small fry to the border red for
+        // the hot spots, so the chart uses the machine's own palette.
+        let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * share) as u8;
+        let (lo, hi) = (theme::YELLOW, theme::RED);
         let colour = Color32::from_rgb(
-            (90.0 + 165.0 * share) as u8,
-            (140.0 + 40.0 * share) as u8,
-            (255.0 - 175.0 * share) as u8,
+            mix(lo.r(), hi.r()),
+            mix(lo.g(), hi.g()),
+            mix(lo.b(), hi.b()),
         );
         painter.rect_filled(filled, 2.0, colour);
         painter.rect_stroke(
             rect,
             2.0,
-            Stroke::new(1.0, Color32::from_gray(70)),
+            Stroke::new(1.0, theme::DIM),
             egui::StrokeKind::Inside,
         );
 
