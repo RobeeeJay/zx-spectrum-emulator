@@ -95,8 +95,12 @@ pub struct Zx81Bus {
     pub lcnt: u8,
     pub vsync: bool,
     /// When the sync went low, so a pulse too short to be a vertical sync can
-    /// be told from a real one.
+    /// be told from a real one, and where the beam was at the time.
     vsync_start: u64,
+    sync_line: u32,
+    sync_x: u32,
+    /// When the last sync the television accepted as a line arrived.
+    last_sync: u64,
     /// The NMI generator, which the ROM uses to time the borders in SLOW mode.
     pub nmi_on: bool,
     pub nmi_pending: bool,
@@ -138,6 +142,9 @@ impl Zx81Bus {
             lcnt: 0,
             vsync: false,
             vsync_start: 0,
+            sync_line: 0,
+            sync_x: 0,
+            last_sync: 0,
             nmi_on: false,
             nmi_pending: false,
             frame: 0,
@@ -197,6 +204,7 @@ impl Zx81Bus {
         while self.t_in_line >= LINE_T {
             self.t_in_line -= LINE_T;
             self.line += 1;
+            self.start_line();
             if !self.vsync {
                 self.lcnt = (self.lcnt + 1) & 7;
             }
@@ -213,10 +221,58 @@ impl Zx81Bus {
     /// Finish the picture and start the next one.
     pub fn end_frame(&mut self) {
         std::mem::swap(&mut self.fb, &mut self.fb_prev);
-        self.fb.iter_mut().for_each(|p| *p = 0);
+        // A television does not wipe the screen when the beam goes back to the
+        // top: it paints over what is there, line by line. Starting from the
+        // last picture rather than from blank is what makes a display that is
+        // not being driven properly — a tape loading, say, where the sync comes
+        // and goes — look the way it does, instead of flashing a fragment of a
+        // picture over an empty screen.
+        self.fb.copy_from_slice(&self.fb_prev);
         self.line = 0;
+        self.start_line();
         self.frame += 1;
         self.video_bytes = 0;
+    }
+
+    /// The beam sweeps a fresh line: paper, until something is drawn on it.
+    fn start_line(&mut self) {
+        let y = self.line as usize;
+        if y < RASTER_H {
+            self.fb[y * RASTER_W..(y + 1) * RASTER_W]
+                .iter_mut()
+                .for_each(|p| *p = 0);
+        }
+    }
+
+    /// Paint black from where the sync went low to where the beam is now.
+    ///
+    /// The beam is blanked while the sync is low. In the ordinary way of things
+    /// that happens off the edge of the picture, but a program that pulses the
+    /// sync in the middle of a line — which is what the ROM's tape loader does,
+    /// hundreds of times a frame — leaves black bars on the screen. That is the
+    /// ZX81's loading pattern. A sync held longer than a line is a vertical one,
+    /// and the beam is off the screen retracing, so that leaves no mark.
+    fn blank_since_sync(&mut self) {
+        let x = |t: u32| t as isize * 2 - PICTURE_X as isize;
+        for line in self.sync_line..=self.line {
+            let y = line as usize;
+            if y >= RASTER_H {
+                break;
+            }
+            let from = if line == self.sync_line {
+                x(self.sync_x)
+            } else {
+                0
+            };
+            let to = if line == self.line {
+                x(self.t_in_line)
+            } else {
+                RASTER_W as isize
+            };
+            for px in from.max(0)..to.min(RASTER_W as isize) {
+                self.fb[y * RASTER_W + px as usize] = 1;
+            }
+        }
     }
 
     /// Turn a character code into eight pixels at the current raster position.
@@ -299,6 +355,8 @@ impl Zx81Bus {
         // While the sync is low the line counter is held in reset.
         if !self.vsync {
             self.vsync_start = self.tstates;
+            self.sync_line = self.line;
+            self.sync_x = self.t_in_line;
         }
         self.vsync = true;
         self.lcnt = 0;
@@ -309,7 +367,9 @@ impl Zx81Bus {
     /// row landing in the same place across the picture.
     pub fn hsync_from_interrupt(&mut self) {
         self.t_in_line = 0;
+        self.last_sync = self.tstates;
         self.line += 1;
+        self.start_line();
         if !self.vsync {
             self.lcnt = (self.lcnt + 1) & 7;
         }
@@ -323,6 +383,24 @@ impl Zx81Bus {
             return;
         }
         self.vsync = false;
+        // A television's line oscillator free-runs and only locks to a sync
+        // arriving near the time it expects one. Without that, the tape
+        // loader's stream of pulses — one every few microseconds — would hold
+        // the raster at the top of the screen and nothing would move at all.
+        // A television's line oscillator free-runs and only locks to a sync
+        // arriving near the time it expects one. A pulse that turns up far too
+        // early is not a line sync at all: the beam stays where it is and is
+        // merely blanked, which is what leaves the bars on the screen. Taking
+        // every one of them as a line sync would instead hold the raster at the
+        // top of the screen, and nothing would move at all.
+        let held = self.tstates - self.vsync_start;
+        let since_last = self.tstates - self.last_sync;
+        let is_a_line = held >= VSYNC_MIN_T || since_last >= LINE_T as u64 * 3 / 4;
+        if !is_a_line {
+            self.blank_since_sync();
+            return;
+        }
+        self.last_sync = self.tstates;
         // The ULA holds its counters in reset while the sync is low, so
         // releasing it puts the beam at a fixed point in the line. Without
         // that the picture lands wherever in the line the sync happened to

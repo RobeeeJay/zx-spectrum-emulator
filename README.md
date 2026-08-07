@@ -313,6 +313,19 @@ back by the difference when it is drawn: the 256x192 picture then sits in the
 middle of the 414x312 raster with 79 pixels of border either side, where a
 television shows it. The cropped view is centred on it in turn.
 
+What is on the screen is what a television would show, rather than a tidy
+picture assembled from whatever the program drew. Each line is painted as the
+beam reaches it and the rest of the screen is left alone, so a display that
+keeps restarting does not flash a fragment of a picture over an empty screen.
+The beam is blanked while the sync is low, and a television's line oscillator
+only locks to a sync that turns up when a line is due — one arriving far too
+early is not a line at all, so the beam stays where it is and is merely
+blanked. That is what puts the ZX81's loading pattern on the screen: with the
+display off in FAST mode, the ROM's tape loader pulses the sync hundreds of
+times a frame, leaving black bars that shift with the data. With no sync at all
+— a FAST computation with nothing driving the display — the beam sweeps a blank
+white screen, which is what the machine does.
+
 The sync is treated the way a television treats it. Releasing it puts the beam
 at a fixed point in the line, because the ULA holds its counters in reset while
 the sync is low; and only a sync held for at least a line's worth of time pulls

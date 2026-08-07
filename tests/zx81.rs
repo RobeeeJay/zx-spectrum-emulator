@@ -829,3 +829,91 @@ fn the_picture_lands_in_the_same_place_after_the_timing_is_nudged() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// what a television makes of a display that is not being driven properly
+// ---------------------------------------------------------------------------
+
+fn ink(zx: &Zx81) -> usize {
+    zx.bus.fb.iter().filter(|p| **p != 0).count()
+}
+
+#[test]
+fn a_sync_arriving_far_too_early_blanks_the_beam_where_it_stands() {
+    // The tape loader pulses the sync every few microseconds. A television's
+    // line oscillator will not lock to that, so the beam carries on and each
+    // pulse leaves a black bar where it was — the ZX81's loading pattern.
+    let mut zx = Zx81::new(Ram::K16);
+    zx.bus.tick_for_test(LINE_T * 4);
+    let line_before = zx.bus.line;
+
+    for _ in 0..40 {
+        zx.bus.io_read(0xfe); // sync low
+        zx.bus.tick_for_test(8);
+        zx.bus.io_write(0xff, 0); // and up again, far too soon to be a line
+        zx.bus.tick_for_test(60);
+    }
+
+    assert!(ink(&zx) > 0, "the pulses left no mark on the picture");
+    assert!(
+        zx.bus.line > line_before,
+        "the raster stopped moving: line stuck at {}",
+        zx.bus.line
+    );
+}
+
+#[test]
+fn a_sync_arriving_when_a_line_is_due_is_a_line_sync_and_leaves_no_mark() {
+    // The hi-res routines pulse the sync once a row. That is an ordinary
+    // horizontal sync: the beam retraces, off the screen, and nothing is drawn.
+    let mut zx = Zx81::new(Ram::K16);
+    zx.bus.tick_for_test(LINE_T * 4);
+    for _ in 0..4 {
+        zx.bus.io_read(0xfe);
+        zx.bus.tick_for_test(8);
+        zx.bus.io_write(0xff, 0);
+        zx.bus.tick_for_test(LINE_T - 8); // a whole line before the next
+    }
+    assert_eq!(ink(&zx), 0, "a line sync should not mark the picture");
+}
+
+#[test]
+fn the_vertical_sync_leaves_no_mark_either() {
+    let mut zx = Zx81::new(Ram::K16);
+    zx.bus.tick_for_test(LINE_T * 4);
+    zx.bus.io_read(0xfe);
+    zx.bus.tick_for_test(LINE_T * 5); // held, as the ROM holds it
+    zx.bus.io_write(0xff, 0);
+    assert_eq!(
+        ink(&zx),
+        0,
+        "the beam is off the screen retracing, so nothing is drawn"
+    );
+}
+
+#[test]
+fn the_picture_is_painted_over_rather_than_wiped() {
+    // A television paints line by line over what is already on the screen. If
+    // the frame were wiped instead, a display that keeps restarting — a tape
+    // loading, where the sync comes and goes — would show a fragment of a
+    // picture on an empty screen rather than what a set really shows.
+    let mut zx = Zx81::new(Ram::K16);
+    zx.bus.line = 200;
+    zx.bus.t_in_line = 100;
+    zx.bus.io_read(0xfe);
+    zx.bus.tick_for_test(8);
+    zx.bus.io_write(0xff, 0); // a bar, low down the picture
+    let marked = ink(&zx);
+    assert!(marked > 0);
+
+    // Now the picture restarts from the top, as a false vertical sync makes it.
+    zx.bus.io_read(0xfe);
+    zx.bus.tick_for_test(LINE_T * 5);
+    zx.bus.io_write(0xff, 0);
+    assert_eq!(zx.bus.line, 0, "back to the top");
+    assert_eq!(
+        ink(&zx),
+        marked,
+        "the mark further down the screen should still be there"
+    );
+}
