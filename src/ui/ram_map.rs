@@ -84,6 +84,27 @@ impl Default for RamMapState {
 
 /// The blocks making up the physical view, in the order they are drawn.
 pub fn chunks(app: &App) -> Vec<Chunk> {
+    if app.on_zx81() {
+        // Nothing is paged: the ROM and the RAM are always where they are.
+        return vec![
+            Chunk {
+                phys: rom_phys(0, 0),
+                row: 0,
+                slot: Some(0),
+                label: "ROM".into(),
+                is_rom: true,
+                number: 0,
+            },
+            Chunk {
+                phys: ram_phys(0, 0),
+                row: ROWS_PER_BANK,
+                slot: Some(1),
+                label: "RAM".into(),
+                is_rom: false,
+                number: 0,
+            },
+        ];
+    }
     let bus = &app.spec.bus;
     let mut out = Vec::new();
     let mut row = 0;
@@ -113,7 +134,7 @@ pub fn chunks(app: &App) -> Vec<Chunk> {
 }
 
 fn colour(app: &App, phys: usize, floor: u8) -> [u8; 3] {
-    let t = &app.spec.bus.tracker;
+    let t = app.tracker();
     let gain = app.ram.gain;
     let r = if app.ram.show_write {
         (t.write_heat[phys] as f32 * gain).min(255.0) as u8
@@ -149,12 +170,8 @@ fn build_image(app: &mut App) {
             for addr in 0..65536usize {
                 // A dim floor keeps the ROM/RAM split and untouched memory
                 // visible.
-                let floor = if matches!(app.spec.bus.slot_of(addr as u16), Slot::Rom(_)) {
-                    22
-                } else {
-                    10
-                };
-                let phys = app.spec.bus.phys_index(addr as u16);
+                let floor = if app.is_rom(addr as u16) { 22 } else { 10 };
+                let phys = app.phys_index(addr as u16);
                 let c = colour(app, phys, floor);
                 let i = addr * 4;
                 app.ram.pixels[i] = c[0];
@@ -208,7 +225,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut app.ram.gain, 0.25..=4.0).text("gain"));
     });
     ui.horizontal_wrapped(|ui| {
-        let t = &mut app.spec.bus.tracker;
+        let t = app.tracker_mut();
         ui.add(egui::Slider::new(&mut t.fade_read, 1..=64).text("read fade"));
         ui.add(egui::Slider::new(&mut t.fade_write, 1..=64).text("write fade"));
         ui.add(egui::Slider::new(&mut t.fade_exec, 1..=64).text("exec fade"));
@@ -276,12 +293,9 @@ pub fn hover_at(app: &App, x: u16, y: usize) -> Option<Hover> {
     match app.ram.view {
         View::AddressSpace => {
             let addr = (y.min(255) as u16) * 256 + x;
-            let what = match app.spec.bus.slot_of(addr) {
-                Slot::Rom(p) => format!("ROM{p}"),
-                Slot::Ram(b) => format!("RAM{b}"),
-            };
+            let what = app.slot_label(addr);
             Some(Hover {
-                phys: app.spec.bus.phys_index(addr),
+                phys: app.phys_index(addr),
                 addr: Some(addr),
                 what,
                 offset: addr & 0x3fff,
@@ -310,7 +324,7 @@ fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
         return;
     };
     let value = match hover.addr {
-        Some(addr) => app.spec.bus.peek_raw(addr),
+        Some(addr) => app.peek(addr),
         // Not paged in: read it straight out of the bank.
         None => app.spec.bus.bank_byte(hover.phys / BANK_SIZE, hover.offset),
     };
@@ -318,7 +332,7 @@ fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
         Some(addr) => format!("@ ${addr:04X}"),
         None => "not paged in".to_string(),
     };
-    let t = &app.spec.bus.tracker;
+    let t = app.tracker();
     ui.monospace(format!(
         "{} +${:04X} {}  = ${value:02X}   reads {}   writes {}",
         hover.what, hover.offset, where_, t.read_count[hover.phys], t.write_count[hover.phys],
@@ -352,6 +366,16 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
             egui::pos2(rect.right(), row_y(end)),
         )
     };
+
+    if app.on_zx81() {
+        zx81_overlays(app, painter, &band, &outline);
+        let py = row_y(app.cpu().pc as u32);
+        painter.line_segment(
+            [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
+            Stroke::new(1.0, Color32::WHITE),
+        );
+        return;
+    }
 
     // What is paged into each 16K slot.
     for slot in 0..4u32 {
@@ -400,7 +424,7 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
     }
 
     // Where the CPU is right now.
-    let py = row_y(app.spec.cpu.pc as u32);
+    let py = row_y(app.cpu().pc as u32);
     painter.line_segment(
         [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
         Stroke::new(1.0, Color32::WHITE),
@@ -408,8 +432,14 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
 }
 
 fn all_memory_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale: f32) {
-    let pc_phys = app.spec.bus.phys_index(app.spec.cpu.pc);
-    let screen_bank = app.spec.bus.screen_bank();
+    let pc_phys = app.phys_index(app.cpu().pc);
+    // A ZX81 has no screen bank: the display file lives wherever the ROM put
+    // it, inside the one bank of RAM.
+    let screen_bank = if app.on_zx81() {
+        usize::MAX
+    } else {
+        app.spec.bus.screen_bank()
+    };
 
     for chunk in chunks(app) {
         let top = rect.top() + chunk.row as f32 * scale;
@@ -500,4 +530,49 @@ fn back_buffer_in(app: &App, chunk: &Chunk) -> Option<(u16, u16)> {
         return None;
     }
     Some(((start - slot_start) as u16, (end - slot_start) as u16))
+}
+
+/// The ZX81's address space: a ROM page, a RAM page, and the mirror of both
+/// above $8000 that the display routine executes through. The display file
+/// moves as the program grows, so it is read out of D_FILE rather than fixed.
+type Outline<'a> = &'a dyn Fn(&egui::Painter, Rect, Color32, &str, egui::Align2, egui::Pos2);
+
+fn zx81_overlays(
+    app: &App,
+    painter: &egui::Painter,
+    band: &dyn Fn(u32, u32) -> Rect,
+    outline: Outline<'_>,
+) {
+    let grey = Color32::from_rgb(140, 150, 170);
+    for (start, end, name) in [
+        (0x0000u32, 0x4000u32, "$0000  ROM"),
+        (0x4000, 0x8000, "$4000  RAM"),
+        (0x8000, 0x10000, "$8000  mirror of $0000-$7FFF"),
+    ] {
+        let r = band(start, end);
+        outline(
+            painter,
+            r,
+            grey,
+            name,
+            egui::Align2::RIGHT_TOP,
+            r.right_top() + Vec2::new(-3.0, 1.0),
+        );
+    }
+
+    // D_FILE at $400C points at the display file; VARS at $4010 is the first
+    // thing after it.
+    let word = |addr: u16| u16::from_le_bytes([app.peek(addr), app.peek(addr + 1)]);
+    let (d_file, vars) = (word(0x400c), word(0x4010));
+    if d_file >= 0x4000 && vars > d_file {
+        let r = band(d_file as u32, vars as u32);
+        outline(
+            painter,
+            r,
+            Color32::from_rgb(255, 220, 0),
+            "display file",
+            egui::Align2::LEFT_TOP,
+            r.left_top() + Vec2::new(3.0, 1.0),
+        );
+    }
 }

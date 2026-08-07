@@ -11,13 +11,20 @@
 //! makes it cycle exact, and is why programs that abuse the mechanism for
 //! high-resolution graphics work without any special handling.
 
+use crate::audio::Audio;
 use crate::tape::Tape;
+use crate::tracker::{ram_phys, rom_phys, Tracker};
 use crate::z80::{Bus, Z80};
 
 /// The ZX81's Z80A runs a little faster than a Spectrum's.
 pub const CPU_HZ: f64 = 3_250_000.0;
 /// T-states in one television line.
 pub const LINE_T: u32 = 207;
+/// How loud the tape monitor is. There is no beeper to share the output with,
+/// so this can sit higher than the Spectrum's equivalent without drowning
+/// anything out.
+pub const TAPE_MONITOR_LEVEL: f32 = 0.35;
+
 /// How far into a line the visible picture begins, in pixels, measured from the
 /// interrupt that starts the line. A line's T-states are counted from there,
 /// but the picture proper starts a little later; taking this off puts the
@@ -127,6 +134,14 @@ pub struct Zx81Bus {
     pub tape_boost: bool,
     /// Scratch space for edges on their way out of the tape.
     tape_edge_scratch: Vec<(u64, bool)>,
+    /// The tape as it sounds. The ZX81 has no sound hardware of its own — this
+    /// is the monitor you would hear from the recorder while it loads, which is
+    /// how you tell a good tape from a bad one.
+    pub audio: Audio,
+    /// Level the tape is holding.
+    ear: bool,
+    /// Which bytes have been read, written and executed lately.
+    pub tracker: Tracker,
 }
 
 impl Zx81Bus {
@@ -157,6 +172,9 @@ impl Zx81Bus {
             tape: None,
             tape_boost: true,
             tape_edge_scratch: Vec::new(),
+            audio: Audio::new(CPU_HZ),
+            ear: false,
+            tracker: Tracker::new(),
         }
     }
 
@@ -181,6 +199,29 @@ impl Zx81Bus {
         } else {
             self.ram[(addr & self.ram_mask) as usize]
         }
+    }
+
+    /// Where an address lands in the tracker's physical memory. The ZX81 needs
+    /// one ROM page and one RAM bank; the mirrors fold onto the byte they are
+    /// mirrors of, so writing through one shows up in both.
+    #[inline]
+    pub fn phys_index(&self, addr: u16) -> usize {
+        if addr & 0x4000 == 0 {
+            rom_phys(0, addr & self.rom_mask)
+        } else {
+            ram_phys(0, addr & self.ram_mask)
+        }
+    }
+
+    #[inline]
+    pub fn is_rom(&self, addr: u16) -> bool {
+        addr & 0x4000 == 0
+    }
+
+    /// Untracked read, for the renderers and the debugger.
+    #[inline]
+    pub fn peek_raw(&self, addr: u16) -> u8 {
+        self.mem(addr)
     }
 
     #[inline]
@@ -327,28 +368,57 @@ impl Zx81Bus {
         self.tape.as_ref().is_some_and(|t| t.playing)
     }
 
-    /// Tape level now, advancing the tape to the present. The edges are
-    /// collected but not mixed anywhere: the ZX81 has no sound hardware, so
-    /// they only feed the tape window's oscilloscope.
+    /// Tape level now, advancing the tape to the present.
+    ///
+    /// Every edge the tape produced along the way is mixed in at the T-state it
+    /// happened rather than sampled when the CPU next looks, which is the
+    /// difference between hearing a tone and hearing noise.
     fn tape_level(&mut self) -> bool {
         let now = self.tstates;
-        let Some(tape) = self.tape.as_mut() else {
-            return false;
-        };
-        let level = tape.level_at(now);
+        if self.tape.is_none() {
+            return self.ear;
+        }
         let mut edges = std::mem::take(&mut self.tape_edge_scratch);
         edges.clear();
-        tape.take_pending_edges(&mut edges);
+        let level = {
+            let tape = self.tape.as_mut().expect("checked above");
+            let level = tape.level_at(now);
+            tape.take_pending_edges(&mut edges);
+            level
+        };
+        for (at, ear) in edges.drain(..) {
+            self.audio.advance_to(at);
+            self.set_ear(ear);
+        }
         self.tape_edge_scratch = edges;
+        if self.ear != level {
+            self.audio.advance_to(now);
+            self.set_ear(level);
+        }
         level
+    }
+
+    /// The tape monitor, as an audio level.
+    fn set_ear(&mut self, ear: bool) {
+        self.ear = ear;
+        self.audio.beeper = if ear { TAPE_MONITOR_LEVEL } else { 0.0 };
+    }
+
+    /// Generate any samples due, and keep the tape ahead of the mixer: the
+    /// mixer must never run past the tape, or the tape's edges would arrive
+    /// with timestamps already in the past and be collapsed into silence.
+    pub fn audio_sync(&mut self) {
+        if self.tape_playing() {
+            self.tape_level();
+        }
+        let now = self.tstates;
+        self.audio.advance_to(now);
     }
 
     /// Keep the tape moving even while the CPU is not polling the port, so it
     /// does not stall between the loader's reads.
     pub fn tape_tick(&mut self) {
-        if self.tape_playing() {
-            self.tape_level();
-        }
+        self.audio_sync();
     }
 
     pub fn start_vsync(&mut self) {
@@ -422,6 +492,7 @@ impl Zx81Bus {
 
 impl Bus for Zx81Bus {
     fn fetch_op(&mut self, addr: u16) -> u8 {
+        self.tracker.on_exec(self.phys_index(addr), addr);
         let byte = self.mem(addr);
         // The ULA only interferes above $8000, and only for codes with bit 6
         // clear; a HALT (bit 6 set) is executed properly and ends the line.
@@ -439,11 +510,13 @@ impl Bus for Zx81Bus {
 
     fn read(&mut self, addr: u16) -> u8 {
         self.tick(3);
+        self.tracker.on_read(self.phys_index(addr), addr);
         self.mem(addr)
     }
 
     fn write(&mut self, addr: u16, value: u8) {
         self.tick(3);
+        self.tracker.on_write(self.phys_index(addr), addr);
         self.poke(addr, value);
     }
 

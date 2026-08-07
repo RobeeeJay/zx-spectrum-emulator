@@ -707,6 +707,117 @@ impl App {
         }
     }
 
+    // ---- the machine that is running ---------------------------------------
+    //
+    // Both machines are a Z80 with memory and breakpoints, so the debugger and
+    // the RAM map work through these rather than reaching for the Spectrum.
+
+    pub fn cpu(&self) -> &crate::z80::Z80 {
+        match &self.zx81 {
+            Some(zx) => &zx.cpu,
+            None => &self.spec.cpu,
+        }
+    }
+
+    pub fn peek(&self, addr: u16) -> u8 {
+        match &self.zx81 {
+            Some(zx) => zx.bus.peek_raw(addr),
+            None => self.spec.bus.peek_raw(addr),
+        }
+    }
+
+    pub fn breakpoints(&self) -> &Vec<u16> {
+        match &self.zx81 {
+            Some(zx) => &zx.breakpoints,
+            None => &self.spec.breakpoints,
+        }
+    }
+
+    pub fn breakpoints_mut(&mut self) -> &mut Vec<u16> {
+        match &mut self.zx81 {
+            Some(zx) => &mut zx.breakpoints,
+            None => &mut self.spec.breakpoints,
+        }
+    }
+
+    pub fn tracker(&self) -> &crate::tracker::Tracker {
+        match &self.zx81 {
+            Some(zx) => &zx.bus.tracker,
+            None => &self.spec.bus.tracker,
+        }
+    }
+
+    pub fn tracker_mut(&mut self) -> &mut crate::tracker::Tracker {
+        match &mut self.zx81 {
+            Some(zx) => &mut zx.bus.tracker,
+            None => &mut self.spec.bus.tracker,
+        }
+    }
+
+    pub fn phys_index(&self, addr: u16) -> usize {
+        match &self.zx81 {
+            Some(zx) => zx.bus.phys_index(addr),
+            None => self.spec.bus.phys_index(addr),
+        }
+    }
+
+    /// What sits at an address: a bank number on a Spectrum, ROM or RAM on a
+    /// ZX81, which has nothing to page.
+    pub fn slot_label(&self, addr: u16) -> String {
+        match &self.zx81 {
+            Some(zx) => if zx.bus.is_rom(addr) { "ROM" } else { "RAM" }.to_string(),
+            None => match self.spec.bus.slot_of(addr) {
+                crate::machine::Slot::Rom(p) => format!("ROM{p}"),
+                crate::machine::Slot::Ram(b) => format!("RAM{b}"),
+            },
+        }
+    }
+
+    pub fn is_rom(&self, addr: u16) -> bool {
+        match &self.zx81 {
+            Some(zx) => zx.bus.is_rom(addr),
+            None => matches!(self.spec.bus.slot_of(addr), crate::machine::Slot::Rom(_)),
+        }
+    }
+
+    /// Frame number, T-states into the frame, and T-states in a whole frame.
+    pub fn machine_clock(&self) -> (u64, u32, u32) {
+        match &self.zx81 {
+            Some(zx) => (
+                zx.bus.frame,
+                (zx.bus.tstates % zx.frame_t()) as u32,
+                zx.frame_t() as u32,
+            ),
+            None => (
+                self.spec.bus.frame,
+                self.spec.bus.tstates,
+                self.spec.bus.frame_t(),
+            ),
+        }
+    }
+
+    pub fn reset_machine(&mut self) {
+        match &mut self.zx81 {
+            Some(zx) => zx.reset(),
+            None => self.spec.reset(),
+        }
+    }
+
+    pub fn step_machine(&mut self) {
+        match &mut self.zx81 {
+            Some(zx) => zx.step_instruction(),
+            None => self.spec.step_instruction(),
+        }
+    }
+
+    /// The mixer of the machine that is running.
+    pub fn audio(&mut self) -> &mut crate::audio::Audio {
+        match &mut self.zx81 {
+            Some(zx) => &mut zx.bus.audio,
+            None => &mut self.spec.bus.audio,
+        }
+    }
+
     pub fn tape_boost(&self) -> bool {
         match &self.zx81 {
             Some(zx) => zx.bus.tape_boost,
@@ -760,6 +871,13 @@ impl App {
         let mut machine = Zx81::new(ram);
         machine.load_rom(&rom);
         machine.reset();
+        // The ZX81 has its own mixer, on its own clock, so it needs its own
+        // connection to the sound device — and the volume the user last set.
+        if let Some(out) = &self.audio_out {
+            machine.bus.audio.attach(out.queue.clone(), out.sample_rate);
+        }
+        machine.bus.audio.enabled = self.spec.bus.audio.enabled;
+        machine.bus.audio.volume = self.spec.bus.audio.volume;
         self.zx81 = Some(machine);
         self.zx81_ram = ram;
         self.running = true;
@@ -792,9 +910,19 @@ impl App {
             } else {
                 1.0
             };
+            // Keep the sound buffer near its target depth, as for the
+            // Spectrum, and mute when the speed is too far from normal.
+            let target = self.audio_latency_target as f64;
+            let pace = if self.speed == 1.0 && boost == 1.0 && self.audio().enabled {
+                self.audio().pace(target)
+            } else {
+                1.0
+            };
+            let effective = self.speed * boost;
+            self.audio().speed_ok = (0.85..=1.2).contains(&effective);
             let zx = self.zx81.as_mut().expect("just checked");
             let dt = dt.clamp(0.0, 0.1);
-            let want = zx81::CPU_HZ as f32 * dt * self.speed * boost + self.leftover;
+            let want = zx81::CPU_HZ as f32 * dt * self.speed * boost * pace + self.leftover;
             let budget = want.max(0.0) as u64;
             self.leftover = want - budget as f32;
             // Cap the work per host frame, as for the Spectrum.
@@ -986,10 +1114,8 @@ impl App {
                 }
             });
             ui.menu_button("Sound", |ui| {
-                ui.checkbox(&mut self.spec.bus.audio.enabled, "Sound on");
-                ui.add(
-                    egui::Slider::new(&mut self.spec.bus.audio.volume, 0.0..=1.0).text("volume"),
-                );
+                ui.checkbox(&mut self.audio().enabled, "Sound on");
+                ui.add(egui::Slider::new(&mut self.audio().volume, 0.0..=1.0).text("volume"));
                 ui.checkbox(
                     &mut self.spec.bus.audio.mute_off_speed,
                     "Mute unless running at normal speed",
@@ -1089,9 +1215,9 @@ impl App {
                 }
                 ui.separator();
             }
-            ui.checkbox(&mut self.spec.bus.audio.enabled, "🔊");
+            ui.checkbox(&mut self.audio().enabled, "🔊");
             ui.add(
-                egui::Slider::new(&mut self.spec.bus.audio.volume, 0.0..=1.0)
+                egui::Slider::new(&mut self.audio().volume, 0.0..=1.0)
                     .show_value(false)
                     .text("vol"),
             );

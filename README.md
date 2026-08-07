@@ -348,6 +348,19 @@ and one too large for 1K is refused rather than silently truncated.
 Tape input arrives on bit 7 of port `$FE`, which the ROM's loader tests with
 `RLA` at `$035B`; bit 6 is the 50/60 Hz jumper.
 
+### On a ZX81
+
+The debugger and the RAM map work the same way on a ZX81 as on a Spectrum: both
+machines are a Z80 with memory and breakpoints behind them. The panels a ZX81
+has no use for — the paging latch and the AY registers — are not drawn, the
+memory line reads `$0000:ROM  $4000:RAM  $8000:mirror of $0000-$7FFF`, and the
+RAM map's overlays name the ROM, the RAM and the mirror, with the display file
+outlined where D_FILE currently points rather than at a fixed address.
+
+Tape sound works too. The ZX81 has no sound hardware of its own, so what you
+hear is the monitor from the recorder while a tape loads, mixed at the T-state
+of each edge like everything else.
+
 ## Preferences
 
 A preferences file is created the first time the emulator runs, in the usual

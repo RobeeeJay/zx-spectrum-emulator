@@ -34,22 +34,26 @@ impl Default for DebuggerState {
 impl App {
     pub fn step_into(&mut self) {
         self.running = false;
-        self.spec.step_instruction();
+        self.step_machine();
         self.dbg.follow_pc = true;
         self.last_stop = Some(Stop::Stepped);
-        self.status = format!("Stepped to ${:04X}", self.spec.cpu.pc);
+        self.status = format!("Stepped to ${:04X}", self.cpu().pc);
     }
 
     /// Run a CALL/RST/LDIR to completion; otherwise behave like step into.
     pub fn step_over(&mut self) {
-        let pc = self.spec.cpu.pc;
+        let pc = self.cpu().pc;
         if !self.spec.is_step_over_target(pc) {
             self.step_into();
             return;
         }
-        let peek = |a: u16| self.spec.bus.peek_raw(a);
+        let peek = |a: u16| self.peek(a);
         let len = disasm::disasm(&peek, pc).len.max(1) as u16;
         let target = pc.wrapping_add(len);
+        if self.on_zx81() {
+            self.step_to(target);
+            return;
+        }
         self.spec.temp_bp = Some(target);
 
         let was_slow = self.spec.bus.slow.enabled;
@@ -84,9 +88,46 @@ impl App {
         };
     }
 
+    /// Run instructions until the target address is reached, for a machine
+    /// with no temporary breakpoint of its own.
+    fn step_to(&mut self, target: u16) {
+        let mut guard = 0u32;
+        while guard < 20_000_000 {
+            self.step_machine();
+            guard += 1;
+            let pc = self.cpu().pc;
+            if pc == target {
+                break;
+            }
+            if self.breakpoints().contains(&pc) {
+                self.status = format!("Breakpoint at ${pc:04X} inside the call");
+                self.running = false;
+                self.dbg.follow_pc = true;
+                return;
+            }
+        }
+        self.running = false;
+        self.dbg.follow_pc = true;
+        self.status = format!("Stepped over to ${:04X}", self.cpu().pc);
+    }
+
     /// Run until the current subroutine returns (SP back above where it is now).
     pub fn step_out(&mut self) {
-        let sp0 = self.spec.cpu.sp;
+        let sp0 = self.cpu().sp;
+        if self.on_zx81() {
+            let mut guard = 0u32;
+            while guard < 20_000_000 {
+                self.step_machine();
+                guard += 1;
+                if self.cpu().sp > sp0 {
+                    break;
+                }
+            }
+            self.running = false;
+            self.dbg.follow_pc = true;
+            self.status = format!("Returned to ${:04X}", self.cpu().pc);
+            return;
+        }
         let was_slow = self.spec.bus.slow.enabled;
         self.spec.bus.slow.enabled = false;
         let mut guard = 0u32;
@@ -143,7 +184,7 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             app.step_out();
         }
         if ui.button("↺ Reset").clicked() {
-            app.spec.reset();
+            app.reset_machine();
             app.status = "Reset".into();
         }
         ui.separator();
@@ -174,7 +215,7 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn registers(app: &mut App, ui: &mut egui::Ui) {
-    let c = &app.spec.cpu;
+    let c = app.cpu();
     let mono = |ui: &mut egui::Ui, s: String| ui.label(RichText::new(s).monospace());
 
     egui::Grid::new("regs").num_columns(4).show(ui, |ui| {
@@ -219,25 +260,40 @@ fn registers(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
+    let (frame, t, frame_t) = app.machine_clock();
     ui.label(
         RichText::new(format!(
-            "frame {}   T {:5}/{}   instructions {}",
-            app.spec.bus.frame,
-            app.spec.bus.tstates,
-            app.spec.bus.frame_t(),
-            app.spec.cpu.instructions
+            "frame {frame}   T {t:5}/{frame_t}   instructions {}",
+            app.cpu().instructions
         ))
         .monospace(),
     );
 
     memory_map(app, ui);
-    if app.spec.bus.model.has_ay() {
+    if !app.on_zx81() && app.spec.bus.model.has_ay() {
         ay_registers(app, ui);
     }
 }
 
 /// What each 16K slot currently points at, and the 128K paging latch.
 fn memory_map(app: &mut App, ui: &mut egui::Ui) {
+    if app.on_zx81() {
+        // No paging to speak of: the ROM is in the bottom page and the RAM in
+        // the next, and both are mirrored above $8000.
+        let ram = app.zx81_ram.name();
+        let rom_k = app
+            .zx81
+            .as_ref()
+            .map(|zx| zx.bus.rom.len() / 1024)
+            .unwrap_or(8);
+        ui.label(
+            RichText::new(format!(
+                "{ram}  $0000:ROM ({rom_k}K)  $4000:RAM  $8000:mirror of $0000"
+            ))
+            .monospace(),
+        );
+        return;
+    }
     let bus = &app.spec.bus;
     let slot_name = |slot: Slot| match slot {
         Slot::Rom(p) => format!("ROM{p}"),
@@ -337,7 +393,7 @@ fn ay_registers(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn disassembly(app: &mut App, ui: &mut egui::Ui) {
-    let pc = app.spec.cpu.pc;
+    let pc = app.cpu().pc;
     if app.dbg.follow_pc {
         app.dbg.view_addr = pc;
     }
@@ -360,9 +416,22 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
-    let peek = |a: u16| app.spec.bus.peek_raw(a);
+    let peek = |a: u16| app.peek(a);
     // Start a little above the anchor, aligned to a real opcode boundary.
     let mut addr = disasm::sync_start(&peek, app.dbg.view_addr, 12);
+
+    // Take a copy of the bytes on show, so the listing can be drawn without
+    // holding a borrow of the machine while the rest of the window is built.
+    let base = addr;
+    let window: Vec<u8> = (0..app.dbg.lines * 4 + 8)
+        .map(|i| app.peek(base.wrapping_add(i as u16)))
+        .collect();
+    let peek = |a: u16| {
+        window
+            .get(a.wrapping_sub(base) as usize)
+            .copied()
+            .unwrap_or(0)
+    };
 
     egui::ScrollArea::vertical()
         .id_salt("disasm")
@@ -372,7 +441,7 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
             for _ in 0..app.dbg.lines {
                 let insn = disasm::disasm(&peek, addr);
                 let is_pc = addr == pc;
-                let has_bp = app.spec.breakpoints.contains(&addr);
+                let has_bp = app.breakpoints().contains(&addr);
                 let bytes: String = insn
                     .bytes
                     .iter()
@@ -402,10 +471,10 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                 addr = addr.wrapping_add(insn.len.max(1) as u16);
             }
             if let Some(a) = clicked {
-                if let Some(i) = app.spec.breakpoints.iter().position(|&b| b == a) {
-                    app.spec.breakpoints.remove(i);
+                if let Some(i) = app.breakpoints().iter().position(|&b| b == a) {
+                    app.breakpoints_mut().remove(i);
                 } else {
-                    app.spec.breakpoints.push(a);
+                    app.breakpoints_mut().push(a);
                 }
             }
         });
@@ -424,18 +493,18 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
             || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
         if add {
             if let Ok(a) = u16::from_str_radix(app.dbg.bp_text.trim().trim_start_matches('$'), 16) {
-                if !app.spec.breakpoints.contains(&a) {
-                    app.spec.breakpoints.push(a);
+                if !app.breakpoints().contains(&a) {
+                    app.breakpoints_mut().push(a);
                 }
                 app.dbg.bp_text.clear();
             }
         }
         if ui.button("Clear all").clicked() {
-            app.spec.breakpoints.clear();
+            app.breakpoints_mut().clear();
         }
     });
     let mut remove: Option<usize> = None;
-    for (i, bp) in app.spec.breakpoints.clone().iter().enumerate() {
+    for (i, bp) in app.breakpoints().clone().iter().enumerate() {
         ui.horizontal(|ui| {
             ui.monospace(format!("${bp:04X}"));
             if ui.small_button("✖").clicked() {
@@ -444,7 +513,7 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     if let Some(i) = remove {
-        app.spec.breakpoints.remove(i);
+        app.breakpoints_mut().remove(i);
     }
 
     ui.separator();
@@ -462,10 +531,10 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
             }
         }
         if ui.small_button("HL").clicked() {
-            app.dbg.mem_addr = app.spec.cpu.hl();
+            app.dbg.mem_addr = app.cpu().hl();
         }
         if ui.small_button("SP").clicked() {
-            app.dbg.mem_addr = app.spec.cpu.sp;
+            app.dbg.mem_addr = app.cpu().sp;
         }
     });
     egui::ScrollArea::vertical()
@@ -477,14 +546,11 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
                 let addr = base.wrapping_add(row * 8);
                 let mut line = format!("{addr:04X}  ");
                 for i in 0..8u16 {
-                    line.push_str(&format!(
-                        "{:02X} ",
-                        app.spec.bus.peek_raw(addr.wrapping_add(i))
-                    ));
+                    line.push_str(&format!("{:02X} ", app.peek(addr.wrapping_add(i))));
                 }
                 line.push(' ');
                 for i in 0..8u16 {
-                    let b = app.spec.bus.peek_raw(addr.wrapping_add(i));
+                    let b = app.peek(addr.wrapping_add(i));
                     line.push(if (0x20..0x7f).contains(&b) {
                         b as char
                     } else {

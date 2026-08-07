@@ -165,9 +165,17 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
             ));
         }
         None => {
+            // Either the block makes no sound — a group marker or a text
+            // block — or the tape has run off the end.
+            let finished = app.tape_ref().is_some_and(|t| t.finished());
+            let text = if finished {
+                "the tape has reached the end"
+            } else {
+                "this block takes no time to play"
+            };
             ui.add_enabled(
                 false,
-                egui::ProgressBar::new(0.0).text("this block takes no time to play"),
+                egui::ProgressBar::new(if finished { 1.0 } else { 0.0 }).text(text),
             );
         }
     }
