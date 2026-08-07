@@ -178,3 +178,78 @@ fn the_ram_map_lists_one_rom_and_one_ram_for_a_zx81() {
     let names: Vec<&str> = chunks.iter().map(|c| c.label.as_str()).collect();
     assert_eq!(names, vec!["ROM", "RAM"], "a ZX81 has nothing to page");
 }
+
+#[test]
+fn the_heat_maps_fade_on_a_zx81() {
+    let Some(mut app) = zx81_app() else {
+        return;
+    };
+    app.show_ram_map = true;
+    app.running = true;
+    let mut h = harness_for(app);
+    h.run_steps(5);
+
+    let hottest = |app: &App| -> u8 {
+        (0..0x2000u16)
+            .map(|a| app.tracker().exec_heat[app.phys_index(a)])
+            .max()
+            .unwrap_or(0)
+    };
+    let running_hot = hottest(h.state());
+    assert!(
+        running_hot > 200,
+        "the ROM is being executed, so it should be lit up: {running_hot}"
+    );
+
+    // Stop the machine: nothing is touched now, so the marks must fade away
+    // rather than staying lit for good.
+    h.state_mut().running = false;
+    h.run_steps(3);
+    let after_a_moment = hottest(h.state());
+    assert!(
+        after_a_moment < running_hot,
+        "the heat did not fade at all: still {after_a_moment}"
+    );
+
+    for _ in 0..60 {
+        h.step();
+    }
+    let later = hottest(h.state());
+    assert!(
+        later < after_a_moment,
+        "the heat stopped fading at {after_a_moment}, now {later}"
+    );
+}
+
+#[test]
+fn the_address_space_lights_up_where_the_zx81_has_been() {
+    let Some(mut app) = zx81_app() else {
+        return;
+    };
+    app.show_ram_map = true;
+    app.running = true;
+    let mut h = harness_for(app);
+    h.run_steps(5);
+
+    // One pixel per byte of the address space, RGBA: red is writes, green
+    // reads, blue executes, over a dim floor that marks ROM from RAM.
+    let image = h.state().ram.image().to_vec();
+    assert_eq!(image.len(), 65536 * 4, "one pixel per byte");
+
+    let lit = |from: usize, to: usize, channel: usize| -> usize {
+        (from..to)
+            .filter(|addr| image[addr * 4 + channel] > 40)
+            .count()
+    };
+    assert!(
+        lit(0x0000, 0x2000, 2) > 0,
+        "no executed bytes shown in the ROM"
+    );
+    assert!(lit(0x0000, 0x2000, 1) > 0, "no reads shown in the ROM");
+    assert!(lit(0x4000, 0x8000, 0) > 0, "no writes shown in the RAM");
+    // The mirror above $8000 is the same memory, so it lights up with it.
+    assert!(
+        lit(0x8000, 0xa000, 2) > 0,
+        "the mirror should show the ROM's use"
+    );
+}

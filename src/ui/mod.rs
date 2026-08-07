@@ -1267,7 +1267,13 @@ impl App {
             Some(zx) => zx.bus.tape_tick(),
             None => self.spec.bus.tape_tick(),
         }
-        self.spec.bus.frame_visuals();
+        match &mut self.zx81 {
+            // The back-buffer detector watches the Spectrum's display file, so
+            // there is nothing for it to do here; the heat maps still have to
+            // fade, or every byte the ROM has ever touched stays lit.
+            Some(zx) => zx.bus.tracker.fade(),
+            None => self.spec.bus.frame_visuals(),
+        }
         self.draw_screen_texture(&ctx);
 
         // The debug windows are rendered before this viewport's own panels:

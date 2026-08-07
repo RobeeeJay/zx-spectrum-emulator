@@ -54,6 +54,13 @@ pub struct RamMapState {
     rows: usize,
 }
 
+impl RamMapState {
+    /// The image last drawn, as RGBA. One pixel per byte.
+    pub fn image(&self) -> &[u8] {
+        &self.pixels
+    }
+}
+
 /// What the cursor is over.
 #[derive(Clone)]
 pub struct Hover {
