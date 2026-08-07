@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>ZX Spectrum Emulator — UX Concept</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&family=Caveat:wght@600;700&display=swap');
 
 :root{
   --ink:#e8e4d8;
@@ -370,26 +370,22 @@ body{
 .deck{
   background:linear-gradient(180deg,#2e2b27,#201e1b);
   border-radius:8px;
-  padding:16px;
+  padding:18px 20px;
   box-shadow:inset 0 1px 0 var(--bevel-hi), inset 0 -2px 0 var(--bevel-lo);
-  display:flex;
-  gap:18px;
-  align-items:center;
 }
-.reel{
-  width:64px;height:64px;border-radius:50%;
-  background:
-    radial-gradient(circle at center, #0d0c0b 0 8%, transparent 9%),
-    repeating-conic-gradient(#3a3632 0deg 15deg, #262320 15deg 30deg);
-  box-shadow:0 0 0 3px #0d0c0b, inset 0 0 8px rgba(0,0,0,.6);
-  position:relative;
-  flex:none;
+/* TDK-style blank cassette, drawn as SVG so it scales cleanly at any size */
+.cassette{
+  width:100%;
+  max-width:420px;
+  margin:0 auto;
+  filter:drop-shadow(0 6px 12px rgba(0,0,0,.45));
 }
-.reel::after{
-  content:"";position:absolute;inset:26px;border-radius:50%;background:#0d0c0b;
+.cassette svg{display:block;width:100%;height:auto;}
+.cassette .hw-title{
+  font-family:'Caveat', cursive;
+  font-weight:700;
 }
-.tape-mid{flex:1;min-width:0;}
-.transport{display:flex;gap:8px;margin-top:12px;}
+.transport{display:flex;gap:8px;justify-content:center;}
 .transport .btn{font-size:14px;padding:6px 12px;min-width:38px;text-align:center;}
 .progress{
   height:8px;border-radius:4px;background:#100f0e;overflow:hidden;
@@ -618,19 +614,111 @@ body{
       </div>
       <div class="win-body">
         <div class="deck">
-          <div class="reel"></div>
-          <div class="tape-mid">
-            <div style="font-weight:700;font-size:12px;">Manic Miner (1983)(Bug-Byte).tzx</div>
-            <div class="transport">
-              <button class="btn">▶</button>
-              <button class="btn">■</button>
-              <button class="btn small" style="margin-left:auto;">⏮</button>
-              <button class="btn small">⏭</button>
-            </div>
-            <div class="progress"><div class="fill"></div></div>
-            <div class="callout" style="margin-top:6px;">block 5 / 14 — Loader</div>
+          <div class="cassette">
+            <svg viewBox="0 0 300 192" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#f1eee2"/>
+                  <stop offset="1" stop-color="#cfc9b4"/>
+                </linearGradient>
+                <linearGradient id="window" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#211f1c"/>
+                  <stop offset="1" stop-color="#070706"/>
+                </linearGradient>
+                <radialGradient id="screw" cx="0.35" cy="0.3" r="0.8">
+                  <stop offset="0" stop-color="#d8d3c0"/>
+                  <stop offset="1" stop-color="#726c5a"/>
+                </radialGradient>
+                <radialGradient id="hub" cx="0.35" cy="0.3" r="0.9">
+                  <stop offset="0" stop-color="#e3ded0"/>
+                  <stop offset="1" stop-color="#9b9581"/>
+                </radialGradient>
+                <radialGradient id="tapeSupply" cx="0.35" cy="0.3" r="0.85">
+                  <stop offset="0" stop-color="#94674080" />
+                  <stop offset="0" stop-color="#8a5f3c"/>
+                  <stop offset="1" stop-color="#3b2410"/>
+                </radialGradient>
+                <radialGradient id="tapeTake" cx="0.35" cy="0.3" r="0.85">
+                  <stop offset="0" stop-color="#8a5f3c"/>
+                  <stop offset="1" stop-color="#3b2410"/>
+                </radialGradient>
+              </defs>
+
+              <!-- shell body -->
+              <rect x="3" y="3" width="294" height="186" rx="9" fill="url(#shell)" stroke="#7d775f" stroke-width="1"/>
+
+              <!-- label -->
+              <rect x="18" y="12" width="264" height="86" rx="3" fill="#faf8f0" stroke="#c9c3ac" stroke-width="1"/>
+              <rect x="18" y="88" width="264" height="10" fill="#c81f1f"/>
+              <rect x="24" y="22" width="46" height="18" rx="2" fill="#c81f1f"/>
+              <text x="47" y="35" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="12" fill="#fff">TDK</text>
+              <text x="258" y="34" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="10.5" letter-spacing="1" fill="#4c4738">D&#8201;·&#8201;90</text>
+              <line x1="24" y1="46" x2="276" y2="46" stroke="#d6d0ba" stroke-width="1"/>
+              <text class="hw-title" x="34" y="76" font-size="26" fill="#1f3f8f" transform="rotate(-2 150 68)">Manic Miner</text>
+              <line x1="24" y1="82" x2="276" y2="82" stroke="#d6d0ba" stroke-width="1"/>
+
+              <!-- top screws -->
+              <circle cx="42" cy="106" r="4.5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
+              <circle cx="258" cy="106" r="4.5" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
+              <line x1="39" y1="106" x2="45" y2="106" stroke="#4a4636" stroke-width="0.75"/>
+              <line x1="255" y1="106" x2="261" y2="106" stroke="#4a4636" stroke-width="0.75"/>
+
+              <!-- reel window -->
+              <rect x="42" y="98" width="216" height="76" rx="38" fill="url(#window)" stroke="#000" stroke-width="1"/>
+
+              <!-- supply reel (left) : 5/14 played, most tape remains -->
+              <g transform="translate(102,136)">
+                <circle r="26" fill="url(#tapeSupply)" stroke="#1c0f04" stroke-width="0.75"/>
+                <circle r="26" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
+                <circle r="19" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
+                <circle r="12" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
+                <circle r="10.5" fill="url(#hub)" stroke="#4a4636" stroke-width="0.75"/>
+                <circle r="3" fill="#0d0c0b"/>
+                <g fill="#0d0c0b">
+                  <rect x="-1.1" y="-9.5" width="2.2" height="4" rx="0.6"/>
+                  <rect x="-1.1" y="5.5" width="2.2" height="4" rx="0.6" transform="rotate(120)"/>
+                  <rect x="-1.1" y="5.5" width="2.2" height="4" rx="0.6" transform="rotate(240)"/>
+                </g>
+              </g>
+
+              <!-- take-up reel (right) : less tape wound on yet -->
+              <g transform="translate(198,136)">
+                <circle r="17.5" fill="url(#tapeTake)" stroke="#1c0f04" stroke-width="0.75"/>
+                <circle r="17.5" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
+                <circle r="12" fill="none" stroke="#2a1a09" stroke-width="0.5" opacity="0.5"/>
+                <circle r="10.5" fill="url(#hub)" stroke="#4a4636" stroke-width="0.75"/>
+                <circle r="3" fill="#0d0c0b"/>
+                <g fill="#0d0c0b">
+                  <rect x="-1.1" y="-9.5" width="2.2" height="4" rx="0.6"/>
+                  <rect x="-1.1" y="5.5" width="2.2" height="4" rx="0.6" transform="rotate(120)"/>
+                  <rect x="-1.1" y="5.5" width="2.2" height="4" rx="0.6" transform="rotate(240)"/>
+                </g>
+              </g>
+
+              <!-- tape leader across the mouth of the cassette -->
+              <path d="M 80,158 Q 150,180 220,156" fill="none" stroke="#b98d5d" stroke-width="1.6"/>
+              <circle cx="84" cy="160" r="3" fill="url(#hub)" stroke="#4a4636" stroke-width="0.6"/>
+              <circle cx="216" cy="158" r="3" fill="url(#hub)" stroke="#4a4636" stroke-width="0.6"/>
+              <rect x="140" y="176" width="20" height="7" rx="1.5" fill="#0d0c0b"/>
+
+              <!-- bottom screws + write-protect tabs -->
+              <circle cx="150" cy="184" r="4" fill="url(#screw)" stroke="#5c5745" stroke-width="0.75"/>
+              <rect x="26" y="176" width="20" height="11" rx="2" fill="#d9d4c1" stroke="#8f8a76" stroke-width="0.75"/>
+              <rect x="254" y="176" width="20" height="11" rx="2" fill="#d9d4c1" stroke="#8f8a76" stroke-width="0.75"/>
+              <circle cx="30" cy="181.5" r="3.2" fill="url(#screw)" stroke="#5c5745" stroke-width="0.6"/>
+              <circle cx="270" cy="181.5" r="3.2" fill="url(#screw)" stroke="#5c5745" stroke-width="0.6"/>
+            </svg>
           </div>
-          <div class="reel"></div>
+
+          <div class="progress" style="margin-top:14px;"><div class="fill"></div></div>
+          <div class="callout" style="margin-top:6px;text-align:center;">block 5 / 14 — Loader</div>
+
+          <div class="transport" style="margin-top:12px;">
+            <button class="btn small">⏮</button>
+            <button class="btn">▶</button>
+            <button class="btn">■</button>
+            <button class="btn small">⏭</button>
+          </div>
         </div>
 
         <div class="scope">
@@ -641,8 +729,8 @@ body{
         </div>
 
         <div class="row" style="margin-top:10px;">
-          <span class="checkbox checked"><span class="box"></span>Boost speed while playing</span>
-          <span class="checkbox checked"><span class="box"></span>Play on load</span>
+          <span class="chip on"><span class="led"></span>Boost speed while playing</span>
+          <span class="chip on"><span class="led"></span>Play on load</span>
         </div>
 
         <div class="block-list">

@@ -18,6 +18,11 @@ use crate::z80::{Bus, Z80};
 pub const CPU_HZ: f64 = 3_250_000.0;
 /// T-states in one television line.
 pub const LINE_T: u32 = 207;
+/// How long the sync has to be held to count as a vertical sync rather than a
+/// stray pulse. The ROM holds it for several lines; the shortest an IN/OUT pair
+/// can manage is a couple of dozen T-states.
+pub const VSYNC_MIN_T: u64 = LINE_T as u64;
+
 /// Lines in a full frame. The ROM decides this, but a sane display is 312.
 pub const LINES: u32 = 312;
 /// Two pixels per T-state, as on the Spectrum.
@@ -68,6 +73,9 @@ pub struct Zx81Bus {
     /// Three-bit counter selecting the pixel row within a character.
     pub lcnt: u8,
     pub vsync: bool,
+    /// When the sync went low, so a pulse too short to be a vertical sync can
+    /// be told from a real one.
+    vsync_start: u64,
     /// The NMI generator, which the ROM uses to time the borders in SLOW mode.
     pub nmi_on: bool,
     pub nmi_pending: bool,
@@ -108,6 +116,7 @@ impl Zx81Bus {
             line: 0,
             lcnt: 0,
             vsync: false,
+            vsync_start: 0,
             nmi_on: false,
             nmi_pending: false,
             frame: 0,
@@ -152,6 +161,11 @@ impl Zx81Bus {
             let i = (addr & self.ram_mask) as usize;
             self.ram[i] = value;
         }
+    }
+
+    /// Advance the clock without the CPU, for tests that drive the ULA alone.
+    pub fn tick_for_test(&mut self, t: u32) {
+        self.tick(t);
     }
 
     /// Advance the clock, generating horizontal sync — and an NMI with it when
@@ -254,6 +268,9 @@ impl Zx81Bus {
 
     pub fn start_vsync(&mut self) {
         // While the sync is low the line counter is held in reset.
+        if !self.vsync {
+            self.vsync_start = self.tstates;
+        }
         self.vsync = true;
         self.lcnt = 0;
     }
@@ -273,8 +290,17 @@ impl Zx81Bus {
     }
 
     pub fn stop_vsync(&mut self) {
-        if self.vsync {
-            self.vsync = false;
+        if !self.vsync {
+            return;
+        }
+        self.vsync = false;
+        // Only a sync held for a while pulls the picture back to the top. A
+        // program that reads the keyboard and then writes a port — which is
+        // what the hi-res routines do, several times a line — raises the sync
+        // for a few microseconds, and a television ignores that. Ending the
+        // frame on it instead would restart the picture hundreds of times a
+        // second and nothing but the first row would ever be drawn.
+        if self.tstates - self.vsync_start >= VSYNC_MIN_T {
             self.end_frame();
         }
     }

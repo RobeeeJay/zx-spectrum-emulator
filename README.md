@@ -301,7 +301,10 @@ screen.
 
 Around that sit the rest of the ULA's jobs: the three-bit line counter that
 picks the row within a character and is held in reset while the vertical sync is
-low, the sync itself (started by reading port `$FE`, ended by any `OUT`), the NMI
+low, the sync itself (started by reading port `$FE`, ended by any `OUT`, and
+only pulling the picture back to the top if it was held for at least a line —
+the hi-res routines raise it for a few microseconds many times a frame and a
+television ignores that), the NMI
 generator that times the borders in SLOW mode (`$FE` on, `$FD` off, firing once
 a line), and the interrupt, which comes from bit 6 of the refresh register
 falling — which is how the ROM counts out a character row.

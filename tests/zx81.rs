@@ -218,11 +218,37 @@ fn reading_the_keyboard_starts_the_sync_and_a_write_ends_it() {
     zx.bus.io_read(0xfe);
     assert_eq!(zx.bus.lcnt, 0, "which holds the line counter at zero");
 
+    // Held for as long as the ROM holds it, which is several lines.
+    zx.bus.tick_for_test(LINE_T * 4);
     let frame = zx.bus.frame;
     zx.bus.io_write(0xff, 0);
     assert!(!zx.bus.vsync, "any OUT ends it");
     assert_eq!(zx.bus.frame, frame + 1, "and that finishes the picture");
     assert_eq!(zx.bus.line, 0, "with the raster back at the top");
+}
+
+#[test]
+fn a_brief_sync_pulse_does_not_restart_the_picture() {
+    // The hi-res routines read the keyboard and write a port several times a
+    // line. That raises the sync for a few microseconds, which a television
+    // ignores; treating it as a vertical sync would restart the picture
+    // hundreds of times a second and only the top row would ever be drawn.
+    let mut zx = Zx81::new(Ram::K16);
+    zx.bus.tick_for_test(LINE_T * 8);
+    let (frame, line) = (zx.bus.frame, zx.bus.line);
+
+    for _ in 0..20 {
+        zx.bus.io_read(0xfe); // sync on
+        zx.bus.io_write(0xff, 0); // and straight off again
+    }
+
+    assert_eq!(zx.bus.frame, frame, "the picture was restarted");
+    assert!(
+        zx.bus.line >= line,
+        "the raster jumped back to the top: {} to {}",
+        line,
+        zx.bus.line
+    );
 }
 
 #[test]
@@ -302,6 +328,12 @@ fn the_interrupt_comes_from_bit_six_of_the_refresh_register() {
 /// CPU's fetches put them — so it is worth driving directly rather than only
 /// through a ROM.
 fn synthetic_display() -> Zx81 {
+    synthetic_display_with(false)
+}
+
+/// `sync_pulses` makes the driver read the keyboard and write a port at the
+/// start of every line, as the hi-res routines do.
+fn synthetic_display_with(sync_pulses: bool) -> Zx81 {
     let mut zx = Zx81::new(Ram::K16);
 
     // A character whose bitmap is solid on every row, so any pixel drawn is
@@ -318,11 +350,20 @@ fn synthetic_display() -> Zx81 {
         0xed, 0x4f, // LD R,A
     ];
     rom[..driver.len()].copy_from_slice(&driver);
-    rom[14] = 0x21; // LD HL,$C100  the display file, through the mirror
-    rom[15] = 0x00;
-    rom[16] = 0xc1;
-    rom[17] = 0xe9; // JP (HL)      hand the display file to the ULA
-                    // The interrupt handler drops the return address and starts the next line.
+    // The per-line code starts at $000A, where the interrupt handler sends it.
+    let mut at = driver.len();
+    if sync_pulses {
+        rom[at] = 0xdb; // IN A,($FE)   raises the sync, as hi-res code does
+        rom[at + 1] = 0xfe;
+        rom[at + 2] = 0xd3; // OUT ($FF),A  and drops it a few T-states later
+        rom[at + 3] = 0xff;
+        at += 4;
+    }
+    rom[at] = 0x21; // LD HL,$C100  the display file, through the mirror
+    rom[at + 1] = 0x00;
+    rom[at + 2] = 0xc1;
+    rom[at + 3] = 0xe9; // JP (HL)      hand the display file to the ULA
+                        // The interrupt handler drops the return address and starts the next line.
     rom[0x38] = 0xe1; // POP HL
     rom[0x39] = 0xfb; // EI
     rom[0x3a] = 0xc3; // JP $000A
@@ -605,4 +646,30 @@ fn a_p_file_lands_at_4009() {
     zx.load_p(&image).unwrap();
     assert_eq!(zx.bus.mem(0x4009), 0xab);
     assert_eq!(zx.bus.mem(0x4009 + 31), 0xcd);
+}
+
+#[test]
+fn sync_pulses_between_lines_do_not_stop_the_picture_being_drawn() {
+    // The hi-res games raise and drop the sync several times a line while
+    // building the picture. If each pulse were taken for a vertical sync the
+    // raster would keep jumping back to the top and only the first row would
+    // ever appear — which is exactly what a blank screen looks like.
+    let mut plain = synthetic_display_with(false);
+    let mut pulsing = synthetic_display_with(true);
+    for _ in 0..400 {
+        plain.run(plain.frame_t());
+        pulsing.run(pulsing.frame_t());
+    }
+
+    let rows = |zx: &Zx81| -> usize {
+        (0..RASTER_H)
+            .filter(|y| (0..RASTER_W).any(|x| zx.bus.fb_prev[y * RASTER_W + x] != 0))
+            .count()
+    };
+    let (plain_rows, pulsing_rows) = (rows(&plain), rows(&pulsing));
+    assert!(plain_rows > 100, "the plain driver drew {plain_rows} rows");
+    assert!(
+        pulsing_rows > plain_rows / 2,
+        "with sync pulses only {pulsing_rows} rows were drawn, against {plain_rows} without"
+    );
 }
