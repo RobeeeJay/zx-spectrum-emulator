@@ -1,7 +1,7 @@
 //! Tape window behaviour: a freshly loaded tape stays stopped, and the block
 //! list keeps the block being played in view.
 
-use egui_kittest::kittest::NodeT;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use zx_spectrum_emulator::machine::Spectrum;
 use zx_spectrum_emulator::tape::{Block, Tape};
@@ -463,5 +463,147 @@ fn the_tape_window_lists_the_zx81_block() {
     assert!(
         text.contains("CHESSQUEEN"),
         "the block should name the program:\n{text}"
+    );
+}
+
+#[test]
+fn pressing_play_on_a_zx81_starts_the_tape_on_the_zx81s_clock() {
+    let Some(mut app) = zx81_app() else {
+        return;
+    };
+    let path = std::path::Path::new("tapes/zx81/1KZXChess.1.ChessQueen.p");
+    if !path.exists() {
+        return;
+    }
+    app.load_path(path);
+    // Real time, so the only thing that can move the tape a long way at once
+    // is the bug being tested for.
+    *app.tape_boost_mut() = false;
+    // Let the ZX81 get well ahead of the Spectrum's stopped clock, which is
+    // what made Play look like it had fast-forwarded through the tape.
+    app.running = true;
+    let mut harness = harness_for(app);
+    for _ in 0..30 {
+        harness.step();
+    }
+    {
+        let app = harness.state();
+        assert!(
+            app.machine_t() > 1_000_000,
+            "the ZX81 should have run for a while, not {}",
+            app.machine_t()
+        );
+        assert!(
+            app.machine_t() > app.spec.bus.total_t(),
+            "the two clocks should have diverged"
+        );
+    }
+
+    harness.get_by_label("▶ Play").click();
+    harness.step();
+    for _ in 0..10 {
+        harness.step();
+    }
+
+    let app = harness.state();
+    let tape = app.tape_ref().unwrap();
+    assert!(tape.playing, "the tape should be playing");
+    // A few frames in, a tape that takes twenty seconds has barely started.
+    let progress = tape.block_progress().unwrap_or(1.0);
+    assert!(
+        progress < 0.05,
+        "the tape jumped {:.0}% in on Play",
+        progress * 100.0
+    );
+    assert!(tape.pulses > 0, "no pulses came out");
+
+    // The oscilloscope sweeps from the newest edge that still has a whole
+    // window of signal after it. Against the wrong clock every edge is in the
+    // future, nothing triggers, and the trace is a flat line.
+    let now = app.machine_t();
+    let window = (app.cpu_hz() * 0.001) as u64; // a millisecond sweep
+    let trigger = tape
+        .edges
+        .iter()
+        .rev()
+        .find(|(t, l)| *l && t.saturating_add(window) <= now);
+    let trigger = trigger.expect("nothing for the oscilloscope to trigger on");
+    assert!(
+        trigger.0 + 20 * window > now,
+        "the newest usable edge is {} T-states back — the trace would be stale",
+        now - trigger.0
+    );
+}
+
+/// The whole thing through the app's own loop: type `LOAD ""` at a ZX81,
+/// press Play in the tape window, and let it run until the program arrives.
+/// This is the path that broke when the tape was played against the wrong
+/// machine's clock.
+#[test]
+fn a_zx81_loads_a_program_through_the_app() {
+    let Some(mut app) = zx81_app() else {
+        return;
+    };
+    let path = std::path::Path::new("tapes/zx81/1KZXChess.1.ChessQueen.p");
+    let Ok(file) = std::fs::read(path) else {
+        return;
+    };
+    app.load_path(path);
+    app.running = true;
+    let mut harness = harness_for(app);
+
+    // Give the ROM time to reach its cursor.
+    for _ in 0..60 {
+        harness.step();
+    }
+
+    // A key has to be held for a few frames, as on the real keyboard.
+    fn tap(harness: &mut Harness<'_, App>, key: egui::Key, shift: bool) {
+        let modifiers = egui::Modifiers {
+            shift,
+            ..Default::default()
+        };
+        harness.key_down_modifiers(modifiers, key);
+        for _ in 0..8 {
+            harness.step();
+        }
+        harness.key_up_modifiers(modifiers, key);
+        for _ in 0..8 {
+            harness.step();
+        }
+    }
+
+    tap(&mut harness, egui::Key::J, false); // LOAD
+    tap(&mut harness, egui::Key::P, true); // "
+    tap(&mut harness, egui::Key::P, true); // "
+    tap(&mut harness, egui::Key::Enter, false);
+
+    harness.get_by_label("▶ Play").click();
+    harness.step();
+    assert!(
+        harness.state().tape_ref().unwrap().playing,
+        "Play did nothing"
+    );
+
+    // Twenty-odd seconds of tape at the 8x boost, with room to spare.
+    for _ in 0..4000 {
+        harness.step();
+        if !harness.state().tape_is_playing() {
+            break;
+        }
+    }
+
+    let app = harness.state();
+    assert!(!app.tape_is_playing(), "the tape never reached the end");
+    let zx = app.zx81.as_ref().expect("still a ZX81");
+    // The BASIC program area, which the running program leaves alone.
+    let basic = 0x74;
+    let loaded: Vec<u8> = (basic..file.len())
+        .map(|i| zx.bus.ram[(0x0009 + i) & 0x3fff])
+        .collect();
+    assert_eq!(
+        loaded,
+        file[basic..],
+        "the program in memory is not the one on the tape"
     );
 }

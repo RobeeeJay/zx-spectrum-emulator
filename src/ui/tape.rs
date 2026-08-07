@@ -59,7 +59,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn transport(app: &mut App, ui: &mut egui::Ui) {
-    let now = app.spec.bus.total_t();
+    let now = app.machine_t();
     let mut action: Option<i32> = None;
     let (name, playing, block, count, pulses, stopped_by_block) = {
         let t = app.tape_ref().unwrap();
@@ -201,7 +201,7 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         ui.selectable_value(&mut app.tape.trigger, Trigger::Off, "Free run");
     });
 
-    let now = app.spec.bus.total_t();
+    let now = app.machine_t();
     let window_t = ((app.tape.window_us as f64) * app.cpu_hz() / 1_000_000.0).max(1.0) as u64;
     let tape = app.tape_ref().unwrap();
 
@@ -387,7 +387,7 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
     app.tape.scroll_to_current = false;
 
     if let Some(i) = clicked {
-        let now = app.spec.bus.total_t();
+        let now = app.machine_t();
         let t = app.tape_mut().unwrap();
         t.seek(i);
         if t.playing {

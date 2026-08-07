@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ZX Spectrum Emulator — UX Concept</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+:root{
+  --ink:#e8e4d8;
+  --dim:#9a958a;
+  --case:#242220;
+  --case-dark:#171615;
+  --case-light:#332f2c;
+  --panel:#1c1a18;
+  --lcd-bg:#0c1f14;
+  --lcd-fg:#5dff9e;
+  --amber:#ffb238;
+  --red:#e0433c;
+  --blue:#2062ff;
+  --magenta:#ff33e0;
+  --green:#0fbb4d;
+  --cyan:#22e0e0;
+  --yellow:#f4e230;
+  --white:#f4f2ea;
+  --bevel-hi: rgba(255,255,255,.09);
+  --bevel-lo: rgba(0,0,0,.55);
+}
+
+*{box-sizing:border-box;}
+
+body{
+  margin:0;
+  padding:48px 24px 80px;
+  background:
+    radial-gradient(circle at 15% 0%, #2b2925 0%, transparent 45%),
+    radial-gradient(circle at 85% 100%, #221f1d 0%, transparent 45%),
+    #171513;
+  font-family:'JetBrains Mono', monospace;
+  color:var(--ink);
+}
+
+.page-head{
+  max-width:1180px;
+  margin:0 auto 36px;
+}
+.page-head h1{
+  font-family:'Press Start 2P', monospace;
+  font-size:20px;
+  letter-spacing:1px;
+  margin:0 0 10px;
+  color:var(--white);
+  text-shadow: 2px 2px 0 #000;
+}
+.rainbow{
+  height:10px;
+  width:340px;
+  display:flex;
+  border-radius:2px;
+  overflow:hidden;
+  box-shadow:0 2px 4px rgba(0,0,0,.6);
+  margin-bottom:14px;
+}
+.rainbow div{flex:1;}
+.page-head p{
+  color:var(--dim);
+  max-width:640px;
+  line-height:1.6;
+  font-size:13px;
+}
+.page-head .tag{
+  display:inline-block;
+  margin-top:10px;
+  padding:3px 9px;
+  font-size:10px;
+  letter-spacing:.5px;
+  border:1px solid #443f3a;
+  border-radius:20px;
+  color:var(--dim);
+}
+
+.stack{
+  max-width:1180px;
+  margin:0 auto;
+  display:flex;
+  flex-direction:column;
+  gap:34px;
+}
+
+.grid2{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:34px;
+}
+
+/* ---------- window chrome ---------- */
+.win{
+  background:var(--case);
+  border-radius:10px;
+  box-shadow:
+    inset 0 1px 0 var(--bevel-hi),
+    inset 0 -3px 0 var(--bevel-lo),
+    0 18px 40px rgba(0,0,0,.55);
+  border:1px solid #0f0e0d;
+  overflow:hidden;
+}
+.win-bar{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:9px 14px;
+  background:linear-gradient(180deg, var(--case-light), var(--case));
+  border-bottom:1px solid #0f0e0d;
+}
+.rivets{display:flex;gap:5px;}
+.rivet{
+  width:9px;height:9px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%, #6b655c, #171615 70%);
+  box-shadow:0 1px 0 rgba(255,255,255,.08);
+}
+.win-title{
+  font-family:'Press Start 2P', monospace;
+  font-size:10px;
+  letter-spacing:.5px;
+  color:var(--white);
+  flex:1;
+  text-align:center;
+  padding-right:24px;
+}
+.win-body{padding:16px;}
+
+/* ---------- buttons / controls ---------- */
+.btn{
+  font-family:'JetBrains Mono', monospace;
+  font-size:11.5px;
+  color:var(--ink);
+  background:linear-gradient(180deg, #3a3632, #262320);
+  border:1px solid #100f0e;
+  border-radius:6px;
+  padding:7px 12px;
+  box-shadow: inset 0 1px 0 var(--bevel-hi), 0 2px 0 #0d0c0b;
+  cursor:default;
+}
+.btn.primary{
+  background:linear-gradient(180deg, #2a4e8a, #1c3766);
+  border-color:#0e1c33;
+  color:#eaf1ff;
+}
+.btn.small{padding:4px 8px;font-size:10.5px;border-radius:4px;}
+
+.segmented{
+  display:flex;
+  border:1px solid #100f0e;
+  border-radius:6px;
+  overflow:hidden;
+  box-shadow: inset 0 1px 0 var(--bevel-hi);
+}
+.segmented .seg{
+  padding:6px 10px;
+  font-size:11px;
+  background:#211f1c;
+  border-right:1px solid #100f0e;
+  color:var(--dim);
+  white-space:nowrap;
+}
+.segmented .seg:last-child{border-right:none;}
+.segmented .seg.active{
+  background:linear-gradient(180deg,#28e0e0,#149e9e);
+  color:#04211f;
+  font-weight:700;
+}
+.segmented .seg.disabled{
+  color:#5a564f;
+  font-style:italic;
+}
+
+.dropdown{
+  display:inline-flex;align-items:center;gap:10px;
+  font-size:11px;padding:7px 12px;border-radius:6px;
+  background:#211f1c;border:1px solid #100f0e;color:var(--ink);
+  box-shadow: inset 0 1px 0 var(--bevel-hi), 0 2px 0 #0d0c0b;
+  white-space:nowrap;
+}
+.dropdown .caret{color:var(--dim);font-size:8px;margin-left:2px;}
+
+.chip{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-size:10.5px;
+  padding:5px 9px 5px 7px;
+  border-radius:20px;
+  border:1px solid #100f0e;
+  background:#211f1c;
+  color:var(--dim);
+}
+.chip .led{
+  width:7px;height:7px;border-radius:50%;
+  background:#3a3632;
+  box-shadow:inset 0 0 0 1px #100f0e;
+}
+.chip.on{color:var(--white);border-color:#0e1c33;background:#1c2b3f;}
+.chip.on .led{background:var(--cyan);box-shadow:0 0 6px var(--cyan);}
+
+.toolbar{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:14px;
+  padding:12px 14px;
+  background:var(--panel);
+  border-bottom:1px solid #0f0e0d;
+}
+.toolbar .grp{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.toolbar .lbl{font-size:10px;color:var(--dim);letter-spacing:.5px;text-transform:uppercase;}
+.divider{width:1px;align-self:stretch;background:#100f0e;box-shadow:1px 0 0 var(--bevel-hi);}
+
+.rocker{
+  display:flex;align-items:center;gap:6px;
+  font-size:10.5px;color:var(--dim);
+}
+.rocker .switch{
+  width:30px;height:16px;border-radius:9px;
+  background:#100f0e;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.7);
+  position:relative;
+}
+.rocker .switch .nub{
+  position:absolute;top:2px;left:2px;
+  width:12px;height:12px;border-radius:50%;
+  background:linear-gradient(180deg,#514c46,#2a2622);
+}
+.rocker.on .switch{background:#124a3a;}
+.rocker.on .switch .nub{left:16px;background:linear-gradient(180deg,#7dffb0,#1f8f5c);}
+.rocker.on{color:var(--white);}
+
+/* ---------- screen ---------- */
+.crt-frame{
+  margin:16px 0 0;
+  padding:14px;
+  border-radius:6px;
+  background: linear-gradient(160deg, #29261f 0%, #17140f 60%, #0b0a08 100%);
+  box-shadow: inset 0 0 0 2px #000, 0 10px 24px rgba(0,0,0,.5);
+}
+.crt{
+  background:#000;
+  border-radius:2px;
+  aspect-ratio:4/3;
+  position:relative;
+  overflow:hidden;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  box-shadow:inset 0 0 60px rgba(0,0,0,.9);
+}
+.crt::after{
+  content:"";
+  position:absolute;inset:0;
+  background:repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px);
+  pointer-events:none;
+}
+.crt .boot{
+  font-family:'JetBrains Mono', monospace;
+  font-size:13px;
+  line-height:1.9;
+  color:var(--white);
+  text-align:left;
+}
+.crt .boot .k{color:var(--cyan);}
+.crt .boot .cur{
+  display:inline-block;width:9px;height:15px;
+  background:var(--white);
+  animation:blink 1s steps(1) infinite;
+  vertical-align:middle;
+}
+@keyframes blink{50%{opacity:0;}}
+
+.statusbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:8px 14px;
+  background:var(--case-dark);
+  font-size:11px;
+  border-top:1px solid #0f0e0d;
+}
+.statusbar .ok{color:var(--green);}
+.statusbar .err{color:var(--red);}
+.statusbar .meta{color:var(--dim);}
+
+/* ---------- LCD readouts (debugger) ---------- */
+.lcd{
+  background:var(--lcd-bg);
+  border-radius:5px;
+  padding:12px 14px;
+  box-shadow:inset 0 2px 6px rgba(0,0,0,.7), inset 0 0 0 1px #041108;
+}
+.reg-grid{
+  display:grid;
+  grid-template-columns:repeat(4, auto);
+  gap:6px 22px;
+  font-size:12px;
+  color:var(--lcd-fg);
+  text-shadow:0 0 6px rgba(93,255,158,.35);
+}
+.flags{
+  display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;
+}
+.flag{
+  width:26px;height:22px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;border-radius:4px;
+  background:#100f0e;color:#4a463f;
+  border:1px solid #050504;
+}
+.flag.lit{background:#3a1414;color:var(--red);box-shadow:0 0 6px rgba(224,67,60,.5);border-color:#4a1a17;}
+
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.row + .row{margin-top:10px;}
+
+.checkbox{
+  display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--dim);
+}
+.checkbox .box{
+  width:14px;height:14px;border-radius:3px;
+  background:#100f0e;box-shadow:inset 0 0 0 1px #000, inset 0 1px 2px rgba(0,0,0,.6);
+  display:flex;align-items:center;justify-content:center;
+}
+.checkbox.checked .box{background:#1c3766;}
+.checkbox.checked .box::after{content:"✓";font-size:10px;color:var(--cyan);}
+.checkbox.checked{color:var(--ink);}
+
+.slider{
+  height:5px;border-radius:4px;background:#100f0e;position:relative;flex:1;min-width:80px;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.6);
+}
+.slider .fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,#1c3766,#2062ff);border-radius:4px;}
+.slider .knob{
+  position:absolute;top:50%;transform:translate(-50%,-50%);
+  width:13px;height:13px;border-radius:50%;
+  background:linear-gradient(180deg,#7dabff,#2062ff);
+  box-shadow:0 0 0 2px #100f0e;
+}
+
+/* ---------- RAM map ---------- */
+.ram-grid{
+  display:grid;
+  grid-template-columns:repeat(5, 1fr);
+  gap:8px;
+}
+.page{
+  aspect-ratio:1;
+  border-radius:5px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-size:10.5px;
+  color:#0c0c0c;
+  font-weight:700;
+  border:1px solid rgba(0,0,0,.4);
+  position:relative;
+}
+.page span{font-size:8.5px;font-weight:400;margin-top:3px;color:rgba(0,0,0,.55);}
+.p-rom{background:linear-gradient(160deg,#c9c4b6,#a19c8f);}
+.p-cold{background:linear-gradient(160deg,#3a3f52,#262a38);color:#cfd3e6;}
+.p-warm{background:linear-gradient(160deg,var(--yellow),#c7a91a);}
+.p-hot{background:linear-gradient(160deg,var(--red),#a3211c);color:#ffe6e4;}
+.p-exec{box-shadow:0 0 0 2px var(--cyan);}
+
+/* ---------- tape deck ---------- */
+.deck{
+  background:linear-gradient(180deg,#2e2b27,#201e1b);
+  border-radius:8px;
+  padding:16px;
+  box-shadow:inset 0 1px 0 var(--bevel-hi), inset 0 -2px 0 var(--bevel-lo);
+  display:flex;
+  gap:18px;
+  align-items:center;
+}
+.reel{
+  width:64px;height:64px;border-radius:50%;
+  background:
+    radial-gradient(circle at center, #0d0c0b 0 8%, transparent 9%),
+    repeating-conic-gradient(#3a3632 0deg 15deg, #262320 15deg 30deg);
+  box-shadow:0 0 0 3px #0d0c0b, inset 0 0 8px rgba(0,0,0,.6);
+  position:relative;
+  flex:none;
+}
+.reel::after{
+  content:"";position:absolute;inset:26px;border-radius:50%;background:#0d0c0b;
+}
+.tape-mid{flex:1;min-width:0;}
+.transport{display:flex;gap:8px;margin-top:12px;}
+.transport .btn{font-size:14px;padding:6px 12px;min-width:38px;text-align:center;}
+.progress{
+  height:8px;border-radius:4px;background:#100f0e;overflow:hidden;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.6);margin-top:10px;
+}
+.progress .fill{height:100%;width:38%;background:linear-gradient(90deg,#0fbb4d,#5dff9e);}
+.scope{
+  height:52px;margin-top:12px;border-radius:4px;background:var(--lcd-bg);
+  box-shadow:inset 0 2px 6px rgba(0,0,0,.7);
+  display:flex;align-items:center;padding:0 8px;overflow:hidden;
+}
+.scope svg{width:100%;height:100%;}
+.block-list{
+  margin-top:12px;
+  max-height:120px;
+  overflow:hidden;
+  font-size:10.5px;
+  border-top:1px solid #100f0e;
+  padding-top:8px;
+}
+.block-list .b{
+  display:flex;justify-content:space-between;padding:4px 6px;border-radius:3px;color:var(--dim);
+}
+.block-list .b.cur{background:#1c2b3f;color:var(--white);}
+
+/* ---------- profiler ---------- */
+.bars{display:flex;flex-direction:column;gap:8px;margin-top:10px;}
+.bar-row{display:flex;align-items:center;gap:10px;font-size:10.5px;}
+.bar-row .addr{color:var(--dim);width:64px;flex:none;}
+.bar-track{flex:1;height:14px;background:#100f0e;border-radius:3px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.5);}
+.bar-fill{height:100%;background:linear-gradient(90deg,#f4e230,#e0433c);}
+.bar-row .pct{width:42px;text-align:right;color:var(--dim);flex:none;}
+
+.runs{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+.run{display:flex;justify-content:space-between;padding:6px 8px;border-radius:4px;font-size:10.5px;color:var(--dim);background:#211f1c;}
+.run.active{background:#1c2b3f;color:var(--white);}
+
+.select{
+  font-size:11px;padding:6px 10px;border-radius:6px;background:#211f1c;border:1px solid #100f0e;color:var(--ink);
+}
+
+.callout{
+  font-size:10.5px;color:var(--dim);margin-top:10px;line-height:1.6;
+}
+.callout b{color:var(--ink);}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>ZX SPECTRUM EMULATOR</h1>
+  <div class="rainbow">
+    <div style="background:var(--blue)"></div>
+    <div style="background:var(--red)"></div>
+    <div style="background:var(--magenta)"></div>
+    <div style="background:var(--green)"></div>
+    <div style="background:var(--cyan)"></div>
+    <div style="background:var(--yellow)"></div>
+    <div style="background:var(--white)"></div>
+  </div>
+  <p>UX concept — a skeuomorphic refresh of the existing egui interface. Same structure (toolbar, machine
+  selector, four detachable debug windows) with the plastic-and-LCD language of the original hardware.
+  Static mockup, not wired up.</p>
+  <span class="tag">v0.1 concept · main window + 4 debug panels</span>
+</div>
+
+<div class="stack">
+
+  <!-- ================= MAIN WINDOW ================= -->
+  <div class="win">
+    <div class="win-bar">
+      <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+      <div class="win-title">ZX SPECTRUM 48K</div>
+      <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+    </div>
+
+    <div class="toolbar">
+      <div class="grp">
+        <span class="lbl">Machine</span>
+        <div class="dropdown">48K<span class="caret">▾</span></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="grp">
+        <button class="btn primary">Load…</button>
+        <button class="btn">Reset</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="grp">
+        <span class="lbl">Windows</span>
+        <span class="chip on"><span class="led"></span>RAM map</span>
+        <span class="chip on"><span class="led"></span>Debugger</span>
+        <span class="chip"><span class="led"></span>Tape</span>
+        <span class="chip"><span class="led"></span>Back buffer</span>
+        <span class="chip"><span class="led"></span>Profiler</span>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="grp">
+        <span class="lbl">Zoom</span>
+        <div class="dropdown">2x<span class="caret">▾</span></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="grp">
+        <div class="rocker on"><div class="switch"><div class="nub"></div></div>Race the beam</div>
+        <div class="rocker on"><div class="switch"><div class="nub"></div></div>Overscan</div>
+      </div>
+    </div>
+
+    <div class="win-body" style="padding-top:0;">
+      <div class="crt-frame">
+        <div class="crt">
+          <div class="boot">
+            <span class="k">1982</span> Sinclair Research Ltd<br>
+            &nbsp;<br>
+            &gt; LOAD ""<span class="cur"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span class="ok">Loaded Manic Miner.tzx as a 48K</span>
+      <span class="meta">T-state 34,204,112 · 100% speed</span>
+    </div>
+    <div class="statusbar" style="border-top:none;">
+      <span class="err">Cannot switch to +2A: no ROM. Put a +2A ROM at roms/plus3.rom, or use Load…</span>
+      <span class="meta">example error state</span>
+    </div>
+  </div>
+
+  <!-- ================= DEBUGGER + RAM MAP ================= -->
+  <div class="grid2">
+
+    <div class="win">
+      <div class="win-bar">
+        <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+        <div class="win-title">DEBUGGER</div>
+        <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+      </div>
+      <div class="win-body">
+        <div class="row">
+          <button class="btn small">⤓ Step into</button>
+          <button class="btn small">⤼ Step over</button>
+          <button class="btn small">⤴ Step out</button>
+          <button class="btn small">↺ Reset</button>
+        </div>
+        <div class="row">
+          <span class="chip on"><span class="led"></span>Follow PC</span>
+          <span class="lbl" style="margin-left:6px;">Speed</span>
+          <div class="slider"><div class="fill" style="width:35%;"></div><div class="knob" style="left:35%;"></div></div>
+        </div>
+
+        <div class="lcd" style="margin-top:14px;">
+          <div class="reg-grid">
+            <span>AF&nbsp; 4417</span><span>BC&nbsp; 5C3A</span><span>DE&nbsp; 5CB6</span><span>HL&nbsp; 5C92</span>
+            <span>AF' 0044</span><span>BC' 0000</span><span>DE' 0011</span><span>HL' 2758</span>
+            <span>IX&nbsp; 03D4</span><span>IY&nbsp; 5C3A</span><span>SP&nbsp; FF44</span><span>PC&nbsp; 11CB</span>
+            <span>I&nbsp;&nbsp; 3F</span><span>R&nbsp;&nbsp; 9A</span><span>IM&nbsp; 1</span><span>WZ&nbsp; 11CC</span>
+          </div>
+          <div class="flags">
+            <div class="flag lit">S</div>
+            <div class="flag">Z</div>
+            <div class="flag">Y</div>
+            <div class="flag lit">H</div>
+            <div class="flag">X</div>
+            <div class="flag">PV</div>
+            <div class="flag">N</div>
+            <div class="flag lit">C</div>
+          </div>
+        </div>
+        <div class="callout">Registers on an LCD-green readout, lit flags glow red — the calculator language
+        of the original machine, kept legible at debugging speed.</div>
+      </div>
+    </div>
+
+    <div class="win">
+      <div class="win-bar">
+        <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+        <div class="win-title">RAM MAP</div>
+        <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+      </div>
+      <div class="win-body">
+        <div class="row">
+          <span class="lbl">Show</span>
+          <span class="chip on"><span class="led"></span>Read</span>
+          <span class="chip on"><span class="led"></span>Write</span>
+          <span class="chip"><span class="led"></span>Execute</span>
+          <span class="chip on"><span class="led"></span>Overlays</span>
+        </div>
+
+        <div class="ram-grid" style="margin-top:14px;">
+          <div class="page p-rom">ROM0<span>$0000</span></div>
+          <div class="page p-rom">ROM1<span>$0000</span></div>
+          <div class="page p-cold">RAM0<span>$C000</span></div>
+          <div class="page p-warm">RAM1<span>$C000</span></div>
+          <div class="page p-hot p-exec">RAM2<span>$C000</span></div>
+          <div class="page p-cold">RAM3<span>$C000</span></div>
+          <div class="page p-warm p-exec">RAM4<span>$C000</span></div>
+          <div class="page p-cold">RAM5<span>$C000</span></div>
+          <div class="page p-hot">RAM6<span>$C000</span></div>
+          <div class="page p-cold">RAM7<span>$C000</span></div>
+        </div>
+        <div class="callout">hover for details; click to show the address in the debugger
+        &nbsp;·&nbsp; <span style="color:var(--cyan);">cyan ring</span> = executing now,
+        heat colour = recent read/write traffic.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ================= TAPE + PROFILER ================= -->
+  <div class="grid2">
+
+    <div class="win">
+      <div class="win-bar">
+        <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+        <div class="win-title">TAPE DECK</div>
+        <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+      </div>
+      <div class="win-body">
+        <div class="deck">
+          <div class="reel"></div>
+          <div class="tape-mid">
+            <div style="font-weight:700;font-size:12px;">Manic Miner (1983)(Bug-Byte).tzx</div>
+            <div class="transport">
+              <button class="btn">▶</button>
+              <button class="btn">■</button>
+              <button class="btn small" style="margin-left:auto;">⏮</button>
+              <button class="btn small">⏭</button>
+            </div>
+            <div class="progress"><div class="fill"></div></div>
+            <div class="callout" style="margin-top:6px;">block 5 / 14 — Loader</div>
+          </div>
+          <div class="reel"></div>
+        </div>
+
+        <div class="scope">
+          <svg viewBox="0 0 300 40" preserveAspectRatio="none">
+            <polyline fill="none" stroke="#5dff9e" stroke-width="1.5"
+              points="0,20 6,4 12,36 18,4 24,36 30,20 36,20 42,6 48,34 54,20 60,20 66,4 72,36 78,4 84,36 90,20 96,20 102,6 108,34 114,20 120,20 126,4 132,36 138,4 144,36 150,20 156,20 162,6 168,34 174,20 180,20 186,4 192,36 198,4 204,36 210,20 216,20 222,6 228,34 234,20 240,20 246,4 252,36 258,4 264,36 270,20 276,20 282,6 288,34 294,20 300,20"/>
+          </svg>
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <span class="checkbox checked"><span class="box"></span>Boost speed while playing</span>
+          <span class="checkbox checked"><span class="box"></span>Play on load</span>
+        </div>
+
+        <div class="block-list">
+          <div class="b"><span>1&nbsp;&nbsp; Header — Loader</span><span>19 bytes</span></div>
+          <div class="b cur"><span>2&nbsp;&nbsp; Data — Loader</span><span>6,914 bytes</span></div>
+          <div class="b"><span>3&nbsp;&nbsp; Header — Screen$</span><span>19 bytes</span></div>
+          <div class="b"><span>4&nbsp;&nbsp; Data — Screen$</span><span>6,914 bytes</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="win">
+      <div class="win-bar">
+        <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+        <div class="win-title">PROFILER</div>
+        <div class="rivets"><div class="rivet"></div><div class="rivet"></div></div>
+      </div>
+      <div class="win-body">
+        <div class="row">
+          <span class="lbl">Rank by</span>
+          <span class="select">Self time ▾</span>
+        </div>
+
+        <div class="runs">
+          <div class="run active"><span>Run 3 · 12:04:41</span><span>2.1M T-states</span></div>
+          <div class="run"><span>Run 2 · 12:03:58</span><span>884K T-states</span></div>
+          <div class="run"><span>Run 1 · 12:01:22</span><span>1.6M T-states</span></div>
+        </div>
+
+        <div class="callout" style="margin-top:14px;">Time by function</div>
+        <div class="bars">
+          <div class="bar-row"><span class="addr">$11CB</span><div class="bar-track"><div class="bar-fill" style="width:71%;"></div></div><span class="pct">38%</span></div>
+          <div class="bar-row"><span class="addr">$0556</span><div class="bar-track"><div class="bar-fill" style="width:52%;"></div></div><span class="pct">27%</span></div>
+          <div class="bar-row"><span class="addr">$8A02</span><div class="bar-track"><div class="bar-fill" style="width:31%;"></div></div><span class="pct">16%</span></div>
+          <div class="bar-row"><span class="addr">$0038</span><div class="bar-track"><div class="bar-fill" style="width:18%;"></div></div><span class="pct">9%</span></div>
+        </div>
+        <div class="callout">bars in the border-red/yellow gradient tie the profiler visually back to
+        the machine's own palette instead of a generic chart colour.</div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+</body>
+</html>

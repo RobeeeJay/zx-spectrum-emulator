@@ -784,9 +784,17 @@ impl App {
         if !self.running {
             return;
         }
-        if let Some(zx) = &mut self.zx81 {
+        if self.zx81.is_some() {
+            // A ZX81 loads at about fifty bytes a second, so the boost matters
+            // even more here than it does on a Spectrum.
+            let boost = if self.tape_boost() && self.tape_is_playing() {
+                8.0
+            } else {
+                1.0
+            };
+            let zx = self.zx81.as_mut().expect("just checked");
             let dt = dt.clamp(0.0, 0.1);
-            let want = zx81::CPU_HZ as f32 * dt * self.speed + self.leftover;
+            let want = zx81::CPU_HZ as f32 * dt * self.speed * boost + self.leftover;
             let budget = want.max(0.0) as u64;
             self.leftover = want - budget as f32;
             // Cap the work per host frame, as for the Spectrum.
@@ -1068,7 +1076,7 @@ impl App {
                     .button(if playing { "⏸ Tape" } else { "▶ Tape" })
                     .clicked()
                 {
-                    let now = self.spec.bus.total_t();
+                    let now = self.machine_t();
                     let t = self.tape_mut().unwrap();
                     if playing {
                         t.stop();
