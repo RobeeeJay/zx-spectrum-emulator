@@ -384,6 +384,47 @@ fn synthetic_display_with(sync_pulses: bool) -> Zx81 {
     zx
 }
 
+/// A driver in the style of the hi-res routines: no interrupts at all. It
+/// raises and drops the sync itself to start each line, runs 32 display bytes
+/// through the mirror, and jumps back — the jump's opcode has bit 6 set, so the
+/// ULA executes it instead of turning it into a NOP. Where the picture lands is
+/// therefore decided entirely by the sync, which is the point of the exercise.
+fn synthetic_display_hires() -> Zx81 {
+    let mut zx = Zx81::new(Ram::K16);
+    let mut rom = vec![0u8; 8192];
+    let driver: [u8; 28] = [
+        0x3e, 0x1e, // LD A,$1E     character set at $1E00
+        0xed, 0x47, // LD I,A
+        0xf3, // DI
+        0x31, 0xff, 0x4f, // LD SP,$4FFF
+        0x00, 0x00, // padding, so the line loop starts at $000A
+        // line:
+        0xdb, 0xfe, // IN A,($FE)   sync low
+        0xd3, 0xff, // OUT ($FF),A  released: the line starts here
+        // Ten NOPs, so a turn of the loop is a little longer than the 207
+        // T-states of a line and the raster moves down one row per line, as it
+        // does for the real games — which emit exactly one sync per row.
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x00,
+        0xc1, // LD HL,$C100
+        0xe9, // JP (HL)
+    ];
+    rom[..driver.len()].copy_from_slice(&driver);
+    for row in 0..8 {
+        rom[0x1e08 + row] = 0xff; // character $01 is solid
+    }
+    zx.load_rom(&rom);
+    zx.reset();
+
+    for i in 0..32u16 {
+        zx.bus.poke(0x4100 + i, 0x01);
+    }
+    // $C3 has bit 6 set, so this is executed rather than displayed.
+    zx.bus.poke(0x4120, 0xc3); // JP $000A
+    zx.bus.poke(0x4121, 0x0a);
+    zx.bus.poke(0x4122, 0x00);
+    zx
+}
+
 #[test]
 fn a_row_of_characters_lands_contiguously_and_in_the_same_place_each_line() {
     let mut zx = synthetic_display();
@@ -672,4 +713,60 @@ fn sync_pulses_between_lines_do_not_stop_the_picture_being_drawn() {
         pulsing_rows > plain_rows / 2,
         "with sync pulses only {pulsing_rows} rows were drawn, against {plain_rows} without"
     );
+}
+
+#[test]
+fn releasing_the_sync_starts_a_line_from_the_left_edge() {
+    // However far into a line the sync is released, the next line begins at
+    // the left: the ULA holds its counters in reset while the sync is low.
+    for offset in [0, 7, 33, 101, 206] {
+        let mut zx = Zx81::new(Ram::K16);
+        zx.bus.tick_for_test(offset);
+        zx.bus.io_read(0xfe); // sync low
+        zx.bus.tick_for_test(LINE_T * 4); // held: a vertical sync
+        zx.bus.io_write(0xff, 0); // released
+        assert_eq!(
+            zx.bus.t_in_line, 0,
+            "released {offset} T-states into a line and the raster kept the offset"
+        );
+    }
+}
+
+#[test]
+fn the_picture_lands_in_the_same_place_after_the_timing_is_nudged() {
+    // A driver that paces itself from the sync draws a rectangle: every row
+    // starts at the same column. If the sync does not put the horizontal
+    // counter back to the left edge, the rows drift sideways one after
+    // another and the whole image slides about from frame to frame — the
+    // jitter this guards against.
+    let edges = |zx: &Zx81| -> Vec<usize> {
+        (0..RASTER_H)
+            .filter_map(|y| (0..RASTER_W).find(|x| zx.bus.fb_prev[y * RASTER_W + x] != 0))
+            .collect()
+    };
+    let mut zx = synthetic_display_hires();
+    for _ in 0..300 {
+        zx.run(zx.frame_t());
+    }
+    let rows = edges(&zx);
+    assert!(rows.len() > 100, "the driver drew {} rows", rows.len());
+    let first = rows[0];
+    assert!(
+        rows.iter().all(|x| *x == first),
+        "the rows do not line up: {:?}",
+        &rows[..rows.len().min(8)]
+    );
+
+    for nudge in [1, 3, 11] {
+        zx.bus.tick_for_test(nudge);
+        for _ in 0..100 {
+            zx.run(zx.frame_t());
+        }
+        let rows = edges(&zx);
+        assert!(
+            rows.iter().all(|x| *x == first),
+            "a {nudge} T-state nudge left the picture at {:?}, not {first}",
+            &rows[..rows.len().min(8)]
+        );
+    }
 }

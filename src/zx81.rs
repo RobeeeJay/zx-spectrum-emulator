@@ -294,12 +294,19 @@ impl Zx81Bus {
             return;
         }
         self.vsync = false;
+        // The ULA holds its counters in reset while the sync is low, so
+        // releasing it starts a line from the left edge. Without that the
+        // picture lands wherever in the line the sync happened to end, which
+        // moves by a few T-states from frame to frame and makes the whole
+        // image jitter sideways.
+        self.t_in_line = 0;
         // Only a sync held for a while pulls the picture back to the top. A
         // program that reads the keyboard and then writes a port — which is
         // what the hi-res routines do, several times a line — raises the sync
-        // for a few microseconds, and a television ignores that. Ending the
-        // frame on it instead would restart the picture hundreds of times a
-        // second and nothing but the first row would ever be drawn.
+        // for a few microseconds, and a television treats that as an ordinary
+        // line sync. Ending the frame on it instead would restart the picture
+        // hundreds of times a second and nothing but the first row would ever
+        // be drawn.
         if self.tstates - self.vsync_start >= VSYNC_MIN_T {
             self.end_frame();
         }

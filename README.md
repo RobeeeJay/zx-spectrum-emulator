@@ -301,13 +301,21 @@ screen.
 
 Around that sit the rest of the ULA's jobs: the three-bit line counter that
 picks the row within a character and is held in reset while the vertical sync is
-low, the sync itself (started by reading port `$FE`, ended by any `OUT`, and
-only pulling the picture back to the top if it was held for at least a line —
-the hi-res routines raise it for a few microseconds many times a frame and a
-television ignores that), the NMI
+low, the sync itself (started by reading port `$FE`, ended by any `OUT`), the
+NMI
 generator that times the borders in SLOW mode (`$FE` on, `$FD` off, firing once
 a line), and the interrupt, which comes from bit 6 of the refresh register
 falling — which is how the ROM counts out a character row.
+
+The sync is treated the way a television treats it. Releasing it starts a line
+from the left edge, because the ULA holds its counters in reset while the sync
+is low; and only a sync held for at least a line's worth of time pulls the
+picture back to the top. That matters for the hi-res games, which pace
+themselves by raising and dropping the sync once per row rather than leaving it
+to the ROM: taking each of those pulses for a vertical sync restarts the picture
+hundreds of times a second and draws nothing but the first row, and ignoring
+them entirely lets every row land wherever in the line the code happened to
+reach, so the picture skews and slides about from frame to frame.
 
 Memory follows the machine's sparse decoding: an 8K ROM appears twice in the
 bottom page, 1K of RAM repeats sixteen times through its own page, and the whole
