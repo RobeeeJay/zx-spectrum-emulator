@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// * beside the executable — a portable unzip-and-run build
 /// * `../Resources` from the executable — inside a macOS `.app` bundle, where
 ///   the binary sits in `Contents/MacOS`
-/// * `../share/zx-spectrum-emulator` — a Unix `bin`/`share` install
+/// * `../share/zx-rustrum` — a Unix `bin`/`share` install
 /// * the config directory — where a user can drop ROMs once and forget
 pub fn search_dirs_from(
     platform: Platform,
@@ -44,7 +44,7 @@ pub fn search_dirs_from(
                 if platform == Platform::MacOs {
                     push(up.join("Resources"));
                 }
-                push(up.join("share").join("zx-spectrum-emulator"));
+                push(up.join("share").join("zx-rustrum"));
             }
         }
     }

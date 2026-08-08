@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use zx_spectrum_emulator::machine::{Spectrum, FRAME_T};
-use zx_spectrum_emulator::tape::{
+use zx_rustrum::machine::{Spectrum, FRAME_T};
+use zx_rustrum::tape::{
     Block, Tape, DATA_PILOT_PULSES, HEADER_PILOT_PULSES, ONE_PULSE, PILOT_PULSE, SYNC1_PULSE,
     SYNC2_PULSE, ZERO_PULSE,
 };
@@ -269,7 +269,7 @@ fn the_rom_loader_reads_a_header_from_a_real_tzx() {
     while spent < 60_000_000 {
         if matches!(
             spec.run(FRAME_T),
-            zx_spectrum_emulator::machine::Stop::Breakpoint(SENTINEL)
+            zx_rustrum::machine::Stop::Breakpoint(SENTINEL)
         ) {
             returned = true;
             break;

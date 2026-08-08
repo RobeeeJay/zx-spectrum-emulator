@@ -1,10 +1,8 @@
 //! ZX81: the memory map, the ULA's NOP-substitution video, and booting the
 //! real ROM.
 
-use zx_spectrum_emulator::z80::Bus;
-use zx_spectrum_emulator::zx81::{
-    Ram, Zx81, LINE_T, PICTURE_X, RASTER_H, RASTER_W, SYNC_TO_PICTURE_T,
-};
+use zx_rustrum::z80::Bus;
+use zx_rustrum::zx81::{Ram, Zx81, LINE_T, PICTURE_X, RASTER_H, RASTER_W, SYNC_TO_PICTURE_T};
 
 /// Where a character fetched this far into a line lands. The line's T-states
 /// are counted from the interrupt that starts it, a little before the visible

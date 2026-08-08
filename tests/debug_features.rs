@@ -1,9 +1,9 @@
 //! End-to-end checks of the debugging features, driven by the built-in demo
 //! ROM (which builds a screen at $8000 and blits it to video RAM).
 
-use zx_spectrum_emulator::demo_rom::DEMO_ROM;
-use zx_spectrum_emulator::machine::{Spectrum, Stop, FRAME_T};
-use zx_spectrum_emulator::{disasm, screen};
+use zx_rustrum::demo_rom::DEMO_ROM;
+use zx_rustrum::machine::{Spectrum, Stop, FRAME_T};
+use zx_rustrum::{disasm, screen};
 
 fn demo_machine() -> Spectrum {
     let mut s = Spectrum::new();
@@ -81,7 +81,7 @@ fn back_buffer_at_8000_is_detected() {
 fn manual_override_beats_detection() {
     let mut s = demo_machine();
     run_frames(&mut s, 60);
-    s.bus.tracker.manual = Some(zx_spectrum_emulator::tracker::Region {
+    s.bus.tracker.manual = Some(zx_rustrum::tracker::Region {
         start: 0xa000,
         len: 6912,
     });

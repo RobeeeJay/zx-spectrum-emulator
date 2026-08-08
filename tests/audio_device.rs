@@ -1,7 +1,7 @@
 //! Smoke test for the host audio device. Skips itself when there is no
 //! output device (headless CI), since that is not an emulator fault.
 
-use zx_spectrum_emulator::audio_out::AudioOut;
+use zx_rustrum::audio_out::AudioOut;
 
 #[test]
 fn the_audio_device_opens_and_drains_samples() {

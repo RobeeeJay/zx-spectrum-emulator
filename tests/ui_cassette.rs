@@ -2,10 +2,10 @@
 //! the other, and how fast the hubs turn doing it.
 
 use egui_kittest::Harness;
-use zx_spectrum_emulator::machine::Spectrum;
-use zx_spectrum_emulator::tape::{zx81_block, zx81_name, Block, Tape};
-use zx_spectrum_emulator::ui::cassette::{overall_progress, reel_scales, spin_rate, written_name};
-use zx_spectrum_emulator::ui::{App, Roms};
+use zx_rustrum::machine::Spectrum;
+use zx_rustrum::tape::{zx81_block, zx81_name, Block, Tape};
+use zx_rustrum::ui::cassette::{overall_progress, reel_scales, spin_rate, written_name};
+use zx_rustrum::ui::{App, Roms};
 
 #[test]
 fn the_left_reel_starts_full_and_the_right_one_nearly_empty() {
@@ -57,16 +57,28 @@ fn a_small_pack_turns_faster_than_a_fat_one() {
     // turn faster to take up the same length.
     let (left, right) = reel_scales(0.0);
     assert!(
-        spin_rate(right) > spin_rate(left),
+        spin_rate(right, false) > spin_rate(left, false),
         "the empty take-up reel should be spinning fastest at the start"
     );
     let half = reel_scales(0.5);
     assert_eq!(
-        spin_rate(half.0),
-        spin_rate(half.1),
+        spin_rate(half.0, false),
+        spin_rate(half.1, false),
         "with equal packs the hubs keep pace"
     );
-    assert!(spin_rate(1.0) > 0.0);
+    assert!(spin_rate(1.0, false) > 0.0);
+}
+
+#[test]
+fn boosting_the_tape_winds_the_hubs_on_faster() {
+    // Half speed while the tape plays at its own pace, half again above that
+    // when it is being hurried along, so the picture matches the sound.
+    let slow = spin_rate(1.0, false);
+    let fast = spin_rate(1.0, true);
+    assert!(
+        (fast / slow - 3.0).abs() < 1e-5,
+        "boosted should be 1.5 against 0.5"
+    );
 }
 
 #[test]
@@ -164,4 +176,59 @@ fn the_hubs_only_turn_while_the_tape_is_moving() {
         moved.1 > moved.0,
         "the take-up reel starts nearly empty, so it turns faster"
     );
+}
+
+#[test]
+fn progress_goes_by_time_rather_than_by_block() {
+    // A header is nineteen bytes and the data after it several thousand, so
+    // counting blocks would put the reels a quarter of the way through a tape
+    // that has barely started.
+    let header = Block::Standard {
+        pause_ms: 0,
+        data: vec![0x00; 19],
+    };
+    let data = Block::Standard {
+        pause_ms: 0,
+        data: vec![0xff; 6914],
+    };
+    let mut tape = Tape::from_blocks("t".into(), vec![header.clone(), data.clone(), header, data]);
+
+    tape.seek(1);
+    let after_first_header = overall_progress(&tape);
+    assert!(
+        after_first_header < 0.1,
+        "a header is a moment of the tape, not a quarter of it: {after_first_header}"
+    );
+
+    tape.seek(2);
+    let halfway = overall_progress(&tape);
+    assert!(
+        (0.4..0.6).contains(&halfway),
+        "the first header and data are about half the tape: {halfway}"
+    );
+}
+
+#[test]
+fn the_mark_is_a_rainbow_on_a_dark_shell() {
+    // The window icon is drawn rather than shipped, so it is worth checking it
+    // comes out as something rather than an empty square.
+    let size = 64;
+    let rgba = zx_rustrum::logo::rgba(size);
+    assert_eq!(rgba.len(), size * size * 4);
+
+    // The corners are outside the rounded shell, so they stay transparent.
+    let at = |x: usize, y: usize| {
+        let i = (y * size + x) * 4;
+        [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+    };
+    assert_eq!(at(0, 0)[3], 0, "the corner should be cut away");
+    assert_eq!(at(size / 2, size / 2)[3], 255, "the middle should be solid");
+
+    // Every one of the seven colours should appear somewhere.
+    for colour in zx_rustrum::logo::RAINBOW {
+        let found = rgba
+            .chunks(4)
+            .any(|p| p[0] == colour[0] && p[1] == colour[1] && p[2] == colour[2] && p[3] == 255);
+        assert!(found, "{colour:?} is missing from the mark");
+    }
 }

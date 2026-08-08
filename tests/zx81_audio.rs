@@ -2,8 +2,8 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use zx_spectrum_emulator::tape::{zx81_block, zx81_name, Tape};
-use zx_spectrum_emulator::zx81::{Ram, Zx81};
+use zx_rustrum::tape::{zx81_block, zx81_name, Tape};
+use zx_rustrum::zx81::{Ram, Zx81};
 
 fn machine_with_tape() -> (Zx81, Arc<Mutex<VecDeque<f32>>>) {
     let mut zx = Zx81::new(Ram::K16);

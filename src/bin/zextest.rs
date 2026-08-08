@@ -3,7 +3,7 @@
 //! Usage: `cargo run --release --bin zextest -- path/to/zexdoc.com`
 
 use std::io::Write;
-use zx_spectrum_emulator::z80::{Bus, Z80};
+use zx_rustrum::z80::{Bus, Z80};
 
 struct FlatBus {
     mem: Vec<u8>,

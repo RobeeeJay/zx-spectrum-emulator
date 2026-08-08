@@ -3,7 +3,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use zx_spectrum_emulator::{
+use zx_rustrum::{
     audio_out::AudioOut, demo_rom, machine::Model, machine::Spectrum, prefs::Prefs, resources,
     snapshot, tape::Tape, ui,
 };
@@ -164,17 +164,23 @@ fn main() -> eframe::Result<()> {
 
     let (opened_tape, zx81_tape) = load_cli_files(&mut spec, &mut roms, &dirs, &mut status);
     let mut zx81_ram = std::env::args().find_map(|a| match a.as_str() {
-        "--zx81" | "--zx81-16k" => Some(zx_spectrum_emulator::zx81::Ram::K16),
-        "--zx81-1k" => Some(zx_spectrum_emulator::zx81::Ram::K1),
+        "--zx81" | "--zx81-16k" => Some(zx_rustrum::zx81::Ram::K16),
+        "--zx81-1k" => Some(zx_rustrum::zx81::Ram::K1),
         _ => None,
     });
     // A ZX81 program on the command line implies the machine to run it on.
     if zx81_tape.is_some() && zx81_ram.is_none() {
-        zx81_ram = Some(zx_spectrum_emulator::zx81::Ram::K16);
+        zx81_ram = Some(zx_rustrum::zx81::Ram::K16);
     }
 
     // Put the main window back where it was last time.
-    let mut viewport = eframe::egui::ViewportBuilder::default().with_title("ZX Spectrum");
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_title(ui::APP_NAME)
+        .with_icon(eframe::egui::IconData {
+            rgba: zx_rustrum::logo::rgba(256),
+            width: 256,
+            height: 256,
+        });
     viewport = match prefs.window("main") {
         Some(r) => viewport
             .with_position([r.x, r.y])
@@ -186,7 +192,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "zx-spectrum-emulator",
+        ui::APP_NAME,
         options,
         Box::new(move |_cc| {
             let mut app = ui::App::with_roms(spec, status, roms, audio_out);

@@ -814,6 +814,33 @@ impl Tape {
         }
     }
 
+    /// Playing time of the whole tape, in T-states.
+    pub fn duration_t(&self) -> u64 {
+        self.blocks.iter().map(|b| b.duration_t()).sum()
+    }
+
+    /// How far through the whole tape playback has got, 0.0 to 1.0, by time
+    /// rather than by block. A tape is mostly one or two long blocks with a
+    /// scattering of short ones, so counting blocks would have the reels lurch
+    /// from a fifth to two fifths as a nineteen-byte header goes past.
+    pub fn progress(&self) -> f32 {
+        let total = self.duration_t();
+        if total == 0 {
+            return 0.0;
+        }
+        let before: u64 = self
+            .blocks
+            .iter()
+            .take(self.block)
+            .map(|b| b.duration_t())
+            .sum();
+        let within = match self.blocks.get(self.block) {
+            Some(block) => self.block_progress().unwrap_or(0.0) as f64 * block.duration_t() as f64,
+            None => 0.0,
+        };
+        ((before as f64 + within) / total as f64).clamp(0.0, 1.0) as f32
+    }
+
     /// How far through the current block playback has got, 0.0 to 1.0.
     ///
     /// Worked out from the pulse generator's position rather than from the

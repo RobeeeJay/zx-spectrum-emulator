@@ -1,4 +1,4 @@
-# ZX Spectrum emulator
+# ZX-Rustrum
 
 A ZX Spectrum emulator in Rust — 48K, 128K, +2A and +3 — with a cycle-accurate
 Z80 core, beeper and AY sound, and a set of detachable debugging windows, built
@@ -376,6 +376,13 @@ builder is not always honoured when a window is created — on macOS the window
 manager centres a default-sized one instead — so it is sent again from inside
 the window, and nothing is recorded until it has had a moment to move.
 
+## The name
+
+ZX-Rustrum: the machine it emulates, by way of the language it is written in.
+The mark is the Spectrum's own seven-colour flash — `src/logo.rs` draws it as
+pixels for the window icon, so nothing has to be shipped beside the binary, and
+`packaging/make-icon.py` draws the same thing larger for the application icon.
+
 ## How it looks
 
 The interface follows `zx-ux-mockup.html`: dark case plastic, near-black
@@ -403,7 +410,7 @@ place for the platform:
 | --- | --- |
 | macOS | `~/Library/Application Support/ZX Spectrum Emulator/preferences.toml` |
 | Windows | `%APPDATA%\ZX Spectrum Emulator\preferences.toml` |
-| Linux and friends | `$XDG_CONFIG_HOME/zx-spectrum-emulator/preferences.toml`, or `~/.config/…` |
+| Linux and friends | `$XDG_CONFIG_HOME/zx-rustrum/preferences.toml`, or `~/.config/…` |
 
 It also keeps the position and size of every window, the display scale and the
 overscan setting, written when the emulator closes and again a couple of
@@ -438,7 +445,7 @@ order, each also with a `roms` subdirectory:
 * the working directory, for `cargo run` or a shell launch
 * beside the executable, for an unzip-and-run build
 * `../Resources`, inside a macOS `.app`
-* `../share/zx-spectrum-emulator`, for a Unix `bin`/`share` install
+* `../share/zx-rustrum`, for a Unix `bin`/`share` install
 * the configuration directory, which survives replacing the app
 
 A name outranks proximity, so a `128.rom` anywhere beats a `128k.rom` nearby.

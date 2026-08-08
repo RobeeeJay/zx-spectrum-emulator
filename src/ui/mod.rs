@@ -180,6 +180,10 @@ pub fn zoom_dropdown(scale: &mut f32, ui: &mut egui::Ui) {
         });
 }
 
+/// What the emulator is called: the ZX Spectrum by way of the language it is
+/// written in.
+pub const APP_NAME: &str = "ZX-Rustrum";
+
 pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("1%", 0.01),
     ("5%", 0.05),
@@ -435,11 +439,12 @@ impl App {
     /// Keep the window title in step with the machine, so switching is
     /// visible even if the screen happens to look similar.
     fn sync_title(&mut self, ctx: &egui::Context) {
-        let want = if self.zx81.is_some() {
+        let machine = if self.zx81.is_some() {
             self.zx81_ram.name().to_string()
         } else {
             format!("ZX Spectrum {}", self.spec.bus.model.name())
         };
+        let want = format!("{APP_NAME} — {machine}");
         if self.title_shown != want {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(want.clone()));
             self.title_shown = want;
@@ -745,10 +750,15 @@ impl App {
         /// A window landing within a couple of points is close enough.
         const NEAR: f32 = 2.0;
 
-        let (pos, size) = match self.prefs.window(name) {
+        let (pos, mut size) = match self.prefs.window(name) {
             Some(r) => ([r.x, r.y], [r.w, r.h]),
             None => (default_pos, default_size),
         };
+        // The tape window is built around the cassette, so its width is not
+        // the user's to choose; the height still is.
+        if name == "tape" {
+            size[0] = cassette::WINDOW_W;
+        }
         let placement = self.placed.entry(name).or_insert(Placement {
             asked_at: std::time::Instant::now(),
             settled: false,
@@ -780,14 +790,14 @@ impl App {
             // Already positioned; leave it alone so dragging it sticks.
             return builder;
         }
-        match self.prefs.window(name) {
-            Some(r) => builder
-                .with_position([r.x, r.y])
-                .with_inner_size([r.w, r.h]),
-            None => builder
-                .with_position(default_pos)
-                .with_inner_size(default_size),
+        let (pos, mut size) = match self.prefs.window(name) {
+            Some(r) => ([r.x, r.y], [r.w, r.h]),
+            None => (default_pos, default_size),
+        };
+        if name == "tape" {
+            size[0] = cassette::WINDOW_W;
         }
+        builder.with_position(pos).with_inner_size(size)
     }
 
     /// Write the window layout and display settings out. Called on close.
@@ -1556,7 +1566,8 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    if self.place_window("tape", &ctx, [260.0, 120.0], [680.0, 700.0]) {
+                    if self.place_window("tape", &ctx, [260.0, 120.0], [cassette::WINDOW_W, 760.0])
+                    {
                         self.remember_window("tape", &ctx);
                     }
                     egui::CentralPanel::default().show(ui, |ui| tape::ui(self, ui));

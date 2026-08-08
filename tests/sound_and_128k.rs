@@ -3,9 +3,9 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use zx_spectrum_emulator::audio::{Audio, Ay, SharedQueue};
-use zx_spectrum_emulator::machine::{Model, Spectrum, Stop};
-use zx_spectrum_emulator::z80::Bus;
+use zx_rustrum::audio::{Audio, Ay, SharedQueue};
+use zx_rustrum::machine::{Model, Spectrum, Stop};
+use zx_rustrum::z80::Bus;
 
 // ---------------------------------------------------------------------------
 // AY-3-8912
@@ -448,7 +448,7 @@ fn the_128k_rom_boots_to_its_menu() {
 // +2A / +3
 // ---------------------------------------------------------------------------
 
-use zx_spectrum_emulator::machine::SpectrumBus;
+use zx_rustrum::machine::SpectrumBus;
 
 #[test]
 fn the_plus3_has_four_roms_selected_by_two_ports() {

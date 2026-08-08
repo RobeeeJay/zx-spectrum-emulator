@@ -17,6 +17,11 @@ use crate::ui::App;
 pub const ART_W: f32 = 500.0;
 pub const ART_H: f32 = 330.0;
 
+/// How big the cassette is drawn, at most.
+pub const MAX_W: f32 = 780.0;
+/// What the tape window should be wide, to sit around it.
+pub const WINDOW_W: f32 = MAX_W + 30.0;
+
 /// Both reels are this big when full, in artwork units.
 const REEL_R: f32 = 87.42;
 /// Centres of the two reels, which the cogs share.
@@ -42,13 +47,18 @@ pub fn reel_scales(progress: f32) -> (f32, f32) {
     (1.0 - (1.0 - EMPTY) * p, EMPTY + (1.0 - EMPTY) * p)
 }
 
-/// How fast a hub turns, given how much tape is wound on it. The tape moves at
-/// a constant speed, so a small pack has to turn faster than a fat one — which
-/// is why a cassette's hubs visibly change speed as it plays.
-pub fn spin_rate(pack: f32) -> f32 {
-    /// Radians a second for a full reel.
+/// How fast a hub turns, given how much tape is wound on it and whether the
+/// tape is being played at speed. The tape moves at a constant rate, so a
+/// small pack has to turn faster than a fat one — which is why a cassette's
+/// hubs visibly change speed as it plays.
+pub fn spin_rate(pack: f32, boosted: bool) -> f32 {
+    /// Radians a second for a full reel, before the speed is taken into account.
     const BASE: f32 = 2.2;
-    BASE / pack.max(EMPTY)
+    /// An unhurried tape turns at half that.
+    const SLOW: f32 = 0.5;
+    /// Boosted, it winds on half again as fast as the unhurried rate.
+    const BOOSTED: f32 = 1.5;
+    BASE * if boosted { BOOSTED } else { SLOW } / pack.max(EMPTY)
 }
 
 /// Draw the cassette, and return the rectangle it took.
@@ -63,16 +73,18 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) -> Rect {
     // on the tape happens to be.
     let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
     let (left_pack, right_pack) = reel_scales(progress);
+    let boosted = app.tape_boost();
     if playing {
-        app.tape.left_spin += dt * spin_rate(left_pack);
-        app.tape.right_spin += dt * spin_rate(right_pack);
+        app.tape.left_spin += dt * spin_rate(left_pack, boosted);
+        app.tape.right_spin += dt * spin_rate(right_pack, boosted);
     }
 
-    // Leave room for the oscilloscope and the block list below.
-    let room = (ui.available_height() * 0.5).min(230.0);
+    // The window is sized around this, so the width is what decides; the
+    // height only comes into it if the window has been made short.
+    let room = ui.available_height() * 0.62;
     let width = ui
         .available_width()
-        .min(520.0)
+        .min(MAX_W)
         .min(room * ART_W / ART_H)
         .max(160.0);
     let size = Vec2::new(width, width * ART_H / ART_W);
@@ -103,14 +115,10 @@ pub fn written_name(file: &str) -> String {
     stem.trim().to_string()
 }
 
-/// How far through the whole tape, counting the block being played.
+/// How far through the whole tape, by playing time rather than by block, so
+/// the reels wind on smoothly instead of jumping as each block goes by.
 pub fn overall_progress(tape: &crate::tape::Tape) -> f32 {
-    let count = tape.blocks.len();
-    if count == 0 {
-        return 0.0;
-    }
-    let within = tape.block_progress().unwrap_or(0.0);
-    ((tape.block as f32 + within) / count as f32).clamp(0.0, 1.0)
+    tape.progress()
 }
 
 /// Maps the artwork's coordinates onto the screen.
@@ -304,6 +312,26 @@ fn label(painter: &egui::Painter, art: &Art, name: &str) {
         "MADE IN JAPAN",
         FontId::proportional(art.len(6.5)),
         Color32::from_rgb(68, 68, 68),
+    );
+
+    // The maker's diamond, a square stood on its corner.
+    let d = art.at(311.9, 210.0);
+    let arm = art.len(10.6);
+    painter.add(Shape::closed_line(
+        vec![
+            d + Vec2::new(0.0, -arm),
+            d + Vec2::new(arm, 0.0),
+            d + Vec2::new(0.0, arm),
+            d + Vec2::new(-arm, 0.0),
+        ],
+        art.stroke(3.0, grey(17)),
+    ));
+    painter.text(
+        art.at(316.0, 221.7),
+        Align2::LEFT_BOTTOM,
+        "FEK",
+        FontId::proportional(art.len(26.0)),
+        grey(17),
     );
 }
 

@@ -2,9 +2,9 @@
 
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
-use zx_spectrum_emulator::machine::Spectrum;
-use zx_spectrum_emulator::ui::{App, Roms};
-use zx_spectrum_emulator::zx81::Ram;
+use zx_rustrum::machine::Spectrum;
+use zx_rustrum::ui::{App, Roms};
+use zx_rustrum::zx81::Ram;
 
 fn zx81_app() -> Option<App> {
     let roms = Roms {
@@ -174,7 +174,7 @@ fn the_ram_map_lists_one_rom_and_one_ram_for_a_zx81() {
         return;
     };
     app.show_ram_map = true;
-    let chunks = zx_spectrum_emulator::ui::ram_map::chunks(&app);
+    let chunks = zx_rustrum::ui::ram_map::chunks(&app);
     let names: Vec<&str> = chunks.iter().map(|c| c.label.as_str()).collect();
     assert_eq!(names, vec!["ROM", "RAM"], "a ZX81 has nothing to page");
 }

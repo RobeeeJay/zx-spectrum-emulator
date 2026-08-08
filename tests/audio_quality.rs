@@ -4,9 +4,9 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use zx_spectrum_emulator::audio::{Audio, SharedQueue};
-use zx_spectrum_emulator::machine::Spectrum;
-use zx_spectrum_emulator::tape::{Block, Tape};
+use zx_rustrum::audio::{Audio, SharedQueue};
+use zx_rustrum::machine::Spectrum;
+use zx_rustrum::tape::{Block, Tape};
 
 fn queue() -> SharedQueue {
     Arc::new(Mutex::new(VecDeque::new()))
@@ -192,7 +192,7 @@ fn the_mixer_clock_never_runs_backwards() {
 
 #[test]
 fn a_steady_ay_tone_comes_out_at_the_right_pitch_and_without_jumps() {
-    use zx_spectrum_emulator::machine::Model;
+    use zx_rustrum::machine::Model;
 
     let rate = 48_000.0;
     let q = queue();

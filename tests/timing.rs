@@ -1,8 +1,8 @@
 //! Per-instruction T-state counts, checked against the published Z80 timings,
 //! plus a few ULA contention checks.
 
-use zx_spectrum_emulator::machine::Spectrum;
-use zx_spectrum_emulator::z80::{Bus, Z80};
+use zx_rustrum::machine::Spectrum;
+use zx_rustrum::z80::{Bus, Z80};
 
 /// Uncontended flat memory, so a test measures the instruction alone.
 struct FlatBus {
@@ -257,14 +257,14 @@ fn a_full_frame_is_69888_tstates() {
         total += if s.bus.tstates >= prev {
             (s.bus.tstates - prev) as u64
         } else {
-            (s.bus.tstates + zx_spectrum_emulator::machine::FRAME_T - prev) as u64
+            (s.bus.tstates + zx_rustrum::machine::FRAME_T - prev) as u64
         };
         prev = s.bus.tstates;
     }
     assert_eq!(s.bus.frame, before + 1);
     // The frame ends on an instruction boundary, so the total overshoots by at
     // most one instruction's worth of T-states.
-    let frame = zx_spectrum_emulator::machine::FRAME_T as u64;
+    let frame = zx_rustrum::machine::FRAME_T as u64;
     assert!(
         (frame..frame + 24).contains(&total),
         "frame took {total} T-states"

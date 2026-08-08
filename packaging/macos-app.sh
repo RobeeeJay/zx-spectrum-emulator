@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build ZX Spectrum.app, and a .dmg holding it.
+# Build ZX-Rustrum.app, and a .dmg holding it.
 #
 # The app is unsigned: macOS will refuse to open it on another machine until
 # it is signed with a Developer ID and notarised. To do that, set
@@ -19,16 +19,16 @@ version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
 cd "$root"
 if [ -n "$target" ]; then
     cargo build --release --target "$target"
-    binary="target/$target/release/zx-spectrum-emulator"
+    binary="target/$target/release/zx-rustrum"
 else
     cargo build --release
-    binary="target/release/zx-spectrum-emulator"
+    binary="target/release/zx-rustrum"
 fi
 
-app="target/packaging/ZX Spectrum.app"
+app="target/packaging/ZX-Rustrum.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/roms"
-cp "$binary" "$app/Contents/MacOS/ZX Spectrum"
+cp "$binary" "$app/Contents/MacOS/ZX-Rustrum"
 
 # The icon: macOS wants an .icns, which iconutil builds from a directory of
 # PNGs at fixed sizes.
@@ -40,18 +40,18 @@ for size in 16 32 128 256 512; do
     double=$((size * 2))
     sips -z $double $double "$here/icon.png" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil -c icns "$iconset" -o "$app/Contents/Resources/ZX Spectrum.icns"
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/ZX-Rustrum.icns"
 
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>ZX Spectrum</string>
-    <key>CFBundleDisplayName</key><string>ZX Spectrum Emulator</string>
-    <key>CFBundleExecutable</key><string>ZX Spectrum</string>
-    <key>CFBundleIdentifier</key><string>uk.co.example.zx-spectrum-emulator</string>
-    <key>CFBundleIconFile</key><string>ZX Spectrum</string>
+    <key>CFBundleName</key><string>ZX-Rustrum</string>
+    <key>CFBundleDisplayName</key><string>ZX-Rustrum</string>
+    <key>CFBundleExecutable</key><string>ZX-Rustrum</string>
+    <key>CFBundleIdentifier</key><string>uk.co.example.zx-rustrum</string>
+    <key>CFBundleIconFile</key><string>ZX-Rustrum</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version</string>
@@ -99,14 +99,14 @@ else
     echo "note: unsigned. Set MACOS_SIGN_IDENTITY to sign, then notarise." >&2
 fi
 
-dmg="target/packaging/ZX-Spectrum-$version.dmg"
+dmg="target/packaging/ZX-Rustrum-$version.dmg"
 rm -f "$dmg"
 staging="target/packaging/dmg"
 rm -rf "$staging"
 mkdir -p "$staging"
 cp -R "$app" "$staging/"
 ln -s /Applications "$staging/Applications"
-hdiutil create -volname "ZX Spectrum" -srcfolder "$staging" -ov -format UDZO "$dmg" >/dev/null
+hdiutil create -volname "ZX-Rustrum" -srcfolder "$staging" -ov -format UDZO "$dmg" >/dev/null
 
 echo "built $app"
 echo "built $dmg"

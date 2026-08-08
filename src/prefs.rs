@@ -36,8 +36,8 @@ impl Platform {
 ///
 /// * macOS — `~/Library/Application Support/ZX Spectrum Emulator`
 /// * Windows — `%APPDATA%\ZX Spectrum Emulator`
-/// * anything else — `$XDG_CONFIG_HOME/zx-spectrum-emulator`, falling back to
-///   `~/.config/zx-spectrum-emulator`
+/// * anything else — `$XDG_CONFIG_HOME/zx-rustrum`, falling back to
+///   `~/.config/zx-rustrum`
 pub fn config_dir_from(
     platform: Platform,
     env: &dyn Fn(&str) -> Option<String>,
@@ -64,7 +64,7 @@ pub fn config_dir_from(
                 Some(dir) => PathBuf::from(dir),
                 None => PathBuf::from(env("HOME").filter(|h| !h.is_empty())?).join(".config"),
             };
-            Some(base.join("zx-spectrum-emulator"))
+            Some(base.join("zx-rustrum"))
         }
     }
 }

@@ -4363,7 +4363,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zx-spectrum-emulator"
+name = "zx-rustrum"
 version = "0.1.0"
 dependencies = [
  "chrono",

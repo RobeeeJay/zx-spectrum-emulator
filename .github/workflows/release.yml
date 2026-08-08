@@ -81,12 +81,12 @@ jobs:
         if: runner.os != 'macOS'
         shell: bash
         run: |
-          out="zx-spectrum-emulator-${{ matrix.name }}"
+          out="zx-rustrum-${{ matrix.name }}"
           mkdir -p "$out/roms"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/zx-spectrum-emulator.exe" "$out/"
+            cp "target/${{ matrix.target }}/release/zx-rustrum.exe" "$out/"
           else
-            cp "target/${{ matrix.target }}/release/zx-spectrum-emulator" "$out/"
+            cp "target/${{ matrix.target }}/release/zx-rustrum" "$out/"
           fi
           cp README.md "$out/"
           cat > "$out/roms/README.txt" <<'TXT'
@@ -103,8 +103,8 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: |
-            zx-spectrum-emulator-*.tar.gz
-            zx-spectrum-emulator-*.zip
+            zx-rustrum-*.tar.gz
+            zx-rustrum-*.zip
             target/packaging/*.dmg
           if-no-files-found: error
 
@@ -132,4 +132,4 @@ jobs:
             The macOS build is not signed or notarised, so Gatekeeper will
             refuse it until you clear the quarantine flag:
 
-                xattr -dr com.apple.quarantine "/Applications/ZX Spectrum.app"
+                xattr -dr com.apple.quarantine "/Applications/ZX-Rustrum.app"

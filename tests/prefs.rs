@@ -3,9 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
-use zx_spectrum_emulator::machine::{Model, Spectrum};
-use zx_spectrum_emulator::prefs::{config_dir_from, FileKind, Platform, Prefs, FILE_NAME};
-use zx_spectrum_emulator::ui::{App, Roms};
+use zx_rustrum::machine::{Model, Spectrum};
+use zx_rustrum::prefs::{config_dir_from, FileKind, Platform, Prefs, FILE_NAME};
+use zx_rustrum::ui::{App, Roms};
 
 /// A scratch directory that cleans up after itself.
 struct TempDir(PathBuf);
@@ -45,13 +45,13 @@ fn the_config_directory_follows_each_platforms_convention() {
     let unix = env_of(&[("HOME", "/home/someone")]);
     assert_eq!(
         config_dir_from(Platform::Unix, &unix).unwrap(),
-        PathBuf::from("/home/someone/.config/zx-spectrum-emulator")
+        PathBuf::from("/home/someone/.config/zx-rustrum")
     );
 
     let xdg = env_of(&[("HOME", "/home/someone"), ("XDG_CONFIG_HOME", "/cfg")]);
     assert_eq!(
         config_dir_from(Platform::Unix, &xdg).unwrap(),
-        PathBuf::from("/cfg/zx-spectrum-emulator"),
+        PathBuf::from("/cfg/zx-rustrum"),
         "XDG_CONFIG_HOME wins on Unix"
     );
 
@@ -299,8 +299,8 @@ fn loading_a_tape_remembers_its_directory() {
 // window geometry and display settings
 // ---------------------------------------------------------------------------
 
-use zx_spectrum_emulator::prefs::WindowRect;
-use zx_spectrum_emulator::screen;
+use zx_rustrum::prefs::WindowRect;
+use zx_rustrum::screen;
 
 #[test]
 fn window_geometry_round_trips() {

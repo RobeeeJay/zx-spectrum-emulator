@@ -8,8 +8,8 @@
 //! photographs of a real 48K in `tapes/Real 48k (early).png` and
 //! `tapes/Real 48k (late).png`.
 
-use zx_spectrum_emulator::machine::{screen_bitmap_offset, Model, Spectrum, FRAME_T};
-use zx_spectrum_emulator::tape::Tape;
+use zx_rustrum::machine::{screen_bitmap_offset, Model, Spectrum, FRAME_T};
+use zx_rustrum::tape::Tape;
 
 /// Decode the screen by matching each character cell against the ROM font,
 /// which lives at $3D00 of the BASIC ROM.

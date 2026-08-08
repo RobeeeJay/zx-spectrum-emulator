@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Draw the application icon: a dark screen with the Spectrum's four colour
-bars and a big ZX, rendered at 1024x1024 as PNG and as a multi-size ICO.
+"""Draw ZX-Rustrum's icon: a dark shell with the Spectrum's colour flash and
+a big ZX, rendered at 1024x1024 as PNG and as a multi-size ICO.
 
 Deliberately dependency-free — no Pillow — so it runs anywhere Python does.
 Shapes are supersampled 3x and box-filtered down, which is enough
@@ -17,7 +17,16 @@ W = SIZE * SS
 
 BG = (0x14, 0x16, 0x1A)
 INK = (0xF2, 0xF3, 0xF5)
-BARS = [(0xD8, 0x00, 0x00), (0xD8, 0xD8, 0x00), (0x00, 0xD8, 0x00), (0x00, 0xD8, 0xD8)]
+# The machine's own seven, as it wore them on its case.
+BARS = [
+    (0x20, 0x62, 0xFF),
+    (0xE0, 0x43, 0x3C),
+    (0xFF, 0x33, 0xE0),
+    (0x0F, 0xBB, 0x4D),
+    (0x22, 0xE0, 0xE0),
+    (0xF4, 0xE2, 0x30),
+    (0xF4, 0xF2, 0xEA),
+]
 
 
 def rounded(x, y, w, radius):
@@ -52,8 +61,8 @@ def render():
     # Four colour bars along the bottom, sheared into a parallelogram so the
     # icon has some movement to it.
     bar_top, bar_bottom = 720 * scale, 900 * scale
-    bar_w, gap = 150 * scale, 40 * scale
-    bar_left = 226 * scale
+    bar_w, gap = 96 * scale, 14 * scale
+    bar_left = 202 * scale
     shear = 58 * scale
 
     rows = []

@@ -3,9 +3,9 @@
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
-use zx_spectrum_emulator::machine::{Spectrum, FRAME_T};
-use zx_spectrum_emulator::profiler::{format_duration, Metric};
-use zx_spectrum_emulator::ui::{App, Roms};
+use zx_rustrum::machine::{Spectrum, FRAME_T};
+use zx_rustrum::profiler::{format_duration, Metric};
+use zx_rustrum::ui::{App, Roms};
 
 /// A program with two leaf functions of known cost, called in a loop.
 ///

@@ -2,11 +2,11 @@
 //! real load driven by the ROM's own loader.
 
 use std::path::Path;
-use zx_spectrum_emulator::tape::{
+use zx_rustrum::tape::{
     zx81_block, zx81_name, Block, Tape, ZX81_BIT_GAP, ZX81_HALF_PULSE, ZX81_ONE_PULSES,
     ZX81_ZERO_PULSES,
 };
-use zx_spectrum_emulator::zx81::{Ram, Zx81};
+use zx_rustrum::zx81::{Ram, Zx81};
 
 // ---- the file formats ------------------------------------------------------
 
@@ -175,7 +175,7 @@ fn the_bit_gap_is_long_enough_to_be_seen_as_the_end_of_a_burst() {
 #[test]
 fn a_block_knows_how_long_it_takes_to_play() {
     let block = zx81_block(&[0x80], &[0x00; 100]);
-    let seconds = block.duration_t() as f64 / zx_spectrum_emulator::zx81::CPU_HZ;
+    let seconds = block.duration_t() as f64 / zx_rustrum::zx81::CPU_HZ;
     // The ZX81 saves at roughly 50 bytes a second, so 101 bytes is about two
     // seconds. Anything wildly off means the pulse arithmetic is wrong.
     assert!(
@@ -293,7 +293,7 @@ fn the_loaded_program_runs_and_draws_something() {
         .map(|(i, _)| i)
         .collect();
     assert!(ink.len() > 500, "only {} pixels of ink", ink.len());
-    let w = zx_spectrum_emulator::zx81::RASTER_W;
+    let w = zx_rustrum::zx81::RASTER_W;
     let rows = ink.last().unwrap() / w - ink[0] / w;
     assert!(rows > 40, "the picture is only {rows} lines tall");
 }

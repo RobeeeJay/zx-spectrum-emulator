@@ -3,10 +3,10 @@
 
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
-use zx_spectrum_emulator::machine::Spectrum;
-use zx_spectrum_emulator::tape::{Block, Tape};
-use zx_spectrum_emulator::ui::tape::needs_scroll;
-use zx_spectrum_emulator::ui::{App, Roms};
+use zx_rustrum::machine::Spectrum;
+use zx_rustrum::tape::{Block, Tape};
+use zx_rustrum::ui::tape::needs_scroll;
+use zx_rustrum::ui::{App, Roms};
 
 fn test_app() -> App {
     let roms = Roms {
@@ -247,7 +247,7 @@ fn following_can_be_turned_off() {
 // progress through the current block
 // ---------------------------------------------------------------------------
 
-use zx_spectrum_emulator::tape::{
+use zx_rustrum::tape::{
     DATA_PILOT_PULSES, HEADER_PILOT_PULSES, ONE_PULSE, PILOT_PULSE, SYNC1_PULSE, SYNC2_PULSE,
     ZERO_PULSE,
 };
@@ -394,7 +394,7 @@ fn the_window_shows_a_bar_for_the_current_block() {
 fn zx81_app() -> Option<App> {
     let mut app = test_app();
     app.roms.rom_zx81 = Some(std::fs::read("roms/zx81.rom").ok()?);
-    app.switch_to_zx81(zx_spectrum_emulator::zx81::Ram::K16);
+    app.switch_to_zx81(zx_rustrum::zx81::Ram::K16);
     app.on_zx81().then_some(app)
 }
 

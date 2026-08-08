@@ -1,8 +1,8 @@
 //! Racing the beam: hovering the picture shows the frame half-drawn, with the
 //! part the ULA has not reached yet still showing the frame before it, dimmed.
 
-use zx_spectrum_emulator::machine::{Model, Spectrum, FRAME_T};
-use zx_spectrum_emulator::screen::{self, View};
+use zx_rustrum::machine::{Model, Spectrum, FRAME_T};
+use zx_rustrum::screen::{self, View};
 
 const VIEW: View = View::OVERSCAN;
 

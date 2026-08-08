@@ -11,8 +11,8 @@
 
 use egui_kittest::kittest::{By, NodeT, Queryable};
 use egui_kittest::Harness;
-use zx_spectrum_emulator::machine::{Model, Spectrum};
-use zx_spectrum_emulator::ui::{zoom_label, App, Roms};
+use zx_rustrum::machine::{Model, Spectrum};
+use zx_rustrum::ui::{zoom_label, App, Roms};
 
 /// An app with stand-in ROMs for every machine, so switching always has an
 /// image to load.
@@ -300,7 +300,7 @@ fn an_odd_sized_rom_is_reported_rather_than_silently_truncated() {
 
 #[test]
 fn the_overscan_toggle_changes_how_much_border_is_drawn() {
-    use zx_spectrum_emulator::screen::View;
+    use zx_rustrum::screen::View;
 
     let mut h = harness();
     h.run_steps(3);
@@ -326,7 +326,7 @@ fn the_overscan_toggle_changes_how_much_border_is_drawn() {
 #[test]
 fn the_display_is_centred_whatever_size_the_window_is() {
     use egui::{pos2, vec2, Rect};
-    use zx_spectrum_emulator::screen::centred;
+    use zx_rustrum::screen::centred;
 
     // Room to spare: equal space on all four sides.
     let area = Rect::from_min_size(pos2(10.0, 20.0), vec2(800.0, 600.0));
@@ -349,7 +349,7 @@ fn the_display_is_centred_whatever_size_the_window_is() {
 
 #[test]
 fn the_zoom_presets_set_the_display_scale() {
-    use zx_spectrum_emulator::screen::SCALES;
+    use zx_rustrum::screen::SCALES;
 
     assert_eq!(SCALES, [0.5, 1.0, 1.5, 2.0, 3.0, 3.5]);
 
@@ -384,7 +384,7 @@ fn race_the_beam_is_off_until_switched_on() {
 
 #[test]
 fn the_zx81_can_be_selected_and_left_again() {
-    use zx_spectrum_emulator::zx81::Ram;
+    use zx_rustrum::zx81::Ram;
 
     let mut h = harness();
     h.run_steps(3);

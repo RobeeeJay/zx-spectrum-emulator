@@ -2,8 +2,8 @@
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
-use zx_spectrum_emulator::machine::Spectrum;
-use zx_spectrum_emulator::ui::{App, Roms};
+use zx_rustrum::machine::Spectrum;
+use zx_rustrum::ui::{App, Roms};
 
 fn harness<'a>() -> Harness<'a, App> {
     let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
@@ -63,10 +63,10 @@ fn each_channel_has_its_own_fade_control() {
 // per-bank tracking and the all-memory view
 // ---------------------------------------------------------------------------
 
-use zx_spectrum_emulator::machine::Model;
-use zx_spectrum_emulator::tracker::{ram_phys, rom_phys, BANK_SIZE};
-use zx_spectrum_emulator::ui::ram_map::{chunks, hover_at, View, ROWS_PER_BANK};
-use zx_spectrum_emulator::z80::Bus;
+use zx_rustrum::machine::Model;
+use zx_rustrum::tracker::{ram_phys, rom_phys, BANK_SIZE};
+use zx_rustrum::ui::ram_map::{chunks, hover_at, View, ROWS_PER_BANK};
+use zx_rustrum::z80::Bus;
 
 fn app_128() -> App {
     let roms = Roms {
@@ -76,7 +76,7 @@ fn app_128() -> App {
         rom_zx81: Some(vec![0x00; 0x2000]),
     };
     let mut app = App::with_roms(
-        zx_spectrum_emulator::machine::Spectrum::with_model(Model::Spectrum128),
+        zx_rustrum::machine::Spectrum::with_model(Model::Spectrum128),
         String::new(),
         roms,
         None,

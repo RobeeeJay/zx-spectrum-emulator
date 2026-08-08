@@ -6,9 +6,9 @@
 //! two per T-state. Rendering one colour per scanline, as a simpler emulator
 //! might, would turn the whole thing into horizontal stripes.
 
-use zx_spectrum_emulator::machine::{Model, Spectrum, FRAME_T};
-use zx_spectrum_emulator::screen;
-use zx_spectrum_emulator::tape::Tape;
+use zx_rustrum::machine::{Model, Spectrum, FRAME_T};
+use zx_rustrum::screen;
+use zx_rustrum::tape::Tape;
 
 /// These measurements are against the full overscan area, which is what the
 /// reference photograph shows.

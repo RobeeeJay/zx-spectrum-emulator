@@ -2,8 +2,8 @@
 //! which is the normal case for a shipped app.
 
 use std::path::{Path, PathBuf};
-use zx_spectrum_emulator::prefs::Platform;
-use zx_spectrum_emulator::resources::{find_file, resolve, search_dirs_from};
+use zx_rustrum::prefs::Platform;
+use zx_rustrum::resources::{find_file, resolve, search_dirs_from};
 
 fn dirs(platform: Platform) -> Vec<PathBuf> {
     search_dirs_from(
@@ -58,8 +58,8 @@ fn a_unix_install_looks_in_share() {
         Some(PathBuf::from("/usr/local/bin/emu")),
         None,
     );
-    assert!(has(&d, "/usr/local/share/zx-spectrum-emulator"));
-    assert!(has(&d, "/usr/local/share/zx-spectrum-emulator/roms"));
+    assert!(has(&d, "/usr/local/share/zx-rustrum"));
+    assert!(has(&d, "/usr/local/share/zx-rustrum/roms"));
 }
 
 #[test]
