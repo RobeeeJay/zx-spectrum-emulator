@@ -257,9 +257,6 @@ pub struct App {
 
     /// Remembered settings, including the directories files were opened from.
     pub prefs: Prefs,
-    /// Windows whose saved geometry has been applied, so a restore happens
-    /// once rather than fighting the user every frame.
-    restored: std::collections::HashSet<&'static str>,
     /// The layout as last written, and when: the file is rewritten a moment
     /// after things settle, so a crash or a kill does not lose it.
     last_saved: Option<String>,
@@ -317,7 +314,6 @@ impl App {
             zx81: None,
             zx81_ram: zx81::Ram::K16,
             prefs: Prefs::default(),
-            restored: std::collections::HashSet::new(),
             last_saved: None,
             last_save_at: None,
             roms,
@@ -789,10 +785,12 @@ impl App {
         default_pos: [f32; 2],
         default_size: [f32; 2],
     ) -> ViewportBuilder {
-        if !self.restored.insert(name) {
-            // Already positioned; leave it alone so dragging it sticks.
-            return builder;
-        }
+        // The geometry goes in every frame, not just the first. A window that
+        // is not drawn for a while — while the application is in the
+        // background, say — is retired, and the next frame builds it again; a
+        // builder without a size gets the window system's default, which is
+        // how alt-tabbing away and back used to resize everything to 800x600.
+        // Asking for what the window already is costs nothing.
         let (pos, mut size) = match self.prefs.window(name) {
             Some(r) => ([r.x, r.y], [r.w, r.h]),
             None => (default_pos, default_size),
@@ -1478,7 +1476,6 @@ impl App {
         ] {
             if !shown {
                 self.placed.remove(name);
-                self.restored.remove(name);
             }
         }
 

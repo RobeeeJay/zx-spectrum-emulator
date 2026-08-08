@@ -43,6 +43,11 @@ const COG_R: f32 = 40.0;
 /// thickness wrapped round it.
 const EMPTY: f32 = 0.6;
 
+/// The most a hub is wound on for in one frame. A window that has not been
+/// drawn for a while — because the machine was busy, or the emulator was in
+/// the background — should not have its reels lurch to catch up.
+pub const MAX_STEP: f32 = 0.1;
+
 /// The window in the shell, through which the packs are seen.
 const WINDOW: (f32, f32, f32, f32) = (194.0, 121.0, 305.1, 174.0);
 
@@ -75,6 +80,15 @@ pub fn spin_rate(pack: f32, boosted: bool) -> f32 {
     TAPE_MM_S / (pack.max(EMPTY) * FULL_MM) * if boosted { BOOST } else { 1.0 }
 }
 
+/// Which way a hub is drawn turning, given how far it has wound on.
+///
+/// Tape leaves the left hub and is taken up by the right one along the bottom
+/// of the shell. A point at the bottom of a hub therefore travels to the
+/// right, which is anticlockwise as the cassette is seen.
+pub fn drawn_angle(spin: f32) -> f32 {
+    -spin
+}
+
 /// The same, in revolutions a second, which is how a deck is measured.
 pub fn revs_per_second(pack: f32, boosted: bool) -> f32 {
     spin_rate(pack, boosted) / std::f32::consts::TAU
@@ -97,10 +111,13 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) -> Rect {
         None => return Rect::NOTHING,
     };
 
-    // Wind the hubs on while the tape runs. Doing it from elapsed time rather
-    // than from the tape position keeps the movement smooth whatever the data
-    // on the tape happens to be.
-    let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
+    // Wind the hubs on while the tape runs. The clock is read rather than the
+    // frame time added up: egui can lay a window out more than once in a
+    // frame, and adding a frame's worth of turn each time would have the hubs
+    // running at two or three times the speed they should.
+    let now = ui.input(|i| i.time);
+    let dt = (now - app.tape.spun_at).clamp(0.0, MAX_STEP as f64) as f32;
+    app.tape.spun_at = now;
     let (left_pack, right_pack) = reel_scales(progress);
     let boosted = app.tape_boost();
     if playing {
@@ -151,7 +168,13 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) -> Rect {
         (app.art.right_cog.clone(), RIGHT_HUB, app.tape.right_spin),
     ] {
         let Some(texture) = texture else { continue };
-        turned_image(&painter, &texture, at(hub.0, hub.1), COG_R * scale, angle);
+        turned_image(
+            &painter,
+            &texture,
+            at(hub.0, hub.1),
+            COG_R * scale,
+            drawn_angle(angle),
+        );
     }
     rect
 }

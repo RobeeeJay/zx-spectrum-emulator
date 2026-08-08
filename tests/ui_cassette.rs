@@ -4,7 +4,9 @@
 use egui_kittest::Harness;
 use zx_rustrum::machine::Spectrum;
 use zx_rustrum::tape::{zx81_block, zx81_name, Block, Tape};
-use zx_rustrum::ui::cassette::{overall_progress, reel_scales, spin_rate, written_name};
+use zx_rustrum::ui::cassette::{
+    overall_progress, reel_scales, revs_per_second, spin_rate, written_name, MAX_STEP,
+};
 use zx_rustrum::ui::{App, Roms};
 
 #[test]
@@ -233,4 +235,73 @@ fn the_mark_is_a_rainbow_on_a_dark_shell() {
             .any(|p| p[0] == colour[0] && p[1] == colour[1] && p[2] == colour[2] && p[3] == 255);
         assert!(found, "{colour:?} is missing from the mark");
     }
+}
+
+#[test]
+fn the_hubs_turn_anticlockwise() {
+    use zx_rustrum::ui::cassette::drawn_angle;
+    // Screen coordinates run down the way, so a positive angle turns a shape
+    // clockwise; the hubs go the other way, as tape being wound on demands.
+    assert!(
+        drawn_angle(1.0) < 0.0,
+        "a hub that has wound on should be drawn turned anticlockwise"
+    );
+    assert_eq!(drawn_angle(0.0), 0.0);
+    assert_eq!(drawn_angle(2.5), -2.5, "and by as much as it has wound on");
+}
+
+#[test]
+fn the_hubs_wind_on_once_per_frame_however_often_the_window_is_laid_out() {
+    // egui can lay a window out more than once for the same frame. The turn
+    // is taken from the clock rather than added up per pass, so what the hubs
+    // do depends only on how much time has gone by.
+    let mut app = app_with_tape();
+    *app.tape_boost_mut() = false;
+    let mut h = Harness::builder()
+        .with_size([900.0, 900.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+    let now = h.state().machine_t();
+    h.state_mut().tape_mut().unwrap().play(now);
+    h.run_steps(2);
+
+    let before = (h.state().tape.left_spin, h.state().tape.spun_at);
+    h.run_steps(20);
+    let after = (h.state().tape.left_spin, h.state().tape.spun_at);
+
+    let elapsed = (after.1 - before.1) as f32;
+    assert!(elapsed > 0.0, "the clock should have moved on");
+
+    // One wind-on per frame, each of at most MAX_STEP seconds. Twenty frames
+    // is twenty steps' worth however many times the window was laid out.
+    let frames = 20.0;
+    let step = (elapsed / frames).min(MAX_STEP);
+    let progress = h.state().tape_ref().unwrap().progress();
+    let expected = frames * step * spin_rate(reel_scales(progress).0, false);
+    let turned = after.0 - before.0;
+    assert!(
+        (turned - expected).abs() < expected * 0.1,
+        "turned {turned} radians over {frames} frames, expected about {expected}"
+    );
+}
+
+#[test]
+fn the_hubs_turn_at_the_speed_a_real_cassette_does() {
+    // A compact cassette runs at 1⅞ inches a second, and a C60's tape winds
+    // out to about 25.7 mm from the hub, so a full pack comes round about
+    // eighteen times a minute and a nearly empty one about thirty.
+    let full = revs_per_second(1.0, false);
+    let empty = revs_per_second(0.6, false);
+    assert!(
+        (0.25..0.32).contains(&full),
+        "a full pack should turn about three tenths of a turn a second, got {full}"
+    );
+    assert!(
+        (0.45..0.55).contains(&empty),
+        "and a nearly empty one about half a turn, got {empty}"
+    );
+    assert!(
+        revs_per_second(0.6, true) < 0.8,
+        "even hurried along it should stay watchable"
+    );
 }

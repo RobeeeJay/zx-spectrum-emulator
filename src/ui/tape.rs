@@ -29,6 +29,8 @@ pub struct TapeWindowState {
     /// tape is playing, so the picture freezes when it stops.
     pub left_spin: f32,
     pub right_spin: f32,
+    /// When they were last wound on, by the interface's clock.
+    pub spun_at: f64,
     /// The block the list last asked to scroll into view, for tests and for
     /// anyone wondering why the list jumped.
     pub scroll_requested_for: Option<usize>,
@@ -45,6 +47,7 @@ impl Default for TapeWindowState {
             last_block: None,
             left_spin: 0.0,
             right_spin: 0.0,
+            spun_at: 0.0,
             scroll_requested_for: None,
         }
     }
