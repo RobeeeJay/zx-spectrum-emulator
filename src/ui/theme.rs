@@ -83,13 +83,15 @@ pub fn apply(ctx: &egui::Context) {
 
     w.hovered.bg_fill = CONTROL_HOVER;
     w.hovered.weak_bg_fill = CONTROL_HOVER;
-    w.hovered.bg_stroke = Stroke::new(1.0, Color32::from_gray(0x4a));
+    // The same outline in every state. Letting one appear on hover reads as
+    // the control growing by a pixel under the pointer.
+    w.hovered.bg_stroke = Stroke::new(1.0, EDGE);
     w.hovered.fg_stroke = Stroke::new(1.0, WHITE);
     w.hovered.corner_radius = radius;
 
     w.active.bg_fill = CASE_LIGHT;
     w.active.weak_bg_fill = CASE_LIGHT;
-    w.active.bg_stroke = Stroke::new(1.0, CYAN);
+    w.active.bg_stroke = Stroke::new(1.0, EDGE);
     w.active.fg_stroke = Stroke::new(1.0, WHITE);
     w.active.corner_radius = radius;
 

@@ -517,40 +517,14 @@ impl App {
         }
     }
 
-    /// The always-visible toolbar: machine selector, a file loader and the
-    /// window toggles. Everything here is a plain widget rather than a menu
-    /// entry, so no popup has to stay open for a click to land.
+    /// The second toolbar row: reset, and which windows are open. The machine,
+    /// speed, zoom and video controls are on the row above.
     fn machine_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            theme::group_label(ui, "Machine");
-            self.machine_dropdown(ui);
-            // Only the 48K has two timings to choose between.
-            if !self.on_zx81() && self.spec.bus.model == Model::Spectrum48 {
-                let mut late = self.spec.bus.late_timing;
-                if ui
-                    .checkbox(&mut late, "Late timing")
-                    .on_hover_text(
-                        "Later 48K machines run the display one T-state later \
-                         relative to the interrupt. HALT2INT tells them apart.",
-                    )
-                    .changed()
-                {
-                    self.spec.bus.set_late_timing(late);
-                    self.set_status(
-                        format!("48K {} timing", if late { "late" } else { "early" }),
-                        false,
-                    );
-                }
-            }
-
-            ui.separator();
-            if ui
-                .button("Load…")
-                .on_hover_text("Open a tape, snapshot or ROM image")
-                .clicked()
-            {
-                self.load_any_file();
-            }
+            // Rows grow to fit the tallest thing in them, and anything placed
+            // before that happens would be left at the top. Claiming the
+            // height first keeps every control on the row centred.
+            ui.set_min_height(ui.spacing().interact_size.y + 6.0);
             if ui.button("Reset").clicked() {
                 match &mut self.zx81 {
                     Some(zx) => {
@@ -572,23 +546,6 @@ impl App {
             ui.toggle_value(&mut self.show_tape, "Tape");
             ui.toggle_value(&mut self.show_back_buffer, "Back buffer");
             ui.toggle_value(&mut self.show_profiler, "Profiler");
-
-            ui.separator();
-            theme::group_label(ui, "Zoom");
-            zoom_dropdown(&mut self.scale, ui);
-            ui.separator();
-            ui.toggle_value(&mut self.race_the_beam, "Race the beam")
-                .on_hover_text(
-                    "Hover the picture to see the frame half-drawn: everything up to \
-                     the cursor is what the ULA has put out so far, the rest is the \
-                     previous frame, dimmed. Works while paused too.",
-                );
-            ui.toggle_value(&mut self.overscan, "Overscan")
-                .on_hover_text(
-                    "Show the whole area the ULA draws, which is where border-art \
-                     demos put their graphics. Off crops the border to the size a \
-                     television would have shown.",
-                );
         });
     }
 
@@ -1226,7 +1183,11 @@ impl App {
     }
 
     fn menu(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
+        // A wrapping row rather than a menu bar: a bar does not wrap, and with
+        // only one menu left on it the rest of the row would be clipped off
+        // the edge of a narrow window.
+        ui.horizontal_wrapped(|ui| {
+            ui.set_min_height(ui.spacing().interact_size.y + 6.0);
             ui.menu_button("File", |ui| {
                 if ui.button("Load ROM…").clicked() {
                     if let Some(path) = self.pick_file(Some(FileKind::Rom)) {
@@ -1275,12 +1236,51 @@ impl App {
             ui.separator();
             theme::group_label(ui, "Speed");
             speed_dropdown(&mut self.speed, ui);
-            ui.add(
-                egui::Slider::new(&mut self.speed, 0.001..=20.0)
-                    .logarithmic(true)
-                    .text("x"),
-            );
+
+            ui.separator();
+            theme::group_label(ui, "Machine");
+            self.machine_dropdown(ui);
+            self.late_timing(ui);
+
+            ui.separator();
+            theme::group_label(ui, "Zoom");
+            zoom_dropdown(&mut self.scale, ui);
+
+            ui.separator();
+            theme::group_label(ui, "Video");
+            ui.toggle_value(&mut self.race_the_beam, "Race the beam")
+                .on_hover_text(
+                    "Hover the picture to see the frame half-drawn: everything up to \
+                     the cursor is what the ULA has put out so far, the rest is the \
+                     previous frame, dimmed. Works while paused too.",
+                );
+            ui.toggle_value(&mut self.overscan, "Overscan")
+                .on_hover_text(
+                    "Show the whole border the ULA draws, not just a television's worth.",
+                );
         });
+    }
+
+    /// The 48K's two timings, which only it has.
+    fn late_timing(&mut self, ui: &mut egui::Ui) {
+        if self.on_zx81() || self.spec.bus.model != Model::Spectrum48 {
+            return;
+        }
+        let mut late = self.spec.bus.late_timing;
+        if ui
+            .checkbox(&mut late, "Late timing")
+            .on_hover_text(
+                "Later 48K machines run the display one T-state later \
+                 relative to the interrupt. HALT2INT tells them apart.",
+            )
+            .changed()
+        {
+            self.spec.bus.set_late_timing(late);
+            self.set_status(
+                format!("48K {} timing", if late { "late" } else { "early" }),
+                false,
+            );
+        }
     }
 
     fn controls_row(&mut self, ui: &mut egui::Ui) {
