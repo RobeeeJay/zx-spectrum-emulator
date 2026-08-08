@@ -125,14 +125,9 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) -> Rect {
         app.tape.right_spin += dt * spin_rate(right_pack, boosted);
     }
 
-    // The window is sized around this, so the width is what decides; the
-    // height only comes into it if the window has been made short.
-    let room = ui.available_height() * 0.62;
-    let width = ui
-        .available_width()
-        .min(MAX_W)
-        .min(room * ART_W / ART_H)
-        .max(160.0);
+    // The window is a fixed width and the contents scroll, so the width is
+    // the only thing that decides how big the cassette is drawn.
+    let width = ui.available_width().clamp(160.0, MAX_W);
     let size = Vec2::new(width, width * ART_H / ART_W);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let scale = rect.width() / ART_W;

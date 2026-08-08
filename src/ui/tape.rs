@@ -60,16 +60,23 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
-    transport(app, ui);
-    ui.separator();
-    // The deck itself, above the trace it produces.
-    ui.vertical_centered(|ui| {
-        crate::ui::cassette::ui(app, ui);
-    });
-    ui.separator();
-    scope(app, ui);
-    ui.separator();
-    block_list(app, ui);
+    // The window is a fixed width and any height, so the contents scroll
+    // rather than being squeezed when it is made short.
+    egui::ScrollArea::vertical()
+        .id_salt("tape-window")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            transport(app, ui);
+            ui.separator();
+            // The deck itself, above the trace it produces.
+            ui.vertical_centered(|ui| {
+                crate::ui::cassette::ui(app, ui);
+            });
+            ui.separator();
+            scope(app, ui);
+            ui.separator();
+            block_list(app, ui);
+        });
 }
 
 fn transport(app: &mut App, ui: &mut egui::Ui) {

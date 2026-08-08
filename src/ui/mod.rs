@@ -734,6 +734,18 @@ impl App {
         self.placed.contains_key(name)
     }
 
+    /// Fix a window's width at the window manager's level, so a sideways drag
+    /// is refused rather than allowed and then undone.
+    ///
+    /// Sent as commands rather than left to the viewport builder: the builder
+    /// is only diffed against the frame before, so a window that is rebuilt —
+    /// which happens whenever it has not been drawn for a while — comes back
+    /// without the constraint.
+    fn fix_width(&self, ctx: &egui::Context, width: f32) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize([width, 320.0].into()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize([width, 8000.0].into()));
+    }
+
     /// Put a debug window back where it was left.
     ///
     /// The geometry in the viewport builder is not reliably honoured when the
@@ -1573,6 +1585,7 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
+                    self.fix_width(&ctx, cassette::WINDOW_W);
                     if self.place_window("tape", &ctx, [260.0, 120.0], [cassette::WINDOW_W, 760.0])
                     {
                         // Built around the cassette: the height is the user's
