@@ -130,6 +130,55 @@ impl Roms {
 }
 
 /// How fast to run relative to a real Spectrum.
+/// How a zoom factor is written on the dropdown.
+pub fn zoom_label(scale: f32) -> String {
+    if scale.fract() == 0.0 {
+        format!("{scale:.0}x")
+    } else {
+        format!("{scale}x")
+    }
+}
+
+/// The speed presets, as a dropdown. The slider beside it still takes any
+/// value; the list is for the ones worth a single click.
+pub fn speed_dropdown(speed: &mut f32, ui: &mut egui::Ui) {
+    let selected = SPEED_PRESETS
+        .iter()
+        .find(|(_, mult)| (*speed - mult).abs() < f32::EPSILON)
+        .map(|(name, _)| (*name).to_string())
+        .unwrap_or_else(|| format!("{:.0}%", *speed * 100.0));
+    egui::ComboBox::from_id_salt("speed")
+        .selected_text(selected)
+        .width(74.0)
+        .show_ui(ui, |ui| {
+            for (name, mult) in SPEED_PRESETS {
+                if ui
+                    .selectable_label((*speed - mult).abs() < f32::EPSILON, name)
+                    .clicked()
+                {
+                    *speed = mult;
+                }
+            }
+        });
+}
+
+/// The display sizes, as a dropdown.
+pub fn zoom_dropdown(scale: &mut f32, ui: &mut egui::Ui) {
+    egui::ComboBox::from_id_salt("zoom")
+        .selected_text(zoom_label(*scale))
+        .width(74.0)
+        .show_ui(ui, |ui| {
+            for size in screen::SCALES {
+                if ui
+                    .selectable_label((*scale - size).abs() < f32::EPSILON, zoom_label(size))
+                    .clicked()
+                {
+                    *scale = size;
+                }
+            }
+        });
+}
+
 pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("1%", 0.01),
     ("5%", 0.05),
@@ -140,6 +189,13 @@ pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("200%", 2.0),
     ("Max", 20.0),
 ];
+
+/// What the machine dropdown was asked for, decided after the list is closed
+/// so the borrow of the app inside it has ended.
+enum Machine {
+    Spectrum(Model),
+    Zx81(zx81::Ram),
+}
 
 pub struct App {
     pub spec: Spectrum,
@@ -202,6 +258,8 @@ pub struct App {
     pub audio_out: Option<AudioOut>,
     /// Whether the theme has been applied to the context yet.
     styled: bool,
+    /// When each debug window was put back where it belongs.
+    placed: std::collections::HashMap<&'static str, std::time::Instant>,
     pub audio_error: Option<String>,
 }
 
@@ -251,6 +309,7 @@ impl App {
             roms,
             audio_out,
             styled: false,
+            placed: std::collections::HashMap::new(),
             audio_error: None,
         }
     }
@@ -379,58 +438,80 @@ impl App {
         }
     }
 
+    /// Every machine the emulator can be, in one list. Those whose ROM is
+    /// missing stay in it, saying so, rather than disappearing — otherwise
+    /// there is nothing to click to find out what is wanted.
+    fn machine_dropdown(&mut self, ui: &mut egui::Ui) {
+        let selected = if self.on_zx81() {
+            self.zx81_ram.name().to_string()
+        } else {
+            self.spec.bus.model.name().to_string()
+        };
+        let mut chosen: Option<Machine> = None;
+        egui::ComboBox::from_id_salt("machine")
+            .selected_text(selected)
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                for model in [
+                    Model::Spectrum48,
+                    Model::Spectrum128,
+                    Model::Plus2A,
+                    Model::Plus3,
+                ] {
+                    let current = !self.on_zx81() && self.spec.bus.model == model;
+                    let have_rom = self.roms.for_model(model).is_some();
+                    let label = if have_rom {
+                        model.name().to_string()
+                    } else {
+                        format!("{} (no ROM)", model.name())
+                    };
+                    if ui
+                        .selectable_label(current, label)
+                        .on_hover_text(if have_rom {
+                            format!("Switch to the {} and reset", model.name())
+                        } else {
+                            format!("Needs {}", Roms::expected_file(model))
+                        })
+                        .clicked()
+                    {
+                        chosen = Some(Machine::Spectrum(model));
+                    }
+                }
+                for ram in [zx81::Ram::K1, zx81::Ram::K16] {
+                    let current = self.on_zx81() && self.zx81_ram == ram;
+                    let have_rom = self.roms.rom_zx81.is_some();
+                    let label = if have_rom {
+                        ram.name().to_string()
+                    } else {
+                        format!("{} (no ROM)", ram.name())
+                    };
+                    if ui
+                        .selectable_label(current, label)
+                        .on_hover_text(if have_rom {
+                            format!("Switch to a {} and reset", ram.name())
+                        } else {
+                            "Needs roms/zx81.rom".to_string()
+                        })
+                        .clicked()
+                    {
+                        chosen = Some(Machine::Zx81(ram));
+                    }
+                }
+            });
+        match chosen {
+            Some(Machine::Spectrum(model)) => self.switch_model(model),
+            Some(Machine::Zx81(ram)) => self.switch_to_zx81(ram),
+            None => {}
+        }
+    }
+
     /// The always-visible toolbar: machine selector, a file loader and the
     /// window toggles. Everything here is a plain widget rather than a menu
     /// entry, so no popup has to stay open for a click to land.
     fn machine_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             theme::group_label(ui, "Machine");
-            for model in [
-                Model::Spectrum48,
-                Model::Spectrum128,
-                Model::Plus2A,
-                Model::Plus3,
-            ] {
-                let current = self.spec.bus.model == model;
-                let have_rom = self.roms.for_model(model).is_some();
-                let label = if have_rom {
-                    model.name().to_string()
-                } else {
-                    format!("{} (no ROM)", model.name())
-                };
-                if ui
-                    .selectable_label(current, label)
-                    .on_hover_text(if have_rom {
-                        format!("Switch to the {} and reset", model.name())
-                    } else {
-                        format!("Needs {}", Roms::expected_file(model))
-                    })
-                    .clicked()
-                {
-                    self.switch_model(model);
-                }
-            }
-
-            for ram in [zx81::Ram::K1, zx81::Ram::K16] {
-                let current = self.zx81.is_some() && self.zx81_ram == ram;
-                let have_rom = self.roms.rom_zx81.is_some();
-                let label = if have_rom {
-                    ram.name().to_string()
-                } else {
-                    format!("{} (no ROM)", ram.name())
-                };
-                if ui
-                    .selectable_label(current, label)
-                    .on_hover_text(if have_rom {
-                        format!("Switch to a {} and reset", ram.name())
-                    } else {
-                        "Needs roms/zx81.rom".to_string()
-                    })
-                    .clicked()
-                {
-                    self.switch_to_zx81(ram);
-                }
-            }
+            self.machine_dropdown(ui);
 
             ui.separator();
             if ui
@@ -464,19 +545,7 @@ impl App {
 
             ui.separator();
             theme::group_label(ui, "Zoom");
-            for scale in screen::SCALES {
-                let label = if scale.fract() == 0.0 {
-                    format!("{scale:.0}x")
-                } else {
-                    format!("{scale}x")
-                };
-                if ui
-                    .selectable_label((self.scale - scale).abs() < f32::EPSILON, label)
-                    .clicked()
-                {
-                    self.scale = scale;
-                }
-            }
+            zoom_dropdown(&mut self.scale, ui);
             ui.separator();
             ui.toggle_value(&mut self.race_the_beam, "Race the beam")
                 .on_hover_text(
@@ -620,6 +689,35 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Put a debug window back where it was left.
+    ///
+    /// The geometry in the viewport builder is not always honoured when the
+    /// window is created — on macOS the window manager centres a
+    /// default-sized window instead, which is then dutifully saved over the
+    /// real position — so it is sent again as commands from inside the
+    /// viewport. Returns false until the window has had a moment to move, so
+    /// the position it is being dragged away from is not recorded.
+    fn place_window(
+        &mut self,
+        name: &'static str,
+        ctx: &egui::Context,
+        default_pos: [f32; 2],
+        default_size: [f32; 2],
+    ) -> bool {
+        const SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+        if let Some(at) = self.placed.get(name) {
+            return at.elapsed() >= SETTLE;
+        }
+        let (pos, size) = match self.prefs.window(name) {
+            Some(r) => ([r.x, r.y], [r.w, r.h]),
+            None => (default_pos, default_size),
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos.into()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size.into()));
+        self.placed.insert(name, std::time::Instant::now());
+        false
     }
 
     /// Apply the saved geometry for a window, once.
@@ -1167,14 +1265,7 @@ impl App {
             }
             ui.separator();
             theme::group_label(ui, "Speed");
-            for (name, mult) in SPEED_PRESETS {
-                if ui
-                    .selectable_label((self.speed - mult).abs() < f32::EPSILON, name)
-                    .clicked()
-                {
-                    self.speed = mult;
-                }
-            }
+            speed_dropdown(&mut self.speed, ui);
             ui.add(
                 egui::Slider::new(&mut self.speed, 0.001..=20.0)
                     .logarithmic(true)
@@ -1390,7 +1481,9 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    self.remember_window("ram_map", &ctx);
+                    if self.place_window("ram_map", &ctx, [1120.0, 40.0], [560.0, 700.0]) {
+                        self.remember_window("ram_map", &ctx);
+                    }
                     egui::CentralPanel::default().show(ui, |ui| ram_map::ui(self, ui));
                 },
             );
@@ -1412,7 +1505,9 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    self.remember_window("debugger", &ctx);
+                    if self.place_window("debugger", &ctx, [20.0, 40.0], [820.0, 780.0]) {
+                        self.remember_window("debugger", &ctx);
+                    }
                     egui::CentralPanel::default().show(ui, |ui| debugger::ui(self, ui));
                 },
             );
@@ -1434,7 +1529,9 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    self.remember_window("profiler", &ctx);
+                    if self.place_window("profiler", &ctx, [220.0, 120.0], [900.0, 620.0]) {
+                        self.remember_window("profiler", &ctx);
+                    }
                     egui::CentralPanel::default().show(ui, |ui| profiler::ui(self, ui));
                 },
             );
@@ -1456,7 +1553,9 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    self.remember_window("tape", &ctx);
+                    if self.place_window("tape", &ctx, [260.0, 120.0], [680.0, 700.0]) {
+                        self.remember_window("tape", &ctx);
+                    }
                     egui::CentralPanel::default().show(ui, |ui| tape::ui(self, ui));
                 },
             );
@@ -1478,7 +1577,9 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    self.remember_window("back_buffer", &ctx);
+                    if self.place_window("back_buffer", &ctx, [300.0, 160.0], [680.0, 700.0]) {
+                        self.remember_window("back_buffer", &ctx);
+                    }
                     egui::CentralPanel::default().show(ui, |ui| back_buffer::ui(self, ui));
                 },
             );

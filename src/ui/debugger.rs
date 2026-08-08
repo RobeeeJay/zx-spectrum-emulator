@@ -5,7 +5,7 @@ use egui::{Color32, RichText};
 
 use crate::disasm;
 use crate::machine::{Slot, Stop, FRAME_T};
-use crate::ui::{theme, App, SPEED_PRESETS};
+use crate::ui::{theme, App};
 
 pub struct DebuggerState {
     pub follow_pc: bool,
@@ -202,15 +202,8 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
     }
 
     ui.horizontal_wrapped(|ui| {
-        ui.label("Speed:");
-        for (name, mult) in SPEED_PRESETS {
-            if ui
-                .selectable_label((app.speed - mult).abs() < f32::EPSILON, name)
-                .clicked()
-            {
-                app.speed = mult;
-            }
-        }
+        theme::group_label(ui, "Speed");
+        crate::ui::speed_dropdown(&mut app.speed, ui);
     });
 }
 

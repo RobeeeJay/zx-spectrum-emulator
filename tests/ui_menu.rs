@@ -9,10 +9,10 @@
 //! the emulator, so these tests keep them closed and exercise the widgets
 //! directly.
 
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::{By, NodeT, Queryable};
 use egui_kittest::Harness;
 use zx_spectrum_emulator::machine::{Model, Spectrum};
-use zx_spectrum_emulator::ui::{App, Roms};
+use zx_spectrum_emulator::ui::{zoom_label, App, Roms};
 
 /// An app with stand-in ROMs for every machine, so switching always has an
 /// image to load.
@@ -59,13 +59,20 @@ const MENU_ENTRIES: [(&str, Model); 4] = [
     ("ZX Spectrum +3 (no disk drive)", Model::Plus3),
 ];
 
-/// Labels of the always-visible selector buttons.
+/// Labels of the entries in the always-visible machine dropdown.
 const ROW_ENTRIES: [(&str, Model); 4] = [
     ("48K", Model::Spectrum48),
     ("128K", Model::Spectrum128),
     ("+2A", Model::Plus2A),
     ("+3", Model::Plus3),
 ];
+
+/// Open the machine dropdown. Its trigger carries the machine it is showing as
+/// an accessibility value, not a label, so it is found by that.
+fn open_machine_list(h: &mut Harness<'_, App>, showing: &str) {
+    h.get(By::new().value(showing)).click();
+    h.run_steps(3);
+}
 
 #[test]
 fn the_machine_menu_switches_model() {
@@ -111,14 +118,17 @@ fn every_machine_menu_entry_works() {
 }
 
 #[test]
-fn every_machine_row_button_works() {
+fn every_machine_dropdown_entry_works() {
     for (label, model) in ROW_ENTRIES {
         let mut h = harness();
         h.run_steps(3);
+        let mut showing = "48K";
         if model == Model::Spectrum48 {
             h.state_mut().switch_model(Model::Spectrum128);
             h.run_steps(3);
+            showing = "128K";
         }
+        open_machine_list(&mut h, showing);
         h.get_by_label(label).click();
         h.run_steps(3);
         assert_eq!(
@@ -135,6 +145,7 @@ fn switching_resumes_the_new_machine() {
     let mut h = harness();
     h.run_steps(3);
     assert!(!h.state().running, "this test starts paused");
+    open_machine_list(&mut h, "48K");
     h.get_by_label("128K").click();
     h.run_steps(3);
     assert_eq!(h.state().spec.bus.model, Model::Spectrum128);
@@ -151,6 +162,7 @@ fn a_missing_rom_reports_an_error_instead_of_failing_silently() {
     let mut h = harness_for(app);
     h.run_steps(3);
 
+    open_machine_list(&mut h, "48K");
     h.get_by_label("128K (no ROM)").click();
     h.run_steps(3);
 
@@ -173,6 +185,7 @@ fn the_machine_row_marks_missing_roms() {
     app.roms.rom_plus3 = None;
     let mut h = harness_for(app);
     h.run_steps(3);
+    open_machine_list(&mut h, "48K");
     let labels = collect_labels(&h.root());
     assert!(
         labels.iter().any(|l| l == "+3 (no ROM)"),
@@ -188,6 +201,7 @@ fn the_machine_row_marks_missing_roms() {
 fn selecting_the_current_machine_says_so() {
     let mut h = harness();
     h.run_steps(3);
+    open_machine_list(&mut h, "48K");
     h.get_by_label("48K").click();
     h.run_steps(3);
     assert_eq!(h.state().spec.bus.model, Model::Spectrum48);
@@ -215,6 +229,7 @@ fn the_toolbar_toggles_the_debug_windows() {
 fn the_toolbar_reset_keeps_the_model() {
     let mut h = harness();
     h.run_steps(3);
+    open_machine_list(&mut h, "48K");
     h.get_by_label("128K").click();
     h.run_steps(3);
     h.get_by_label("Reset").click();
@@ -298,9 +313,11 @@ fn a_loaded_rom_is_remembered_for_later_switches() {
     assert_eq!(h.state().spec.bus.model, Model::Spectrum128);
 
     // Away and back again: the image loaded from disk should still be used.
+    open_machine_list(&mut h, "128K");
     h.get_by_label("48K").click();
     h.run_steps(3);
     assert_eq!(h.state().spec.bus.model, Model::Spectrum48);
+    open_machine_list(&mut h, "48K");
     h.get_by_label("128K").click();
     h.run_steps(3);
     assert_eq!(
@@ -389,14 +406,13 @@ fn the_zoom_presets_set_the_display_scale() {
     let mut h = harness();
     h.run_steps(3);
     for scale in SCALES {
-        let label = if scale.fract() == 0.0 {
-            format!("{scale:.0}x")
-        } else {
-            format!("{scale}x")
-        };
+        let showing = zoom_label(h.state().scale);
+        h.get(By::new().value(&showing)).click();
+        h.run_steps(3);
+        let label = zoom_label(scale);
         h.get_by_label(&label).click();
         h.run_steps(3);
-        assert_eq!(h.state().scale, scale, "clicking {label}");
+        assert_eq!(h.state().scale, scale, "choosing {label}");
     }
 }
 
@@ -424,12 +440,14 @@ fn the_zx81_can_be_selected_and_left_again() {
     h.run_steps(3);
     assert!(!h.state().on_zx81(), "starts as a Spectrum");
 
+    open_machine_list(&mut h, "48K");
     h.get_by_label("ZX81 16K").click();
     h.run_steps(3);
     assert!(h.state().on_zx81(), "status says: {}", h.state().status);
     assert_eq!(h.state().zx81_ram, Ram::K16);
 
     // The unexpanded machine is a separate choice.
+    open_machine_list(&mut h, "ZX81 16K");
     h.get_by_label("ZX81 1K").click();
     h.run_steps(3);
     assert_eq!(h.state().zx81_ram, Ram::K1);
@@ -440,6 +458,7 @@ fn the_zx81_can_be_selected_and_left_again() {
     );
 
     // And back to a Spectrum.
+    open_machine_list(&mut h, "ZX81 1K");
     h.get_by_label("128K").click();
     h.run_steps(3);
     assert!(!h.state().on_zx81());
@@ -447,12 +466,13 @@ fn the_zx81_can_be_selected_and_left_again() {
 }
 
 #[test]
-fn without_a_zx81_rom_the_buttons_say_so() {
+fn without_a_zx81_rom_the_list_says_so() {
     let mut app = test_app();
     app.roms.rom_zx81 = None;
     let mut h = harness_for(app);
     h.run_steps(3);
 
+    open_machine_list(&mut h, "48K");
     h.get_by_label("ZX81 16K (no ROM)").click();
     h.run_steps(3);
     assert!(!h.state().on_zx81(), "must not switch without a ROM");

@@ -161,10 +161,17 @@ fn the_window_marks_the_block_being_played() {
 }
 
 /// Collect every label in the accessibility tree.
+/// Every piece of text on screen. egui puts a plain label's text in the
+/// accessibility node's value rather than its label, and a progress bar's
+/// caption likewise, so both are collected.
 fn labels(h: &Harness<'_, App>) -> Vec<String> {
     fn walk(node: &egui_kittest::Node<'_>, out: &mut Vec<String>) {
-        if let Some(l) = node.accesskit_node().label() {
+        let node_ref = node.accesskit_node();
+        if let Some(l) = node_ref.label() {
             out.push(l.to_string());
+        }
+        if let Some(v) = node_ref.value() {
+            out.push(v.to_string());
         }
         for c in node.children() {
             walk(&c, out);

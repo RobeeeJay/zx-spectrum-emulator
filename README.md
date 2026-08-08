@@ -282,7 +282,7 @@ the machine playing it and the ZX81's 3.25 MHz clock is not the Spectrum's
 
 ## ZX81
 
-**ZX81 1K** and **ZX81 16K** in the machine row switch to a ZX81, which needs an
+**ZX81 1K** and **ZX81 16K** in the machine dropdown switch to a ZX81, which needs an
 8K ROM at `roms/zx81.rom`.
 
 The ZX81 has no video hardware to speak of: the picture is produced by the CPU
@@ -361,6 +361,15 @@ Tape sound works too. The ZX81 has no sound hardware of its own, so what you
 hear is the monitor from the recorder while a tape loads, mixed at the T-state
 of each edge like everything else.
 
+Speed, machine and zoom are dropdowns rather than rows of buttons, which keeps
+the toolbar to one line; the machines whose ROM is missing stay in the list,
+saying so, rather than disappearing.
+
+Each debug window opens where it was last left. The geometry in the viewport
+builder is not always honoured when a window is created — on macOS the window
+manager centres a default-sized one instead — so it is sent again from inside
+the window, and nothing is recorded until it has had a moment to move.
+
 ## How it looks
 
 The interface follows `zx-ux-mockup.html`: dark case plastic, near-black
@@ -405,7 +414,7 @@ separately so a tape does not send you looking for ROMs.
 Opening a ROM also **scans that directory for other ROMs** and adopts the ones
 for machines you have no image for, recognised by size (16K, 32K, 64K) with the
 file name breaking ties — so pointing at one `128.rom` typically lights up the
-48K, 128K and +3 buttons at once, and says which files it found. A ROM you have
+48K, 128K and +3 entries at once, and says which files it found. A ROM you have
 already loaded is never replaced by a scanned one. That directory is scanned
 again at the next launch, so the machines stay available between sessions.
 
@@ -477,7 +486,7 @@ run fast and the oldest samples are dropped rather than letting latency grow.
 
 ## The 128K, +2A and +3
 
-The toolbar's machine buttons, or **Machine ▸**, switch between the four models
+The toolbar's machine dropdown, or **Machine ▸**, switches between the four models
 at any time; each needs its ROM
 in `roms/` (`48.rom`, `128.rom` — 32K, and `plus3.rom` — 64K, shared by the +2A
 and +3). The same choices exist as `--48`, `--128`, `--plus2a`, `--plus3`.
