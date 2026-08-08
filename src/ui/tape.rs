@@ -142,6 +142,10 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
 /// Draw the EAR waveform, triggered on an edge so the display stands still.
 fn scope(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
+        // The sweep control sits in a frame, so it is taller than everything
+        // else on the row. Claiming that height before anything is placed is
+        // what lets the labels centre against it rather than sitting on top.
+        ui.set_min_height(ui.spacing().interact_size.y + 8.0);
         theme::group_label(ui, "Scope");
         sweep_slider(&mut app.tape.window_us, ui);
         ui.separator();
