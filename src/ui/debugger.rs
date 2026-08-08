@@ -7,8 +7,16 @@ use crate::disasm;
 use crate::machine::{Slot, Stop, FRAME_T};
 use crate::ui::{theme, App};
 
+/// How wide the debugger window is, and stays: the disassembly and the
+/// registers beside it are laid out in columns, and a window narrow enough to
+/// wrap them is no use for reading either.
+pub const WINDOW_W: f32 = 820.0;
+
 pub struct DebuggerState {
     pub follow_pc: bool,
+    /// Set when the machine stops at a breakpoint. The window asks to be
+    /// raised on the next frame it draws, and clears it.
+    pub raise: bool,
     pub view_addr: u16,
     pub lines: usize,
     pub goto_text: String,
@@ -21,6 +29,7 @@ impl Default for DebuggerState {
     fn default() -> Self {
         DebuggerState {
             follow_pc: true,
+            raise: false,
             view_addr: 0,
             lines: 24,
             goto_text: String::new(),
@@ -168,16 +177,16 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 
 fn controls(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
-        if ui
-            .button(if app.running { "⏸ Pause" } else { "▶ Run" })
-            .clicked()
-        {
+        if theme::run_pause_button(ui, app.running).clicked() {
             app.running = !app.running;
         }
-        if ui.button("⤓ Step into").on_hover_text("F7").clicked() {
+        // The icons are picked from what the bundled fonts actually have: the
+        // arrows that were here before were in no font at all and drew as
+        // empty boxes. Down into the call, past it, back out of it.
+        if ui.button("⤵ Step into").on_hover_text("F7").clicked() {
             app.step_into();
         }
-        if ui.button("⤼ Step over").on_hover_text("F8").clicked() {
+        if ui.button("⏭ Step over").on_hover_text("F8").clicked() {
             app.step_over();
         }
         if ui.button("⤴ Step out").clicked() {
@@ -200,11 +209,6 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
     if ui.input(|i| i.key_pressed(egui::Key::F5)) {
         app.running = !app.running;
     }
-
-    ui.horizontal_wrapped(|ui| {
-        theme::group_label(ui, "Speed");
-        crate::ui::speed_dropdown(&mut app.speed, ui);
-    });
 }
 
 fn registers(app: &mut App, ui: &mut egui::Ui) {

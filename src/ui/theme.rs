@@ -235,6 +235,41 @@ pub fn dropdown<R>(
         .map(|inner| inner.inner)
 }
 
+/// What the run/pause button says in each state. Kept as constants so the
+/// button can be measured against both.
+pub const RUN_LABEL: &str = "▶ Run";
+pub const PAUSE_LABEL: &str = "⏸ Pause";
+
+/// The run/pause button, wide enough for whichever word is longer.
+///
+/// Sized for both states rather than the one being shown, so the controls
+/// after it do not jump sideways every time the machine is paused.
+pub fn run_pause_button(ui: &mut egui::Ui, running: bool) -> egui::Response {
+    // Laid out the way the button itself lays its label out, rather than
+    // through the painter: the two disagree about how wide the symbols are,
+    // and measuring the wrong one leaves the button a few points short.
+    let widest = [RUN_LABEL, PAUSE_LABEL]
+        .into_iter()
+        .map(|text| {
+            egui::WidgetText::from(text)
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    egui::TextStyle::Button,
+                )
+                .rect
+                .width()
+        })
+        .fold(0.0_f32, f32::max);
+    let size = egui::vec2(
+        widest + 2.0 * ui.spacing().button_padding.x,
+        ui.spacing().interact_size.y,
+    );
+    let label = if running { PAUSE_LABEL } else { RUN_LABEL };
+    ui.add(egui::Button::new(label).min_size(size))
+}
+
 /// A divider between groups of controls.
 ///
 /// egui's own separator takes the height of the row it is in and grows it a

@@ -1029,7 +1029,9 @@ impl App {
     }
 
     /// Advance the emulation by however much wall-clock time has passed.
-    fn advance(&mut self, dt: f32) {
+    /// Run the machine for a slice of wall-clock time, as a frame of the UI
+    /// would. Public so tests can stop it at a breakpoint without a window.
+    pub fn advance(&mut self, dt: f32) {
         if !self.running {
             return;
         }
@@ -1099,6 +1101,11 @@ impl App {
                 self.running = false;
                 self.status = format!("Breakpoint at ${pc:04X}");
                 self.dbg.follow_pc = true;
+                // Stopping somewhere is only useful if you can see where: the
+                // debugger is opened if it was closed and asks for the front
+                // on the next frame it draws.
+                self.show_debugger = true;
+                self.dbg.raise = true;
             }
             Stop::SlowDraw => {
                 self.leftover = 0.0;
@@ -1202,10 +1209,7 @@ impl App {
             });
             theme::divider(ui);
 
-            if ui
-                .button(if self.running { "⏸ Pause" } else { "▶ Run" })
-                .clicked()
-            {
+            if theme::run_pause_button(ui, self.running).clicked() {
                 self.running = !self.running;
             }
             theme::divider(ui);
@@ -1521,14 +1525,24 @@ impl App {
                     "debugger",
                     ViewportBuilder::default().with_title("Debugger"),
                     [20.0, 40.0],
-                    [820.0, 780.0],
+                    [debugger::WINDOW_W, 780.0],
                 ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    if self.place_window("debugger", &ctx, [20.0, 40.0], [820.0, 780.0]) {
+                    self.fix_width(&ctx, debugger::WINDOW_W);
+                    if self.dbg.raise {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        self.dbg.raise = false;
+                    }
+                    if self.place_window(
+                        "debugger",
+                        &ctx,
+                        [20.0, 40.0],
+                        [debugger::WINDOW_W, 780.0],
+                    ) {
                         self.remember_window("debugger", &ctx);
                     }
                     egui::CentralPanel::default().show(ui, |ui| debugger::ui(self, ui));

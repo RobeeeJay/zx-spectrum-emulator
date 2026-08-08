@@ -86,7 +86,7 @@ fn stepping_moves_the_zx81_on_one_instruction() {
     h.run_steps(2);
 
     let before = (h.state().cpu().pc, h.state().cpu().instructions);
-    h.get_by_label("⤓ Step into").click();
+    h.get_by_label("⤵ Step into").click();
     h.run_steps(2);
     let after = (h.state().cpu().pc, h.state().cpu().instructions);
 
