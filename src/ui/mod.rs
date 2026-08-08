@@ -270,6 +270,8 @@ pub struct App {
     pub audio_out: Option<AudioOut>,
     /// Whether the theme has been applied to the context yet.
     styled: bool,
+    /// The cassette artwork, rasterised from the SVGs.
+    pub art: cassette::Art,
     /// How each debug window's placement is going.
     placed: std::collections::HashMap<&'static str, Placement>,
     pub audio_error: Option<String>,
@@ -321,6 +323,7 @@ impl App {
             roms,
             audio_out,
             styled: false,
+            art: cassette::Art::default(),
             placed: std::collections::HashMap::new(),
             audio_error: None,
         }

@@ -12,6 +12,7 @@ pub mod profiler;
 pub mod resources;
 pub mod screen;
 pub mod snapshot;
+pub mod svg;
 pub mod tape;
 pub mod tracker;
 pub mod ui;

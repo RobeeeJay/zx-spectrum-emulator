@@ -71,13 +71,15 @@ fn a_small_pack_turns_faster_than_a_fat_one() {
 
 #[test]
 fn boosting_the_tape_winds_the_hubs_on_faster() {
-    // Half speed while the tape plays at its own pace, half again above that
-    // when it is being hurried along, so the picture matches the sound.
+    // At its own pace the hubs turn at the speed a real deck's do; hurried
+    // along they go half again as fast, which reads as urgency without the
+    // picture running away from the sound.
     let slow = spin_rate(1.0, false);
     let fast = spin_rate(1.0, true);
     assert!(
-        (fast / slow - 3.0).abs() < 1e-5,
-        "boosted should be 1.5 against 0.5"
+        (fast / slow - 1.5).abs() < 1e-5,
+        "boosted should be half again as fast, got {}",
+        fast / slow
     );
 }
 

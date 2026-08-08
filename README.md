@@ -376,6 +376,26 @@ builder is not always honoured when a window is created — on macOS the window
 manager centres a default-sized one instead — so it is sent again from inside
 the window, and nothing is recorded until it has had a moment to move.
 
+## The artwork
+
+The cassette in the tape window is the artwork in `designs/`, rendered as it
+is. `src/svg.rs` is a small SVG renderer — groups with matrix transforms,
+paths of lines and cubic curves, rectangles, circles, solid and linear-gradient
+fills, strokes, and the even-odd rule that makes the shell's window a hole. It
+is not a general implementation and is not meant to become one; it covers what
+the drawings use, so that re-exporting them changes the emulator without
+anyone having to redraw anything in code.
+
+The shell is rasterised once per size and kept as a texture. The reels are the
+flat discs the files say they are, drawn directly so they can wind on. The cogs
+are rasterised once and then turned by rotating the quad they sit on, so a
+spinning tape costs nothing per frame.
+
+The hubs turn at the speed a real deck's do: a compact cassette runs at 1⅞
+inches a second, and a C60's tape winds out to about 25.7 mm from the hub, so a
+full pack comes round about eighteen times a minute and a nearly empty one
+about thirty. Hurrying the tape along turns them half again as fast.
+
 ## The name
 
 ZX-Rustrum: the machine it emulates, by way of the language it is written in.
