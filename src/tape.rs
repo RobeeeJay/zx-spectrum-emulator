@@ -701,6 +701,11 @@ pub struct Tape {
     call_stack: Vec<usize>,
     /// Set when a $20 pause-of-zero or $2A block stops the tape.
     pub stopped_by_block: bool,
+    /// Where the tape has been played up to, so progress can be worked out
+    /// during the silence at the end of a block as well as during the sound.
+    clock: u64,
+    /// The pause a block ends with: when it starts and when it ends.
+    pause_span: Option<(u64, u64)>,
     /// Total pulses emitted, for the UI.
     pub pulses: u64,
     /// Recent level changes as (absolute T-state, new level), for the
@@ -762,6 +767,8 @@ impl Tape {
             loop_stack: Vec::new(),
             call_stack: Vec::new(),
             stopped_by_block: false,
+            clock: 0,
+            pause_span: None,
             pulses: 0,
             edges: VecDeque::with_capacity(EDGE_HISTORY),
             pending_edges: Vec::new(),
@@ -917,7 +924,15 @@ impl Tape {
                 }
             }
             Phase::BlockPause { .. } => seg.pilot + seg.sync + seg.data,
-            Phase::Next | Phase::Finished => total,
+            Phase::Next | Phase::Finished => match self.pause_span {
+                // Still in the silence this block ends with.
+                Some((from, to)) if self.clock < to && to > from => {
+                    let sound = seg.pilot + seg.sync + seg.data;
+                    let through = (self.clock.saturating_sub(from)) as f64 / (to - from) as f64;
+                    sound + (seg.pause as f64 * through) as u64
+                }
+                _ => total,
+            },
         };
         Some((done as f32 / total as f32).clamp(0.0, 1.0))
     }
@@ -940,6 +955,7 @@ impl Tape {
     }
 
     pub fn rewind(&mut self) {
+        self.pause_span = None;
         self.pending_edges.clear();
         self.block = 0;
         self.phase = Phase::Enter;
@@ -952,6 +968,7 @@ impl Tape {
 
     /// Jump straight to a block, e.g. from the tape window.
     pub fn seek(&mut self, block: usize) {
+        self.pause_span = None;
         self.block = block.min(self.blocks.len());
         self.phase = Phase::Enter;
         self.level = false;
@@ -964,6 +981,7 @@ impl Tape {
     /// EAR level at absolute T-state `now`, advancing the pulse generator to
     /// get there. Cheap: it only does work when pulses have actually elapsed.
     pub fn level_at(&mut self, now: u64) -> bool {
+        self.clock = now;
         if !self.playing {
             return false;
         }
@@ -1005,6 +1023,7 @@ impl Tape {
                 Phase::Next => {
                     self.block += 1;
                     self.phase = Phase::Enter;
+                    self.pause_span = None;
                 }
                 Phase::Enter => {
                     if self.block >= self.blocks.len() {
@@ -1248,8 +1267,14 @@ impl Tape {
                 Phase::BlockPause { ms } => {
                     self.phase = Phase::Next;
                     if ms > 0 {
+                        let len = ms as u32 * T_PER_MS;
+                        // The pause is played as one long silent pulse. Noting
+                        // when it runs is what lets the block's progress keep
+                        // moving through it rather than sticking at the end of
+                        // the sound.
+                        self.pause_span = Some((self.next_edge, self.next_edge + len as u64));
                         return Some(Pulse {
-                            len: ms as u32 * T_PER_MS,
+                            len,
                             level: Some(false),
                         });
                     }

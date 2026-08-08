@@ -407,7 +407,7 @@ fn played_so_far(ui: &egui::Ui, row: egui::Rect, fraction: f32) {
     let done = played_rect(row, fraction);
     let painter = ui.painter_at(row);
     painter.rect_filled(done, 2.0, theme::CYAN.gamma_multiply(0.22));
-    if fraction > 0.0 && fraction < 1.0 {
+    if fraction > 0.0 {
         // A line at the head position, so slow blocks still show movement.
         // Amber against the blue of the bar, so the head is easy to pick out.
         painter.line_segment(

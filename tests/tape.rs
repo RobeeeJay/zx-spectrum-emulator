@@ -390,3 +390,43 @@ fn a_real_tape_loads_through_basic() {
         "video RAM looks empty after loading ({nonzero} non-zero bytes)"
     );
 }
+
+#[test]
+fn a_blocks_progress_runs_through_the_pause_it_ends_with() {
+    // A standard block is sound followed by silence, and the silence can be
+    // most of it. Progress used to jump to the end as soon as the sound
+    // stopped and sit there, so the marker on the block's row appeared to
+    // vanish part way through.
+    let block = Block::Standard {
+        pause_ms: 1000,
+        data: vec![0xff; 200],
+    };
+    let total = block.duration_t();
+    let mut tape = Tape::from_blocks("t".into(), vec![block]);
+    tape.play(0);
+
+    let mut readings = Vec::new();
+    for step in 0..=20u64 {
+        tape.level_at(step * total / 20);
+        readings.push(
+            tape.block_progress()
+                .expect("a block being played always has progress to show"),
+        );
+    }
+
+    assert!(
+        readings.windows(2).all(|w| w[1] >= w[0]),
+        "progress should only ever move forwards: {readings:?}"
+    );
+    // Half way through this block the sound has finished and the pause has
+    // started, so this is the part that used to be stuck.
+    let (before, after) = (readings[10], readings[15]);
+    assert!(
+        after > before + 0.1,
+        "progress should keep moving through the silence, {before} to {after}"
+    );
+    assert!(
+        readings.last().is_some_and(|p| *p > 0.85),
+        "and reach the end of the block: {readings:?}"
+    );
+}
