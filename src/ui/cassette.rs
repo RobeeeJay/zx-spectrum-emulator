@@ -17,8 +17,9 @@ pub const ART_W: f32 = 500.0;
 pub const ART_H: f32 = 330.0;
 
 /// How big the cassette is drawn, at most.
-pub const MAX_W: f32 = 780.0;
-/// What the tape window should be wide, to sit around it.
+pub const MAX_W: f32 = 512.0;
+/// What the tape window should be wide, to sit around it: a third narrower
+/// than it started out, which is enough for the cassette and its margins.
 pub const WINDOW_W: f32 = MAX_W + 30.0;
 
 const CASSETTE_SVG: &str = include_str!("../../designs/cassette.svg");
