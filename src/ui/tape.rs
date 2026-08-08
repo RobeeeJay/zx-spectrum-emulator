@@ -17,10 +17,6 @@ pub struct TapeWindowState {
     /// Width of the oscilloscope sweep, in microseconds.
     pub window_us: f32,
     pub trigger: Trigger,
-    /// Off by default: loading a tape should not start it moving.
-    pub auto_play_on_load: bool,
-    /// Keep the block being played on screen as the tape advances.
-    pub follow_current: bool,
     /// One-shot request to scroll to the current block (after a load or skip).
     pub scroll_to_current: bool,
     /// Block the list was showing last frame, to notice when it advances.
@@ -41,8 +37,6 @@ impl Default for TapeWindowState {
         TapeWindowState {
             window_us: 16000.0,
             trigger: Trigger::Rising,
-            auto_play_on_load: false,
-            follow_current: true,
             scroll_to_current: true,
             last_block: None,
             left_spin: 0.0,
@@ -82,12 +76,11 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 fn transport(app: &mut App, ui: &mut egui::Ui) {
     let now = app.machine_t();
     let mut action: Option<i32> = None;
-    let (name, playing, pulses, stopped_by_block) = {
+    let (playing, pulses, stopped_by_block) = {
         let t = app.tape_ref().unwrap();
-        (t.name.clone(), t.playing, t.pulses, t.stopped_by_block)
+        (t.playing, t.pulses, t.stopped_by_block)
     };
 
-    ui.label(RichText::new(&name).strong());
     ui.horizontal_wrapped(|ui| {
         if ui
             .button("|◀ Start")
@@ -121,17 +114,21 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
             t.stop();
         }
         if ui
-            .button("▶▶ Fast forward")
+            .button("▶▶ Forward")
             .on_hover_text("Next section")
             .clicked()
         {
             action = Some(1);
         }
         ui.separator();
-        ui.checkbox(app.tape_boost_mut(), "Boost speed while playing")
-            .on_hover_text("Runs the CPU at 8x while the tape moves, so loading is quick.");
-        ui.checkbox(&mut app.tape.auto_play_on_load, "Play on load")
-            .on_hover_text("Off by default: a freshly loaded tape waits for Play.");
+        let boost = app.tape_boost();
+        if ui
+            .selectable_label(boost, "Fast")
+            .on_hover_text("Runs the CPU at 8x while the tape moves, so loading is quick.")
+            .clicked()
+        {
+            *app.tape_boost_mut() = !boost;
+        }
     });
 
     if let Some(dir) = action {
@@ -163,14 +160,12 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
 /// Draw the EAR waveform, triggered on an edge so the display stands still.
 fn scope(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
-        ui.label("Scope:");
-        ui.add(
-            egui::Slider::new(&mut app.tape.window_us, 50.0..=40000.0)
-                .logarithmic(true)
-                .text("µs/sweep"),
-        );
-        ui.selectable_value(&mut app.tape.trigger, Trigger::Rising, "Trigger rising");
-        ui.selectable_value(&mut app.tape.trigger, Trigger::Falling, "Trigger falling");
+        theme::group_label(ui, "Scope");
+        sweep_slider(&mut app.tape.window_us, ui);
+        ui.separator();
+        theme::group_label(ui, "Trigger");
+        ui.selectable_value(&mut app.tape.trigger, Trigger::Rising, "Rising");
+        ui.selectable_value(&mut app.tape.trigger, Trigger::Falling, "Falling");
         ui.selectable_value(&mut app.tape.trigger, Trigger::Off, "Free run");
     });
 
@@ -300,26 +295,22 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// Whether the current row should be scrolled into view: either because
-/// something asked for it, or because following is on and it has gone
-/// off screen.
-pub fn needs_scroll(forced: bool, follow: bool, row_visible: bool) -> bool {
-    forced || (follow && !row_visible)
+/// something asked for it, or because it has gone off screen. The list always
+/// follows the tape — a block list that does not show what is playing is not
+/// worth having.
+pub fn needs_scroll(forced: bool, row_visible: bool) -> bool {
+    forced || !row_visible
 }
 
 fn block_list(app: &mut App, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Blocks").strong());
-        ui.checkbox(&mut app.tape.follow_current, "Follow playing block");
-    });
+    ui.label(RichText::new("Blocks").strong());
     ui.small("Click a block to move the tape there.");
 
     let current = app.tape_ref().unwrap().block;
     // Scroll whenever playback moves on to another block.
     if app.tape.last_block != Some(current) {
         app.tape.last_block = Some(current);
-        if app.tape.follow_current {
-            app.tape.scroll_to_current = true;
-        }
+        app.tape.scroll_to_current = true;
     }
     let rows: Vec<(usize, String, bool)> = app
         .tape_ref()
@@ -369,7 +360,7 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                         ));
                     }
                     let visible = ui.clip_rect().contains_rect(resp.rect);
-                    if needs_scroll(app.tape.scroll_to_current, app.tape.follow_current, visible) {
+                    if needs_scroll(app.tape.scroll_to_current, visible) {
                         resp.scroll_to_me(Some(egui::Align::Center));
                         app.tape.scroll_requested_for = Some(i);
                     }
@@ -415,4 +406,32 @@ fn played_so_far(ui: &egui::Ui, row: egui::Rect, fraction: f32) {
             egui::Stroke::new(1.5, theme::AMBER),
         );
     }
+}
+
+/// The sweep control: a green handle running along a sunken track, so it reads
+/// as a knob on an instrument rather than as a line of text with a dot on it.
+fn sweep_slider(window_us: &mut f32, ui: &mut egui::Ui) {
+    theme::sunken().show(ui, |ui| {
+        let visuals = &mut ui.style_mut().visuals;
+        // The part behind the handle fills in as it is dragged.
+        visuals.selection.bg_fill = theme::GREEN;
+        visuals.slider_trailing_fill = true;
+        let track = egui::Color32::from_rgb(0x12, 0x3a, 0x2c);
+        for state in [
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+        ] {
+            state.bg_fill = track;
+            state.fg_stroke = egui::Stroke::new(1.5, theme::GREEN);
+        }
+        visuals.widgets.hovered.bg_fill = theme::GREEN;
+        visuals.widgets.active.bg_fill = theme::GREEN;
+        ui.add(
+            egui::Slider::new(window_us, 50.0..=40000.0)
+                .logarithmic(true)
+                .suffix(" µs")
+                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 0.5 }),
+        );
+    });
 }

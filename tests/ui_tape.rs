@@ -88,35 +88,31 @@ fn loading_a_tape_does_not_advance_it_over_time() {
 }
 
 #[test]
-fn play_on_load_is_off_by_default_but_can_be_turned_on() {
+fn a_tape_never_starts_itself() {
+    // Loading a tape puts it in the deck and nothing more, as with a real one.
     let Some(path) = a_tape_file() else {
         return;
     };
     let mut app = test_app();
-    assert!(!app.tape.auto_play_on_load, "off by default");
-
-    app.tape.auto_play_on_load = true;
     app.load_path(&path);
     assert!(
-        app.spec.bus.tape_playing(),
-        "with the option on, loading should start playback"
+        !app.spec.bus.tape_playing(),
+        "loading a tape must not start it"
+    );
+    assert!(
+        app.status.contains("press Play"),
+        "and the status should say so: {}",
+        app.status
     );
 }
 
 #[test]
 fn the_block_list_follows_playback() {
-    // Following is on by default, and a row that has scrolled out of view is
-    // brought back; a visible row is left alone so manual scrolling sticks.
-    assert!(
-        needs_scroll(false, true, false),
-        "off-screen row must scroll"
-    );
-    assert!(!needs_scroll(false, true, true), "visible row must not");
-    assert!(needs_scroll(true, false, true), "an explicit request wins");
-    assert!(
-        !needs_scroll(false, false, false),
-        "with following off, nothing is forced"
-    );
+    // A row that has scrolled out of view is brought back; a visible one is
+    // left alone, so scrolling by hand sticks while the tape stays put.
+    assert!(needs_scroll(false, false), "off-screen row must scroll");
+    assert!(!needs_scroll(false, true), "visible row must not");
+    assert!(needs_scroll(true, true), "an explicit request wins");
 }
 
 #[test]
@@ -131,7 +127,6 @@ fn the_window_marks_the_block_being_played() {
     let mut tape = Tape::from_blocks("many-blocks.tzx".into(), blocks);
     tape.seek(30);
     app.spec.bus.tape = Some(tape);
-    assert!(app.tape.follow_current, "following is on by default");
 
     let mut h = harness_for(app);
     h.run_steps(3);
@@ -219,29 +214,6 @@ fn the_list_scrolls_to_the_block_as_playback_moves_on() {
         "and remember where playback is"
     );
     assert!(has_row(&h, 55), "the row exists: {:?}", labels(&h));
-}
-
-#[test]
-fn following_can_be_turned_off() {
-    let mut app = test_app();
-    let blocks = (0..60)
-        .map(|i| Block::Standard {
-            pause_ms: 0,
-            data: vec![i as u8; 16],
-        })
-        .collect();
-    app.spec.bus.tape = Some(Tape::from_blocks("long.tzx".into(), blocks));
-    app.tape.follow_current = false;
-
-    let mut h = harness_for(app);
-    h.run_steps(3);
-    h.state_mut().spec.bus.tape.as_mut().unwrap().seek(54);
-    h.step();
-    assert_eq!(
-        h.state().tape.scroll_requested_for,
-        None,
-        "with following off the list should stay where the user left it"
-    );
 }
 
 // ---------------------------------------------------------------------------

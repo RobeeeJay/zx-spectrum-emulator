@@ -635,24 +635,18 @@ impl App {
     /// Put a tape in the deck of whichever machine is running.
     fn insert_tape(&mut self, path: &std::path::Path) {
         match crate::tape::Tape::load(path) {
-            Ok(mut t) => {
+            Ok(t) => {
                 let blocks = t.blocks.len();
                 let zx81 = matches!(t.blocks.first(), Some(crate::tape::Block::Zx81 { .. }));
-                if self.tape.auto_play_on_load {
-                    t.play(self.machine_t());
-                }
-                let playing = t.playing;
                 let name = t.name.clone();
                 self.set_tape(Some(t));
                 self.show_tape = true;
                 self.tape.scroll_to_current = true;
                 self.tape.last_block = None;
                 self.prefs.remember_file(FileKind::Tape, path);
-                // A ZX81 needs LOAD "" typed at it before the tape means
-                // anything, which is easy to forget.
-                let hint = if playing {
-                    ""
-                } else if zx81 {
+                // A tape waits for Play, as a real one does; a ZX81 also needs
+                // LOAD "" typed at it first, which is easy to forget.
+                let hint = if zx81 {
                     " — type LOAD \"\" then press Play"
                 } else {
                     " — press Play"

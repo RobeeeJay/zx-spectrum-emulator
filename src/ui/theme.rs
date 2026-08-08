@@ -127,6 +127,16 @@ pub fn lcd() -> Frame {
         .stroke(Stroke::new(1.0, Color32::from_rgb(0x04, 0x11, 0x08)))
 }
 
+/// A sunken well for a control to sit in, so a knob reads as being set into
+/// the case rather than floating on it.
+pub fn sunken() -> Frame {
+    Frame::new()
+        .fill(EDGE)
+        .inner_margin(Margin::symmetric(6, 2))
+        .corner_radius(CornerRadius::same(5))
+        .stroke(Stroke::new(1.0, Color32::from_black_alpha(120)))
+}
+
 /// A raised slab of case plastic, for grouping controls.
 pub fn slab() -> Frame {
     Frame::new()
