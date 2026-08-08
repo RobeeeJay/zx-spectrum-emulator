@@ -6,6 +6,7 @@ use egui::{ColorImage, RichText, TextureHandle, TextureOptions};
 
 use crate::screen;
 use crate::tracker::Region;
+use crate::ui::theme;
 use crate::ui::App;
 
 pub struct BackBufferState {
@@ -89,7 +90,8 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             "watch back buffer",
         );
         ui.toggle_value(&mut app.spec.bus.slow.watch_screen, "watch video RAM");
-        ui.add(
+        theme::slider(
+            ui,
             egui::Slider::new(&mut app.spec.bus.slow.writes_per_slice, 1..=4096)
                 .logarithmic(true)
                 .text("writes/frame"),

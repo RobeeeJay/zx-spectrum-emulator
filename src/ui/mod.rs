@@ -1279,7 +1279,8 @@ impl App {
                      so the picture visibly builds up over several host frames.",
                 );
             ui.add_enabled_ui(self.spec.bus.slow.enabled, |ui| {
-                ui.add(
+                theme::slider(
+                    ui,
                     egui::Slider::new(&mut self.spec.bus.slow.writes_per_slice, 1..=4096)
                         .logarithmic(true)
                         .text("writes/frame"),
@@ -1324,7 +1325,8 @@ impl App {
             let failed = self.audio_out.is_none();
             ui.toggle_value(&mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
                 .on_hover_text(&sound);
-            ui.add(
+            theme::slider(
+                ui,
                 egui::Slider::new(&mut self.audio().volume, 0.0..=1.0)
                     .show_value(false)
                     .text("vol"),

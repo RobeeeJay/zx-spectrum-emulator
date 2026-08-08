@@ -419,28 +419,13 @@ fn played_so_far(ui: &egui::Ui, row: egui::Rect, fraction: f32) {
 
 /// The sweep control: a green handle running along a sunken track, so it reads
 /// as a knob on an instrument rather than as a line of text with a dot on it.
+/// The styling lives in the theme now, because the slow-draw and volume
+/// sliders in the main window are the same control.
 fn sweep_slider(window_us: &mut f32, ui: &mut egui::Ui) {
-    theme::sunken().show(ui, |ui| {
-        let visuals = &mut ui.style_mut().visuals;
-        // The part behind the handle fills in as it is dragged.
-        visuals.selection.bg_fill = theme::GREEN;
-        visuals.slider_trailing_fill = true;
-        let track = egui::Color32::from_rgb(0x12, 0x3a, 0x2c);
-        for state in [
-            &mut visuals.widgets.inactive,
-            &mut visuals.widgets.hovered,
-            &mut visuals.widgets.active,
-        ] {
-            state.bg_fill = track;
-            state.fg_stroke = egui::Stroke::new(1.5, theme::GREEN);
-        }
-        visuals.widgets.hovered.bg_fill = theme::GREEN;
-        visuals.widgets.active.bg_fill = theme::GREEN;
-        ui.add(
-            egui::Slider::new(window_us, 50.0..=40000.0)
-                .logarithmic(true)
-                .suffix(" µs")
-                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 0.5 }),
-        );
-    });
+    theme::slider(
+        ui,
+        egui::Slider::new(window_us, 50.0..=40000.0)
+            .logarithmic(true)
+            .suffix(" µs"),
+    );
 }

@@ -139,6 +139,43 @@ pub fn sunken() -> Frame {
         .stroke(Stroke::new(1.0, Color32::from_black_alpha(120)))
 }
 
+/// The colour of a slider's track: the green of the handle, taken right down,
+/// so the part still to be dragged through reads as unlit rather than empty.
+const SLIDER_TRACK: Color32 = Color32::from_rgb(0x12, 0x3a, 0x2c);
+
+/// Style a slider as an instrument's control: a green handle running along a
+/// sunken track, with the part behind it filled in.
+///
+/// Kept apart from [`slider`] so what the styling does can be asserted on
+/// without a window to draw into.
+pub fn slider_visuals(visuals: &mut egui::Visuals) {
+    visuals.selection.bg_fill = GREEN;
+    visuals.slider_trailing_fill = true;
+    for state in [
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+    ] {
+        state.bg_fill = SLIDER_TRACK;
+        state.fg_stroke = Stroke::new(1.5, GREEN);
+    }
+    // The handle takes its colour from the interacted state's fill, so it
+    // lights up under the pointer instead of matching the track.
+    visuals.widgets.hovered.bg_fill = GREEN;
+    visuals.widgets.active.bg_fill = GREEN;
+}
+
+/// A slider in the emulator's own style: see [`slider_visuals`]. Every slider
+/// the user reaches for goes through here, so they all look alike.
+pub fn slider(ui: &mut egui::Ui, slider: egui::Slider<'_>) -> egui::Response {
+    sunken()
+        .show(ui, |ui| {
+            slider_visuals(&mut ui.style_mut().visuals);
+            ui.add(slider.handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 0.5 }))
+        })
+        .inner
+}
+
 /// A raised slab of case plastic, for grouping controls.
 pub fn slab() -> Frame {
     Frame::new()
