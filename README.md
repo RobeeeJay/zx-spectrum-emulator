@@ -361,11 +361,17 @@ Tape sound works too. The ZX81 has no sound hardware of its own, so what you
 hear is the monitor from the recorder while a tape loads, mixed at the T-state
 of each edge like everything else.
 
+The toolbar is the only place the machine, the windows and the sound are
+chosen: the menus that duplicated them are gone, leaving File. The 48K's late
+timing switch sits beside the machine dropdown, where it applies, and the sound
+device, buffer and auto-mute are with the volume under the screen.
+
 Speed, machine and zoom are dropdowns rather than rows of buttons, which keeps
 the toolbar to one line; the machines whose ROM is missing stay in the list,
 saying so, rather than disappearing.
 
-Each debug window opens where it was last left. The geometry in the viewport
+Each debug window opens where it was last left, including after being toggled
+off and on again. The geometry in the viewport
 builder is not always honoured when a window is created — on macOS the window
 manager centres a default-sized one instead — so it is sent again from inside
 the window, and nothing is recorded until it has had a moment to move.

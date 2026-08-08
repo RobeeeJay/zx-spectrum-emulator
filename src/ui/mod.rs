@@ -190,6 +190,13 @@ pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("Max", 20.0),
 ];
 
+/// Putting a window back where it was left takes a few frames, and sometimes
+/// does not take at all.
+struct Placement {
+    asked_at: std::time::Instant,
+    settled: bool,
+}
+
 /// What the machine dropdown was asked for, decided after the list is closed
 /// so the borrow of the app inside it has ended.
 enum Machine {
@@ -258,8 +265,8 @@ pub struct App {
     pub audio_out: Option<AudioOut>,
     /// Whether the theme has been applied to the context yet.
     styled: bool,
-    /// When each debug window was put back where it belongs.
-    placed: std::collections::HashMap<&'static str, std::time::Instant>,
+    /// How each debug window's placement is going.
+    placed: std::collections::HashMap<&'static str, Placement>,
     pub audio_error: Option<String>,
 }
 
@@ -512,6 +519,24 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             theme::group_label(ui, "Machine");
             self.machine_dropdown(ui);
+            // Only the 48K has two timings to choose between.
+            if !self.on_zx81() && self.spec.bus.model == Model::Spectrum48 {
+                let mut late = self.spec.bus.late_timing;
+                if ui
+                    .checkbox(&mut late, "Late timing")
+                    .on_hover_text(
+                        "Later 48K machines run the display one T-state later \
+                         relative to the interrupt. HALT2INT tells them apart.",
+                    )
+                    .changed()
+                {
+                    self.spec.bus.set_late_timing(late);
+                    self.set_status(
+                        format!("48K {} timing", if late { "late" } else { "early" }),
+                        false,
+                    );
+                }
+            }
 
             ui.separator();
             if ui
@@ -691,14 +716,22 @@ impl App {
         }
     }
 
+    /// Whether a debug window has been put back where it was left. Closing one
+    /// clears this, so reopening places it again.
+    pub fn window_is_placed(&self, name: &str) -> bool {
+        self.placed.contains_key(name)
+    }
+
     /// Put a debug window back where it was left.
     ///
-    /// The geometry in the viewport builder is not always honoured when the
-    /// window is created — on macOS the window manager centres a
-    /// default-sized window instead, which is then dutifully saved over the
-    /// real position — so it is sent again as commands from inside the
-    /// viewport. Returns false until the window has had a moment to move, so
-    /// the position it is being dragged away from is not recorded.
+    /// The geometry in the viewport builder is not reliably honoured when the
+    /// window is created — the window manager may centre a default-sized one
+    /// instead — so it is sent again from inside the viewport, every frame,
+    /// until the window reports that it has arrived. Recording where the
+    /// window is only starts then, or the position it is being moved away
+    /// from would be saved over the real one.
+    ///
+    /// Returns whether the window has settled, and can be recorded.
     fn place_window(
         &mut self,
         name: &'static str,
@@ -706,17 +739,31 @@ impl App {
         default_pos: [f32; 2],
         default_size: [f32; 2],
     ) -> bool {
-        const SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
-        if let Some(at) = self.placed.get(name) {
-            return at.elapsed() >= SETTLE;
-        }
+        /// How long to keep asking before letting the window be where it is.
+        const GIVE_UP: std::time::Duration = std::time::Duration::from_secs(2);
+        /// A window landing within a couple of points is close enough.
+        const NEAR: f32 = 2.0;
+
         let (pos, size) = match self.prefs.window(name) {
             Some(r) => ([r.x, r.y], [r.w, r.h]),
             None => (default_pos, default_size),
         };
+        let placement = self.placed.entry(name).or_insert(Placement {
+            asked_at: std::time::Instant::now(),
+            settled: false,
+        });
+        if placement.settled {
+            return true;
+        }
+        let arrived = ctx
+            .input(|i| i.viewport().outer_rect)
+            .is_some_and(|r| (r.min.x - pos[0]).abs() <= NEAR && (r.min.y - pos[1]).abs() <= NEAR);
+        if arrived || placement.asked_at.elapsed() > GIVE_UP {
+            placement.settled = true;
+            return arrived;
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos.into()));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size.into()));
-        self.placed.insert(name, std::time::Instant::now());
         false
     }
 
@@ -1166,95 +1213,6 @@ impl App {
                     ui.close();
                 }
             });
-            ui.menu_button("Machine", |ui| {
-                let model = self.spec.bus.model;
-                if ui
-                    .radio(model == Model::Spectrum48, "ZX Spectrum 48K")
-                    .clicked()
-                {
-                    self.switch_model(Model::Spectrum48);
-                    ui.close();
-                }
-                if ui
-                    .radio(model == Model::Spectrum128, "ZX Spectrum 128K (AY sound)")
-                    .clicked()
-                {
-                    self.switch_model(Model::Spectrum128);
-                    ui.close();
-                }
-                if ui
-                    .radio(model == Model::Plus2A, "ZX Spectrum +2A")
-                    .clicked()
-                {
-                    self.switch_model(Model::Plus2A);
-                    ui.close();
-                }
-                if model == Model::Spectrum48 {
-                    let mut late = self.spec.bus.late_timing;
-                    if ui
-                        .checkbox(&mut late, "Late timing")
-                        .on_hover_text(
-                            "Later 48K machines run the display one T-state later \
-                             relative to the interrupt. HALT2INT tells them apart.",
-                        )
-                        .changed()
-                    {
-                        self.spec.bus.set_late_timing(late);
-                        self.set_status(
-                            format!("48K {} timing", if late { "late" } else { "early" }),
-                            false,
-                        );
-                    }
-                }
-                if ui
-                    .radio(model == Model::Plus3, "ZX Spectrum +3 (no disk drive)")
-                    .on_hover_text("The FDC is not emulated: tapes and snapshots only.")
-                    .clicked()
-                {
-                    self.switch_model(Model::Plus3);
-                    ui.close();
-                }
-            });
-            ui.menu_button("Sound", |ui| {
-                ui.checkbox(&mut self.audio().enabled, "Sound on");
-                ui.add(egui::Slider::new(&mut self.audio().volume, 0.0..=1.0).text("volume"));
-                ui.checkbox(
-                    &mut self.spec.bus.audio.mute_off_speed,
-                    "Mute unless running at normal speed",
-                );
-                match (&self.audio_out, &self.audio_error) {
-                    (Some(out), _) => {
-                        ui.label(format!("{} @ {} Hz", out.device_name, out.sample_rate));
-                    }
-                    (None, Some(e)) => {
-                        ui.colored_label(egui::Color32::from_rgb(255, 140, 140), e);
-                    }
-                    (None, None) => {
-                        ui.label("no audio device");
-                    }
-                }
-                ui.add(
-                    egui::Slider::new(&mut self.audio_latency_target, 0.02..=0.25)
-                        .text("buffer (s)"),
-                )
-                .on_hover_text(
-                    "How far ahead of the sound card to stay. Raise it if you hear \
-                     crackling, lower it for a more immediate beeper.",
-                );
-                ui.label(format!(
-                    "buffer {} samples ({:.0} ms), {} dropped",
-                    self.spec.bus.audio.queue_len(),
-                    self.spec.bus.audio.latency() * 1000.0,
-                    self.spec.bus.audio.dropped
-                ));
-            });
-            ui.menu_button("Windows", |ui| {
-                ui.checkbox(&mut self.show_ram_map, "RAM access map");
-                ui.checkbox(&mut self.show_debugger, "Debugger");
-                ui.checkbox(&mut self.show_back_buffer, "Back buffer");
-                ui.checkbox(&mut self.show_tape, "Tape");
-                ui.checkbox(&mut self.show_profiler, "Profiler");
-            });
             ui.separator();
 
             if ui
@@ -1310,11 +1268,38 @@ impl App {
                 }
                 ui.separator();
             }
-            ui.checkbox(&mut self.audio().enabled, "🔊");
+            // Everything about the sound lives here: what the top menu used to
+            // hold as well, since it was the same two controls twice.
+            let sound = match (&self.audio_out, &self.audio_error) {
+                (Some(out), _) => format!(
+                    "{} @ {} Hz\nbuffer {} samples ({:.0} ms), {} dropped",
+                    out.device_name,
+                    out.sample_rate,
+                    self.spec.bus.audio.queue_len(),
+                    self.spec.bus.audio.latency() * 1000.0,
+                    self.spec.bus.audio.dropped
+                ),
+                (None, Some(e)) => e.clone(),
+                (None, None) => "no audio device".to_string(),
+            };
+            let failed = self.audio_out.is_none();
+            ui.checkbox(&mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
+                .on_hover_text(&sound);
             ui.add(
                 egui::Slider::new(&mut self.audio().volume, 0.0..=1.0)
                     .show_value(false)
                     .text("vol"),
+            );
+            ui.checkbox(&mut self.spec.bus.audio.mute_off_speed, "auto-mute")
+                .on_hover_text("Silence the sound unless the machine is running at about normal speed, so fast-forwarding does not shriek.");
+            ui.add(
+                egui::Slider::new(&mut self.audio_latency_target, 0.02..=0.25)
+                    .show_value(false)
+                    .text("buffer"),
+            )
+            .on_hover_text(
+                "How far ahead of the sound card to stay. Raise it if you hear \
+                 crackling, lower it for a more immediate beeper.",
             );
             ui.separator();
             ui.label(match &self.zx81 {
@@ -1466,6 +1451,23 @@ impl App {
 
 impl App {
     fn debug_viewports(&mut self, ctx: &egui::Context) {
+        // A window that has been closed loses its viewport, and the next one
+        // opened under the same name is a new window that the system will
+        // place where it likes. Forget that it was ever positioned, so it is
+        // put back where it was left rather than wherever it reappears.
+        for (name, shown) in [
+            ("ram_map", self.show_ram_map),
+            ("debugger", self.show_debugger),
+            ("profiler", self.show_profiler),
+            ("tape", self.show_tape),
+            ("back_buffer", self.show_back_buffer),
+        ] {
+            if !shown {
+                self.placed.remove(name);
+                self.restored.remove(name);
+            }
+        }
+
         if self.show_ram_map {
             let mut open = true;
             ctx.show_viewport_immediate(

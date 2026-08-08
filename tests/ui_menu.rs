@@ -52,13 +52,6 @@ fn collect_labels(node: &egui_kittest::Node<'_>) -> Vec<String> {
 }
 
 /// Labels of the entries in the Machine menu, and the model each selects.
-const MENU_ENTRIES: [(&str, Model); 4] = [
-    ("ZX Spectrum 48K", Model::Spectrum48),
-    ("ZX Spectrum 128K (AY sound)", Model::Spectrum128),
-    ("ZX Spectrum +2A", Model::Plus2A),
-    ("ZX Spectrum +3 (no disk drive)", Model::Plus3),
-];
-
 /// Labels of the entries in the always-visible machine dropdown.
 const ROW_ENTRIES: [(&str, Model); 4] = [
     ("48K", Model::Spectrum48),
@@ -72,49 +65,6 @@ const ROW_ENTRIES: [(&str, Model); 4] = [
 fn open_machine_list(h: &mut Harness<'_, App>, showing: &str) {
     h.get(By::new().value(showing)).click();
     h.run_steps(3);
-}
-
-#[test]
-fn the_machine_menu_switches_model() {
-    let mut h = harness();
-    h.run_steps(3);
-    assert_eq!(h.state().spec.bus.model, Model::Spectrum48);
-
-    h.get_by_label("Machine").click();
-    h.run_steps(3);
-    h.get_by_label("ZX Spectrum 128K (AY sound)").click();
-    h.run_steps(3);
-
-    assert_eq!(
-        h.state().spec.bus.model,
-        Model::Spectrum128,
-        "status says: {}",
-        h.state().status
-    );
-}
-
-#[test]
-fn every_machine_menu_entry_works() {
-    for (label, model) in MENU_ENTRIES {
-        let mut h = harness();
-        h.run_steps(3);
-        if model == Model::Spectrum48 {
-            // Start somewhere else so switching back is a real change.
-            h.state_mut().switch_model(Model::Spectrum128);
-            h.run_steps(3);
-        }
-        h.get_by_label("Machine").click();
-        h.run_steps(3);
-        h.get_by_label(label).click();
-        h.run_steps(3);
-        assert_eq!(
-            h.state().spec.bus.model,
-            model,
-            "clicking {label:?} should select {}; status says: {}",
-            model.name(),
-            h.state().status
-        );
-    }
 }
 
 #[test]
@@ -481,5 +431,36 @@ fn without_a_zx81_rom_the_list_says_so() {
         h.state().status.contains("zx81.rom"),
         "and name the file: {}",
         h.state().status
+    );
+}
+
+#[test]
+fn closing_a_window_lets_it_be_placed_again_when_it_comes_back() {
+    // A closed window loses its viewport. Reopening it makes a new one, which
+    // the window system puts where it likes, so the emulator has to position
+    // it again — otherwise it reappears in the middle of the screen instead of
+    // where it was left.
+    let mut app = test_app();
+    app.show_tape = true;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    assert!(
+        h.state().window_is_placed("tape"),
+        "an open window should have been positioned"
+    );
+
+    h.state_mut().show_tape = false;
+    h.run_steps(3);
+    assert!(
+        !h.state().window_is_placed("tape"),
+        "a closed window must forget where it was put, or it will not be put \
+         anywhere when it returns"
+    );
+
+    h.state_mut().show_tape = true;
+    h.run_steps(3);
+    assert!(
+        h.state().window_is_placed("tape"),
+        "and reopening should position it once more"
     );
 }
