@@ -709,12 +709,19 @@ impl App {
         // to match what the viewport builder takes: mixing them would grow
         // every window by the height of its title bar on each launch.
         if let (Some(outer), Some(inner)) = (outer, inner) {
+            // The tape window's width is not up for negotiation, so it is not
+            // recorded either: only its height and where it sits.
+            let w = if name == "tape" {
+                cassette::WINDOW_W
+            } else {
+                inner.width()
+            };
             self.prefs.set_window(
                 name,
                 WindowRect {
                     x: outer.min.x,
                     y: outer.min.y,
-                    w: inner.width(),
+                    w,
                     h: inner.height(),
                 },
             );
@@ -725,23 +732,6 @@ impl App {
     /// clears this, so reopening places it again.
     pub fn window_is_placed(&self, name: &str) -> bool {
         self.placed.contains_key(name)
-    }
-
-    /// Hold a window to a width, whatever the window manager allows.
-    ///
-    /// The minimum and maximum in the builder are only applied when they
-    /// change, so a window dragged wider is never pulled back. This looks at
-    /// what the window actually is each frame and asks again if it has drifted,
-    /// leaving the height alone.
-    fn hold_width(&self, ctx: &egui::Context, width: f32) {
-        let Some(inner) = ctx.input(|i| i.viewport().inner_rect) else {
-            return;
-        };
-        if (inner.width() - width).abs() > 1.0 {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
-                [width, inner.height()].into(),
-            ));
-        }
     }
 
     /// Put a debug window back where it was left.
@@ -1587,7 +1577,6 @@ impl App {
                     {
                         // Built around the cassette: the height is the user's
                         // to drag, the width is not.
-                        self.hold_width(&ctx, cassette::WINDOW_W);
                         self.remember_window("tape", &ctx);
                     }
                     egui::CentralPanel::default().show(ui, |ui| tape::ui(self, ui));
