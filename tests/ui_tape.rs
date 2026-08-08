@@ -155,8 +155,9 @@ fn the_window_marks_the_block_being_played() {
         "the playing block should be listed: {labels:?}"
     );
     assert!(
-        labels.iter().any(|l| l.contains("block 31 / 40")),
-        "and the progress readout should agree: {labels:?}"
+        !labels.iter().any(|l| l.contains("block 31 / 40")),
+        "how far through the tape is shown on the block's own row now, not in \
+         a readout of its own: {labels:?}"
     );
 }
 
@@ -369,7 +370,29 @@ fn seeking_resets_the_block_progress() {
 }
 
 #[test]
-fn the_window_shows_a_bar_for_the_current_block() {
+fn the_block_being_played_is_shaded_as_far_as_the_tape_has_got() {
+    // Progress is drawn over the block's own row rather than in a bar of its
+    // own, so what there is to check is the shape of that overlay.
+    use egui::{pos2, Rect};
+    use zx_rustrum::ui::tape::played_rect;
+
+    let row = Rect::from_min_max(pos2(10.0, 20.0), pos2(210.0, 36.0));
+    let none = played_rect(row, 0.0);
+    assert_eq!(none.width(), 0.0, "nothing played, nothing shaded");
+    assert_eq!(none.height(), row.height());
+
+    let half = played_rect(row, 0.5);
+    assert_eq!(half.width(), 100.0);
+    assert_eq!(half.min, row.min, "it fills from the start of the row");
+
+    assert_eq!(played_rect(row, 1.0).width(), row.width());
+    // A block that somehow reports past its end does not spill over the row.
+    assert_eq!(played_rect(row, 4.0).width(), row.width());
+    assert_eq!(played_rect(row, -1.0).width(), 0.0);
+}
+
+#[test]
+fn the_window_no_longer_carries_progress_bars_of_its_own() {
     let Some(path) = a_tape_file() else {
         return;
     };
@@ -380,12 +403,12 @@ fn the_window_shows_a_bar_for_the_current_block() {
 
     let text = labels(&h).join("\n");
     assert!(
-        text.contains("block 1 / "),
-        "the overall bar should be there: {text}"
+        !text.contains("block 1 / "),
+        "the overall bar should be gone: {text}"
     );
     assert!(
-        text.contains("0%") || text.contains("left"),
-        "and one for the block itself: {text}"
+        text.contains("pulses played"),
+        "the transport should still say what the tape is doing: {text}"
     );
 }
 

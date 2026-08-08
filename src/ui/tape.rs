@@ -82,16 +82,9 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 fn transport(app: &mut App, ui: &mut egui::Ui) {
     let now = app.machine_t();
     let mut action: Option<i32> = None;
-    let (name, playing, block, count, pulses, stopped_by_block) = {
+    let (name, playing, pulses, stopped_by_block) = {
         let t = app.tape_ref().unwrap();
-        (
-            t.name.clone(),
-            t.playing,
-            t.block,
-            t.blocks.len(),
-            t.pulses,
-            t.stopped_by_block,
-        )
+        (t.name.clone(), t.playing, t.pulses, t.stopped_by_block)
     };
 
     ui.label(RichText::new(&name).strong());
@@ -151,55 +144,6 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         app.tape.scroll_to_current = true;
     }
 
-    let progress = if count == 0 {
-        0.0
-    } else {
-        block as f32 / count as f32
-    };
-    ui.add(
-        egui::ProgressBar::new(progress)
-            .text(format!("block {} / {count}", (block + 1).min(count))),
-    );
-
-    // And how far through the block itself.
-    let (within, description, seconds) = {
-        let t = app.tape_ref().unwrap();
-        let within = t.block_progress();
-        let (description, seconds) = match t.blocks.get(t.block) {
-            Some(b) => (b.describe(), b.duration_t() as f64 / app.cpu_hz()),
-            None => (String::new(), 0.0),
-        };
-        (within, description, seconds)
-    };
-    match within {
-        Some(fraction) => {
-            let left = seconds * (1.0 - fraction as f64);
-            ui.add(egui::ProgressBar::new(fraction).text(format!(
-                "{}  {:.0}%  ({} left)",
-                description.split("  ").next().unwrap_or(&description).trim(),
-                fraction * 100.0,
-                crate::profiler::format_duration(left)
-            )))
-            .on_hover_text(format!(
-                "{description} — {} in total",
-                crate::profiler::format_duration(seconds)
-            ));
-        }
-        None => {
-            // Either the block makes no sound — a group marker or a text
-            // block — or the tape has run off the end.
-            let finished = app.tape_ref().is_some_and(|t| t.finished());
-            let text = if finished {
-                "the tape has reached the end"
-            } else {
-                "this block takes no time to play"
-            };
-            ui.add_enabled(
-                false,
-                egui::ProgressBar::new(if finished { 1.0 } else { 0.0 }).text(text),
-            );
-        }
-    }
     ui.label(
         RichText::new(format!(
             "{}   {} pulses played",
@@ -386,6 +330,19 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
         .map(|(i, b)| (i, b.describe(), b.is_data()))
         .collect();
 
+    // How far through the block being played, to shade its row.
+    let within = app.tape_ref().and_then(|t| t.block_progress());
+    let (elapsed, total) = {
+        let t = app.tape_ref().unwrap();
+        match t.blocks.get(t.block) {
+            Some(b) => {
+                let total = b.duration_t() as f64 / app.cpu_hz();
+                (total * within.unwrap_or(0.0) as f64, total)
+            }
+            None => (0.0, 0.0),
+        }
+    };
+
     let mut clicked = None;
     app.tape.scroll_requested_for = None;
     egui::ScrollArea::vertical()
@@ -402,6 +359,15 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                 // being played and behaves like the clickable thing it is.
                 let resp = ui.selectable_label(is_current, rich);
                 if is_current {
+                    if let Some(fraction) = within {
+                        played_so_far(ui, resp.rect, fraction);
+                        resp.clone().on_hover_text(format!(
+                            "{:.0}% — {} of {}",
+                            fraction * 100.0,
+                            crate::profiler::format_duration(elapsed),
+                            crate::profiler::format_duration(total)
+                        ));
+                    }
                     let visible = ui.clip_rect().contains_rect(resp.rect);
                     if needs_scroll(app.tape.scroll_to_current, app.tape.follow_current, visible) {
                         resp.scroll_to_me(Some(egui::Align::Center));
@@ -422,5 +388,30 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
         if t.playing {
             t.play(now);
         }
+    }
+}
+
+/// The part of a row covering what has already gone past the head.
+pub fn played_rect(row: egui::Rect, fraction: f32) -> egui::Rect {
+    egui::Rect::from_min_size(
+        row.min,
+        egui::vec2(row.width() * fraction.clamp(0.0, 1.0), row.height()),
+    )
+}
+
+/// Shade the part of a block's row that has already gone past the head.
+///
+/// Drawn over the row rather than beside it: the list is the only place a
+/// block is named, so its own row is where its progress belongs.
+fn played_so_far(ui: &egui::Ui, row: egui::Rect, fraction: f32) {
+    let done = played_rect(row, fraction);
+    let painter = ui.painter_at(row);
+    painter.rect_filled(done, 2.0, theme::CYAN.gamma_multiply(0.22));
+    if fraction > 0.0 && fraction < 1.0 {
+        // A line at the head position, so slow blocks still show movement.
+        painter.line_segment(
+            [done.right_top(), done.right_bottom()],
+            egui::Stroke::new(1.0, theme::CYAN),
+        );
     }
 }
