@@ -76,10 +76,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 fn transport(app: &mut App, ui: &mut egui::Ui) {
     let now = app.machine_t();
     let mut action: Option<i32> = None;
-    let (playing, pulses, stopped_by_block) = {
-        let t = app.tape_ref().unwrap();
-        (t.playing, t.pulses, t.stopped_by_block)
-    };
+    let playing = app.tape_ref().is_some_and(|t| t.playing);
 
     ui.horizontal_wrapped(|ui| {
         if ui
@@ -123,7 +120,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         ui.separator();
         let boost = app.tape_boost();
         if ui
-            .selectable_label(boost, "Fast")
+            .selectable_label(boost, "Max speed")
             .on_hover_text("Runs the CPU at 8x while the tape moves, so loading is quick.")
             .clicked()
         {
@@ -140,21 +137,6 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         }
         app.tape.scroll_to_current = true;
     }
-
-    ui.label(
-        RichText::new(format!(
-            "{}   {} pulses played",
-            if playing {
-                "playing"
-            } else if stopped_by_block {
-                "stopped by tape block"
-            } else {
-                "stopped"
-            },
-            pulses
-        ))
-        .monospace(),
-    );
 }
 
 /// Draw the EAR waveform, triggered on an edge so the display stands still.
@@ -304,7 +286,6 @@ pub fn needs_scroll(forced: bool, row_visible: bool) -> bool {
 
 fn block_list(app: &mut App, ui: &mut egui::Ui) {
     ui.label(RichText::new("Blocks").strong());
-    ui.small("Click a block to move the tape there.");
 
     let current = app.tape_ref().unwrap().block;
     // Scroll whenever playback moves on to another block.

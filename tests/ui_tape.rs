@@ -381,8 +381,8 @@ fn the_window_no_longer_carries_progress_bars_of_its_own() {
         "the overall bar should be gone: {text}"
     );
     assert!(
-        text.contains("pulses played"),
-        "the transport should still say what the tape is doing: {text}"
+        text.contains("▶ Play") || text.contains("⏸ Pause"),
+        "the transport itself should still be there: {text}"
     );
 }
 
