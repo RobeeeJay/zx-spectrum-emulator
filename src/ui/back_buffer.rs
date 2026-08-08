@@ -134,7 +134,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                     ))
                 }
             }
-            ui.add(egui::Slider::new(&mut app.back.scale, 0.5..=3.0).text("zoom"));
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.back.scale, 0.5..=3.0).text("zoom"),
+            );
             if let Some(tex) = &app.back.tex {
                 let size = egui::vec2(
                     view.width() as f32 * app.back.scale,

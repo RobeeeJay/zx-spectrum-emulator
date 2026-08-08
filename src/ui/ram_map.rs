@@ -228,14 +228,29 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         ui.toggle_value(&mut app.ram.show_overlays, "Overlays");
     });
     ui.horizontal_wrapped(|ui| {
-        ui.add(egui::Slider::new(&mut app.ram.scale, 0.5..=4.0).text("zoom"));
-        ui.add(egui::Slider::new(&mut app.ram.gain, 0.25..=4.0).text("gain"));
+        theme::slider(
+            ui,
+            egui::Slider::new(&mut app.ram.scale, 0.5..=4.0).text("zoom"),
+        );
+        theme::slider(
+            ui,
+            egui::Slider::new(&mut app.ram.gain, 0.25..=4.0).text("gain"),
+        );
     });
     ui.horizontal_wrapped(|ui| {
         let t = app.tracker_mut();
-        ui.add(egui::Slider::new(&mut t.fade_read, 1..=64).text("read fade"));
-        ui.add(egui::Slider::new(&mut t.fade_write, 1..=64).text("write fade"));
-        ui.add(egui::Slider::new(&mut t.fade_exec, 1..=64).text("exec fade"));
+        theme::slider(
+            ui,
+            egui::Slider::new(&mut t.fade_read, 1..=64).text("read fade"),
+        );
+        theme::slider(
+            ui,
+            egui::Slider::new(&mut t.fade_write, 1..=64).text("write fade"),
+        );
+        theme::slider(
+            ui,
+            egui::Slider::new(&mut t.fade_exec, 1..=64).text("exec fade"),
+        );
     });
     ui.separator();
 

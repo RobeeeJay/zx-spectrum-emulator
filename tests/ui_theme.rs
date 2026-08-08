@@ -74,3 +74,34 @@ fn styling_a_slider_leaves_the_rest_of_the_row_alone() {
         "nor into the next frame"
     );
 }
+
+/// No slider goes straight to `Ui::add`. The look is only a standard if every
+/// one of them goes through the theme, and the easiest way to lose it is to
+/// add a slider somewhere new without noticing there is a helper. Reading the
+/// source is crude, but it is the thing that actually went wrong: the toolbar
+/// and the debug windows kept egui's grey for months while the tape window
+/// had the green.
+#[test]
+fn every_slider_goes_through_the_theme() {
+    let mut plain = Vec::new();
+    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ui")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        // Line breaks and indentation are `cargo fmt`'s business, so the
+        // whitespace is taken out before looking for the call.
+        let source: String = std::fs::read_to_string(&path)
+            .unwrap()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        if source.contains("ui.add(egui::Slider::new") {
+            plain.push(path.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+    assert!(
+        plain.is_empty(),
+        "these draw a slider without theme::slider: {plain:?}"
+    );
+}

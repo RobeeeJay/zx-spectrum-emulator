@@ -1303,9 +1303,6 @@ impl App {
                         t.play(now);
                     }
                 }
-                if ui.button("Tape window").clicked() {
-                    self.show_tape = true;
-                }
                 ui.separator();
             }
             // Everything about the sound lives here: what the top menu used to
@@ -1333,7 +1330,8 @@ impl App {
             );
             ui.toggle_value(&mut self.spec.bus.audio.mute_off_speed, "auto-mute")
                 .on_hover_text("Silence the sound unless the machine is running at about normal speed, so fast-forwarding does not shriek.");
-            ui.add(
+            theme::slider(
+                ui,
                 egui::Slider::new(&mut self.audio_latency_target, 0.02..=0.25)
                     .show_value(false)
                     .text("buffer"),
