@@ -818,6 +818,7 @@ impl App {
     pub fn save_window_state(&mut self) {
         self.prefs.display_scale = Some(self.scale);
         self.prefs.overscan = Some(self.overscan);
+        self.prefs.open_windows = Some(self.open_windows());
         self.prefs.save();
         self.last_saved = Some(self.prefs.to_text());
         self.last_save_at = Some(std::time::Instant::now());
@@ -831,6 +832,7 @@ impl App {
         }
         self.prefs.display_scale = Some(self.scale);
         self.prefs.overscan = Some(self.overscan);
+        self.prefs.open_windows = Some(self.open_windows());
         let text = self.prefs.to_text();
         if self.last_saved.as_deref() == Some(text.as_str()) {
             self.last_save_at = Some(std::time::Instant::now());
@@ -847,6 +849,30 @@ impl App {
         if let Some(overscan) = self.prefs.overscan {
             self.overscan = overscan;
         }
+        if let Some(open) = self.prefs.open_windows.clone() {
+            let is_open = |name: &str| open.iter().any(|n| n == name);
+            self.show_ram_map = is_open("ram_map");
+            self.show_debugger = is_open("debugger");
+            self.show_tape = is_open("tape");
+            self.show_back_buffer = is_open("back_buffer");
+            self.show_profiler = is_open("profiler");
+        }
+    }
+
+    /// Which debug windows are open, by the names their geometry is saved
+    /// under, so they can be opened again with the emulator.
+    fn open_windows(&self) -> Vec<String> {
+        [
+            ("ram_map", self.show_ram_map),
+            ("debugger", self.show_debugger),
+            ("tape", self.show_tape),
+            ("back_buffer", self.show_back_buffer),
+            ("profiler", self.show_profiler),
+        ]
+        .into_iter()
+        .filter(|(_, open)| *open)
+        .map(|(name, _)| name.to_string())
+        .collect()
     }
 
     /// True when the ZX81 is the machine in use.

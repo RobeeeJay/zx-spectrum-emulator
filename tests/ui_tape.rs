@@ -611,3 +611,40 @@ fn a_zx81_loads_a_program_through_the_app() {
         "the program in memory is not the one on the tape"
     );
 }
+
+#[test]
+fn an_empty_deck_shows_the_same_window() {
+    // Taking the tape out should not change the shape of the window: the
+    // controls are still there, inert, and the list says what is missing.
+    let mut app = test_app();
+    app.spec.bus.tape = None;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+
+    let text = labels(&h).join("\n");
+    assert!(
+        text.contains("No tape loaded"),
+        "the block list should say so: {text}"
+    );
+    assert!(
+        text.contains("▶ Play") && text.contains("Blocks"),
+        "and the rest of the window should be as it always is: {text}"
+    );
+}
+
+#[test]
+fn the_windows_that_were_open_are_opened_again() {
+    use zx_rustrum::prefs::Prefs;
+
+    let mut app = test_app();
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_tape = false;
+    app.prefs = Prefs::parse("open_windows = \"debugger,tape\"\n");
+    app.apply_prefs();
+
+    assert!(app.show_debugger, "the debugger was open last time");
+    assert!(app.show_tape, "so was the tape");
+    assert!(!app.show_ram_map, "the RAM map was not");
+    assert!(!app.show_profiler);
+}

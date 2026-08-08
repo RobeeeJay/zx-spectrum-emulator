@@ -204,7 +204,11 @@ fn main() -> eframe::Result<()> {
             if let Some(path) = zx81_tape {
                 app.load_path(&path);
             }
-            app.show_tape = opened_tape;
+            // A tape on the command line opens the deck; otherwise whichever
+            // windows were open last time have already been restored.
+            if opened_tape {
+                app.show_tape = true;
+            }
             app.audio_error = audio_error;
             Ok(Box::new(app))
         }),

@@ -125,6 +125,8 @@ pub struct Prefs {
     pub display_scale: Option<f32>,
     /// Whether the whole overscan border was being shown.
     pub overscan: Option<bool>,
+    /// Which debug windows were open, so they come back with the emulator.
+    pub open_windows: Option<Vec<String>>,
     /// Anything else already in the file, kept so hand edits survive.
     other: BTreeMap<String, String>,
 }
@@ -174,6 +176,16 @@ impl Prefs {
                 "snapshot_dir" => prefs.snapshot_dir = path,
                 "display_scale" => prefs.display_scale = value.parse().ok(),
                 "overscan" => prefs.overscan = value.parse().ok(),
+                "open_windows" => {
+                    prefs.open_windows = Some(
+                        value
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                    )
+                }
                 k if k.starts_with(WINDOW_PREFIX) => {
                     if let Some(rect) = WindowRect::parse(&value) {
                         prefs
@@ -209,6 +221,9 @@ impl Prefs {
         }
         if let Some(overscan) = self.overscan {
             s.push_str(&format!("overscan = \"{overscan}\"\n"));
+        }
+        if let Some(open) = &self.open_windows {
+            s.push_str(&format!("open_windows = \"{}\"\n", open.join(",")));
         }
         if !self.windows.is_empty() {
             s.push_str("\n# Window geometry, as x,y,width,height in points.\n");

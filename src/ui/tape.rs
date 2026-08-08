@@ -48,11 +48,10 @@ impl Default for TapeWindowState {
 }
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
-    if app.tape_ref().is_none() {
-        ui.heading("No tape loaded");
-        ui.label("File ▸ Load tape… opens a .tzx or .tap file, or a ZX81 .p, .81 or .p81.");
-        return;
-    }
+    // An empty deck shows the same window rather than a different one: the
+    // controls are there but inert, the cassette's space is left blank, and
+    // the block list says what is missing.
+    let loaded = app.tape_ref().is_some();
 
     // The window is a fixed width and any height, so the contents scroll
     // rather than being squeezed when it is made short.
@@ -60,7 +59,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         .id_salt("tape-window")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            transport(app, ui);
+            ui.add_enabled_ui(loaded, |ui| transport(app, ui));
             ui.separator();
             // The deck itself, above the trace it produces.
             ui.vertical_centered(|ui| {
@@ -84,9 +83,10 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
             .on_hover_text("Back to the start of the tape")
             .clicked()
         {
-            let t = app.tape_mut().unwrap();
-            t.rewind();
-            t.edges.clear();
+            if let Some(t) = app.tape_mut() {
+                t.rewind();
+                t.edges.clear();
+            }
         }
         if ui
             .button("◀◀ Rewind")
@@ -157,8 +157,6 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
 
     let now = app.machine_t();
     let window_t = ((app.tape.window_us as f64) * app.cpu_hz() / 1_000_000.0).max(1.0) as u64;
-    let tape = app.tape_ref().unwrap();
-
     let height = 150.0;
     let (rect, _resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
@@ -187,6 +185,18 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
 
     // Pick the sweep start: the newest edge of the chosen slope that has a
     // whole sweep of signal after it, so the trace does not slide sideways.
+    // With nothing in the deck the screen stays as it is: a grid and no trace.
+    let Some(tape) = app.tape_ref() else {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "no signal",
+            egui::FontId::proportional(12.0),
+            theme::LCD_GRID,
+        );
+        return;
+    };
+
     let want = match app.tape.trigger {
         Trigger::Rising => Some(true),
         Trigger::Falling => Some(false),
@@ -291,7 +301,21 @@ pub fn needs_scroll(forced: bool, row_visible: bool) -> bool {
 fn block_list(app: &mut App, ui: &mut egui::Ui) {
     ui.label(RichText::new("Blocks").strong());
 
-    let current = app.tape_ref().unwrap().block;
+    // An empty deck still gets a list, with one row saying so, rather than
+    // the window changing shape when a tape is taken out.
+    let Some(tape) = app.tape_ref() else {
+        egui::ScrollArea::vertical()
+            .id_salt("tape-blocks")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_enabled_ui(false, |ui| {
+                    let _ = ui
+                        .selectable_label(false, RichText::new("  1  No tape loaded").monospace());
+                });
+            });
+        return;
+    };
+    let current = tape.block;
     // Scroll whenever playback moves on to another block.
     if app.tape.last_block != Some(current) {
         app.tape.last_block = Some(current);

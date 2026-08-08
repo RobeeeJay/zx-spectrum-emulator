@@ -411,3 +411,33 @@ fn closing_writes_the_layout_out() {
         Some((700.0, 500.0))
     );
 }
+
+#[test]
+fn which_windows_were_open_survives_a_restart() {
+    let mut prefs = Prefs::default();
+    prefs.open_windows = Some(vec!["debugger".into(), "tape".into()]);
+    let text = prefs.to_text();
+    assert!(
+        text.contains("open_windows = \"debugger,tape\""),
+        "expected the open windows in the file: {text}"
+    );
+
+    let read = Prefs::parse(&text);
+    assert_eq!(
+        read.open_windows,
+        Some(vec!["debugger".to_string(), "tape".to_string()])
+    );
+}
+
+#[test]
+fn a_file_with_no_windows_open_is_not_the_same_as_one_that_never_said() {
+    // An empty list means every window was closed, and they should stay
+    // closed; a file with no entry at all leaves the defaults alone.
+    let mut prefs = Prefs::default();
+    prefs.open_windows = Some(Vec::new());
+    let read = Prefs::parse(&prefs.to_text());
+    assert_eq!(read.open_windows, Some(Vec::new()));
+
+    let silent = Prefs::parse("rom_dir = \"\"\n");
+    assert_eq!(silent.open_windows, None);
+}

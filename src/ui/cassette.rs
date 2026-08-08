@@ -107,9 +107,12 @@ pub struct Art {
 
 /// Draw the cassette, and return the rectangle it took.
 pub fn ui(app: &mut App, ui: &mut egui::Ui) -> Rect {
+    // With nothing in the deck the cassette's space is left empty rather than
+    // the window rearranging itself around the gap.
+    let loaded = app.tape_ref().is_some();
     let (progress, playing, name) = match app.tape_ref() {
         Some(t) => (t.progress(), t.playing, written_name(&t.name)),
-        None => return Rect::NOTHING,
+        None => (0.0, false, String::new()),
     };
 
     // Wind the hubs on while the tape runs. The clock is read rather than the
@@ -133,6 +136,9 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) -> Rect {
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let scale = rect.width() / ART_W;
     let at = |x: f32, y: f32| rect.min + Vec2::new(x, y) * scale;
+    if !loaded {
+        return rect;
+    }
     let painter = ui.painter_at(rect);
 
     rasterise(app, ui.ctx(), rect.width().round() as usize);
