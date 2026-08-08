@@ -332,9 +332,11 @@ fn progress_is_reported_for_each_kind_of_block() {
     let p = tape.block_progress().unwrap();
     assert!((p - 0.5).abs() < 0.05, "halfway through a tone, got {p}");
 
-    // A block that makes no sound has no progress to show.
+    // A block that makes no sound takes no time, so there is never any of it
+    // left to play. It reads as finished rather than as nothing at all, which
+    // is what keeps the progress on a block's row as the tape passes through.
     let info = Tape::from_blocks("info".into(), vec![Block::Info("hello".into())]);
-    assert_eq!(info.block_progress(), None);
+    assert_eq!(info.block_progress(), Some(1.0));
 
     // A pause block is all pause.
     let pause = Tape::from_blocks("pause".into(), vec![Block::Pause(500)]);

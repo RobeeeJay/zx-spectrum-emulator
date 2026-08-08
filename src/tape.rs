@@ -850,7 +850,11 @@ impl Tape {
         let seg = block.segment_times();
         let total = seg.total();
         if total == 0 {
-            return None; // nothing to show for a group marker or a text block
+            // A group marker or a text block takes no time, so there is never
+            // any of it left to play. Saying so keeps the progress on the
+            // block's row rather than having it disappear as the tape passes
+            // through one.
+            return Some(1.0);
         }
 
         let done: u64 = match self.phase {

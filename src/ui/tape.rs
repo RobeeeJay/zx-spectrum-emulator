@@ -39,7 +39,7 @@ pub struct TapeWindowState {
 impl Default for TapeWindowState {
     fn default() -> Self {
         TapeWindowState {
-            window_us: 2000.0,
+            window_us: 16000.0,
             trigger: Trigger::Rising,
             auto_play_on_load: false,
             follow_current: true,
@@ -409,9 +409,10 @@ fn played_so_far(ui: &egui::Ui, row: egui::Rect, fraction: f32) {
     painter.rect_filled(done, 2.0, theme::CYAN.gamma_multiply(0.22));
     if fraction > 0.0 && fraction < 1.0 {
         // A line at the head position, so slow blocks still show movement.
+        // Amber against the blue of the bar, so the head is easy to pick out.
         painter.line_segment(
             [done.right_top(), done.right_bottom()],
-            egui::Stroke::new(1.0, theme::CYAN),
+            egui::Stroke::new(1.5, theme::AMBER),
         );
     }
 }
