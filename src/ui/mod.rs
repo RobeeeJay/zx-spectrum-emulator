@@ -727,6 +727,23 @@ impl App {
         self.placed.contains_key(name)
     }
 
+    /// Hold a window to a width, whatever the window manager allows.
+    ///
+    /// The minimum and maximum in the builder are only applied when they
+    /// change, so a window dragged wider is never pulled back. This looks at
+    /// what the window actually is each frame and asks again if it has drifted,
+    /// leaving the height alone.
+    fn hold_width(&self, ctx: &egui::Context, width: f32) {
+        let Some(inner) = ctx.input(|i| i.viewport().inner_rect) else {
+            return;
+        };
+        if (inner.width() - width).abs() > 1.0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                [width, inner.height()].into(),
+            ));
+        }
+    }
+
     /// Put a debug window back where it was left.
     ///
     /// The geometry in the viewport builder is not reliably honoured when the
@@ -1568,6 +1585,9 @@ impl App {
                     let ctx = ui.ctx().clone();
                     if self.place_window("tape", &ctx, [260.0, 120.0], [cassette::WINDOW_W, 760.0])
                     {
+                        // Built around the cassette: the height is the user's
+                        // to drag, the width is not.
+                        self.hold_width(&ctx, cassette::WINDOW_W);
                         self.remember_window("tape", &ctx);
                     }
                     egui::CentralPanel::default().show(ui, |ui| tape::ui(self, ui));
