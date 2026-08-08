@@ -1,6 +1,7 @@
 //! egui front end: main window plus the detachable debug viewports.
 
 pub mod back_buffer;
+pub mod cassette;
 pub mod debugger;
 pub mod profiler;
 pub mod ram_map;

@@ -25,6 +25,10 @@ pub struct TapeWindowState {
     pub scroll_to_current: bool,
     /// Block the list was showing last frame, to notice when it advances.
     pub last_block: Option<usize>,
+    /// How far each cog has turned, in radians. They wind on only while the
+    /// tape is playing, so the picture freezes when it stops.
+    pub left_spin: f32,
+    pub right_spin: f32,
     /// The block the list last asked to scroll into view, for tests and for
     /// anyone wondering why the list jumped.
     pub scroll_requested_for: Option<usize>,
@@ -39,6 +43,8 @@ impl Default for TapeWindowState {
             follow_current: true,
             scroll_to_current: true,
             last_block: None,
+            left_spin: 0.0,
+            right_spin: 0.0,
             scroll_requested_for: None,
         }
     }
@@ -52,6 +58,11 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     }
 
     transport(app, ui);
+    ui.separator();
+    // The deck itself, above the trace it produces.
+    ui.vertical_centered(|ui| {
+        crate::ui::cassette::ui(app, ui);
+    });
     ui.separator();
     scope(app, ui);
     ui.separator();
