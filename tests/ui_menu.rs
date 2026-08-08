@@ -9,7 +9,7 @@
 //! the emulator, so these tests keep them closed and exercise the widgets
 //! directly.
 
-use egui_kittest::kittest::{By, NodeT, Queryable};
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use zx_rustrum::machine::{Model, Spectrum};
 use zx_rustrum::ui::{zoom_label, App, Roms};
@@ -60,10 +60,11 @@ const ROW_ENTRIES: [(&str, Model); 4] = [
     ("+3", Model::Plus3),
 ];
 
-/// Open the machine dropdown. Its trigger carries the machine it is showing as
-/// an accessibility value, not a label, so it is found by that.
+/// Open the machine dropdown. Its trigger is a button labelled with the
+/// machine it is showing, followed by the arrow, which is what tells it apart
+/// from the entry of the same name inside the list.
 fn open_machine_list(h: &mut Harness<'_, App>, showing: &str) {
-    h.get(By::new().value(showing)).click();
+    h.get_by_label(&format!("{showing}  \u{25be}")).click();
     h.run_steps(3);
 }
 
@@ -357,7 +358,7 @@ fn the_zoom_presets_set_the_display_scale() {
     h.run_steps(3);
     for scale in SCALES {
         let showing = zoom_label(h.state().scale);
-        h.get(By::new().value(&showing)).click();
+        h.get_by_label(&format!("{showing}  \u{25be}")).click();
         h.run_steps(3);
         let label = zoom_label(scale);
         h.get_by_label(&label).click();

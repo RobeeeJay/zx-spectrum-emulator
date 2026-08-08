@@ -218,14 +218,14 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.horizontal_wrapped(|ui| {
         ui.label("Show:");
-        ui.checkbox(&mut app.ram.show_read, "Read");
+        ui.toggle_value(&mut app.ram.show_read, "Read");
         ui.colored_label(theme::GREEN, "■");
-        ui.checkbox(&mut app.ram.show_write, "Write");
+        ui.toggle_value(&mut app.ram.show_write, "Write");
         ui.colored_label(theme::RED, "■");
-        ui.checkbox(&mut app.ram.show_exec, "Execute");
+        ui.toggle_value(&mut app.ram.show_exec, "Execute");
         ui.colored_label(theme::BLUE, "■");
         ui.separator();
-        ui.checkbox(&mut app.ram.show_overlays, "Overlays");
+        ui.toggle_value(&mut app.ram.show_overlays, "Overlays");
     });
     ui.horizontal_wrapped(|ui| {
         ui.add(egui::Slider::new(&mut app.ram.scale, 0.5..=4.0).text("zoom"));

@@ -188,7 +188,7 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             app.status = "Reset".into();
         }
         ui.separator();
-        ui.checkbox(&mut app.dbg.follow_pc, "Follow PC");
+        ui.toggle_value(&mut app.dbg.follow_pc, "Follow PC");
     });
 
     if ui.input(|i| i.key_pressed(egui::Key::F7)) {

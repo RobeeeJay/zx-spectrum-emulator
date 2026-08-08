@@ -176,3 +176,42 @@ pub fn rainbow(ui: &mut egui::Ui) {
         );
     }
 }
+
+/// A dropdown drawn as a button with a menu under it.
+///
+/// egui's own `ComboBox` builds itself inside a nested `Ui`, and a nested `Ui`
+/// is placed at the top of the row rather than centred in it, so a combo sits
+/// a couple of points below the buttons beside it however the row is laid out.
+/// A button is one widget and lines up with the rest of the toolbar.
+pub fn dropdown<R>(
+    ui: &mut egui::Ui,
+    width: f32,
+    selected: impl Into<String>,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    let size = egui::vec2(width, ui.spacing().interact_size.y);
+    let text = format!("{}  \u{25be}", selected.into());
+    let response = ui.add(egui::Button::new(text).min_size(size));
+    egui::Popup::menu(&response)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+        .show(contents)
+        .map(|inner| inner.inner)
+}
+
+/// A divider between groups of controls.
+///
+/// egui's own separator takes the height of the row it is in and grows it a
+/// little as it goes, which walks everything placed afterwards downwards. This
+/// one is a fixed height, so a row of controls stays level.
+pub fn divider(ui: &mut egui::Ui) {
+    let height = ui.spacing().interact_size.y;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, height), egui::Sense::hover());
+    let x = rect.center().x;
+    ui.painter().line_segment(
+        [
+            egui::pos2(x, rect.top() + 2.0),
+            egui::pos2(x, rect.bottom() - 2.0),
+        ],
+        Stroke::new(1.0, EDGE),
+    );
+}

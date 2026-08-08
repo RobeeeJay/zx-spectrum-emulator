@@ -148,36 +148,30 @@ pub fn speed_dropdown(speed: &mut f32, ui: &mut egui::Ui) {
         .find(|(_, mult)| (*speed - mult).abs() < f32::EPSILON)
         .map(|(name, _)| (*name).to_string())
         .unwrap_or_else(|| format!("{:.0}%", *speed * 100.0));
-    egui::ComboBox::from_id_salt("speed")
-        .selected_text(selected)
-        .width(74.0)
-        .show_ui(ui, |ui| {
-            for (name, mult) in SPEED_PRESETS {
-                if ui
-                    .selectable_label((*speed - mult).abs() < f32::EPSILON, name)
-                    .clicked()
-                {
-                    *speed = mult;
-                }
+    theme::dropdown(ui, 74.0, selected, |ui| {
+        for (name, mult) in SPEED_PRESETS {
+            if ui
+                .selectable_label((*speed - mult).abs() < f32::EPSILON, name)
+                .clicked()
+            {
+                *speed = mult;
             }
-        });
+        }
+    });
 }
 
 /// The display sizes, as a dropdown.
 pub fn zoom_dropdown(scale: &mut f32, ui: &mut egui::Ui) {
-    egui::ComboBox::from_id_salt("zoom")
-        .selected_text(zoom_label(*scale))
-        .width(74.0)
-        .show_ui(ui, |ui| {
-            for size in screen::SCALES {
-                if ui
-                    .selectable_label((*scale - size).abs() < f32::EPSILON, zoom_label(size))
-                    .clicked()
-                {
-                    *scale = size;
-                }
+    theme::dropdown(ui, 74.0, zoom_label(*scale), |ui| {
+        for size in screen::SCALES {
+            if ui
+                .selectable_label((*scale - size).abs() < f32::EPSILON, zoom_label(size))
+                .clicked()
+            {
+                *scale = size;
             }
-        });
+        }
+    });
 }
 
 /// What the emulator is called: the ZX Spectrum by way of the language it is
@@ -460,56 +454,53 @@ impl App {
             self.spec.bus.model.name().to_string()
         };
         let mut chosen: Option<Machine> = None;
-        egui::ComboBox::from_id_salt("machine")
-            .selected_text(selected)
-            .width(120.0)
-            .show_ui(ui, |ui| {
-                for model in [
-                    Model::Spectrum48,
-                    Model::Spectrum128,
-                    Model::Plus2A,
-                    Model::Plus3,
-                ] {
-                    let current = !self.on_zx81() && self.spec.bus.model == model;
-                    let have_rom = self.roms.for_model(model).is_some();
-                    let label = if have_rom {
-                        model.name().to_string()
+        theme::dropdown(ui, 120.0, selected, |ui| {
+            for model in [
+                Model::Spectrum48,
+                Model::Spectrum128,
+                Model::Plus2A,
+                Model::Plus3,
+            ] {
+                let current = !self.on_zx81() && self.spec.bus.model == model;
+                let have_rom = self.roms.for_model(model).is_some();
+                let label = if have_rom {
+                    model.name().to_string()
+                } else {
+                    format!("{} (no ROM)", model.name())
+                };
+                if ui
+                    .selectable_label(current, label)
+                    .on_hover_text(if have_rom {
+                        format!("Switch to the {} and reset", model.name())
                     } else {
-                        format!("{} (no ROM)", model.name())
-                    };
-                    if ui
-                        .selectable_label(current, label)
-                        .on_hover_text(if have_rom {
-                            format!("Switch to the {} and reset", model.name())
-                        } else {
-                            format!("Needs {}", Roms::expected_file(model))
-                        })
-                        .clicked()
-                    {
-                        chosen = Some(Machine::Spectrum(model));
-                    }
+                        format!("Needs {}", Roms::expected_file(model))
+                    })
+                    .clicked()
+                {
+                    chosen = Some(Machine::Spectrum(model));
                 }
-                for ram in [zx81::Ram::K1, zx81::Ram::K16] {
-                    let current = self.on_zx81() && self.zx81_ram == ram;
-                    let have_rom = self.roms.rom_zx81.is_some();
-                    let label = if have_rom {
-                        ram.name().to_string()
+            }
+            for ram in [zx81::Ram::K1, zx81::Ram::K16] {
+                let current = self.on_zx81() && self.zx81_ram == ram;
+                let have_rom = self.roms.rom_zx81.is_some();
+                let label = if have_rom {
+                    ram.name().to_string()
+                } else {
+                    format!("{} (no ROM)", ram.name())
+                };
+                if ui
+                    .selectable_label(current, label)
+                    .on_hover_text(if have_rom {
+                        format!("Switch to a {} and reset", ram.name())
                     } else {
-                        format!("{} (no ROM)", ram.name())
-                    };
-                    if ui
-                        .selectable_label(current, label)
-                        .on_hover_text(if have_rom {
-                            format!("Switch to a {} and reset", ram.name())
-                        } else {
-                            "Needs roms/zx81.rom".to_string()
-                        })
-                        .clicked()
-                    {
-                        chosen = Some(Machine::Zx81(ram));
-                    }
+                        "Needs roms/zx81.rom".to_string()
+                    })
+                    .clicked()
+                {
+                    chosen = Some(Machine::Zx81(ram));
                 }
-            });
+            }
+        });
         match chosen {
             Some(Machine::Spectrum(model)) => self.switch_model(model),
             Some(Machine::Zx81(ram)) => self.switch_to_zx81(ram),
@@ -520,26 +511,9 @@ impl App {
     /// The second toolbar row: reset, and which windows are open. The machine,
     /// speed, zoom and video controls are on the row above.
     fn machine_row(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            // Rows grow to fit the tallest thing in them, and anything placed
-            // before that happens would be left at the top. Claiming the
-            // height first keeps every control on the row centred.
-            ui.set_min_height(ui.spacing().interact_size.y + 6.0);
-            if ui.button("Reset").clicked() {
-                match &mut self.zx81 {
-                    Some(zx) => {
-                        zx.reset();
-                        let name = self.zx81_ram.name();
-                        self.set_status(format!("Reset ({name})"), false);
-                    }
-                    None => {
-                        self.spec.reset();
-                        self.set_status(format!("Reset ({})", self.spec.bus.model.name()), false);
-                    }
-                }
-            }
-
-            ui.separator();
+        let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 8.0);
+        let layout = egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true);
+        ui.allocate_ui_with_layout(row, layout, |ui| {
             theme::group_label(ui, "Windows");
             ui.toggle_value(&mut self.show_ram_map, "RAM map");
             ui.toggle_value(&mut self.show_debugger, "Debugger");
@@ -1186,8 +1160,9 @@ impl App {
         // A wrapping row rather than a menu bar: a bar does not wrap, and with
         // only one menu left on it the rest of the row would be clipped off
         // the edge of a narrow window.
-        ui.horizontal_wrapped(|ui| {
-            ui.set_min_height(ui.spacing().interact_size.y + 6.0);
+        let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 8.0);
+        let layout = egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true);
+        ui.allocate_ui_with_layout(row, layout, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button("Load ROM…").clicked() {
                     if let Some(path) = self.pick_file(Some(FileKind::Rom)) {
@@ -1225,7 +1200,7 @@ impl App {
                     ui.close();
                 }
             });
-            ui.separator();
+            theme::divider(ui);
 
             if ui
                 .button(if self.running { "⏸ Pause" } else { "▶ Run" })
@@ -1233,20 +1208,33 @@ impl App {
             {
                 self.running = !self.running;
             }
-            ui.separator();
+            theme::divider(ui);
             theme::group_label(ui, "Speed");
             speed_dropdown(&mut self.speed, ui);
 
-            ui.separator();
+            theme::divider(ui);
             theme::group_label(ui, "Machine");
             self.machine_dropdown(ui);
             self.late_timing(ui);
+            if ui.button("Reset").clicked() {
+                match &mut self.zx81 {
+                    Some(zx) => {
+                        zx.reset();
+                        let name = self.zx81_ram.name();
+                        self.set_status(format!("Reset ({name})"), false);
+                    }
+                    None => {
+                        self.spec.reset();
+                        self.set_status(format!("Reset ({})", self.spec.bus.model.name()), false);
+                    }
+                }
+            }
 
-            ui.separator();
+            theme::divider(ui);
             theme::group_label(ui, "Zoom");
             zoom_dropdown(&mut self.scale, ui);
 
-            ui.separator();
+            theme::divider(ui);
             theme::group_label(ui, "Video");
             ui.toggle_value(&mut self.race_the_beam, "Race the beam")
                 .on_hover_text(
@@ -1285,7 +1273,7 @@ impl App {
 
     fn controls_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.spec.bus.slow.enabled, "Slow draw")
+            ui.toggle_value(&mut self.spec.bus.slow.enabled, "Slow draw")
                 .on_hover_text(
                     "Park the CPU after a set number of writes to watched video memory \
                      so the picture visibly builds up over several host frames.",
@@ -1296,8 +1284,8 @@ impl App {
                         .logarithmic(true)
                         .text("writes/frame"),
                 );
-                ui.checkbox(&mut self.spec.bus.slow.watch_screen, "video RAM");
-                ui.checkbox(&mut self.spec.bus.slow.watch_back_buffer, "back buffer");
+                ui.toggle_value(&mut self.spec.bus.slow.watch_screen, "video RAM");
+                ui.toggle_value(&mut self.spec.bus.slow.watch_back_buffer, "back buffer");
             });
             ui.separator();
             if self.tape_ref().is_some() {
@@ -1334,14 +1322,14 @@ impl App {
                 (None, None) => "no audio device".to_string(),
             };
             let failed = self.audio_out.is_none();
-            ui.checkbox(&mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
+            ui.toggle_value(&mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
                 .on_hover_text(&sound);
             ui.add(
                 egui::Slider::new(&mut self.audio().volume, 0.0..=1.0)
                     .show_value(false)
                     .text("vol"),
             );
-            ui.checkbox(&mut self.spec.bus.audio.mute_off_speed, "auto-mute")
+            ui.toggle_value(&mut self.spec.bus.audio.mute_off_speed, "auto-mute")
                 .on_hover_text("Silence the sound unless the machine is running at about normal speed, so fast-forwarding does not shriek.");
             ui.add(
                 egui::Slider::new(&mut self.audio_latency_target, 0.02..=0.25)
@@ -1352,23 +1340,6 @@ impl App {
                 "How far ahead of the sound card to stay. Raise it if you hear \
                  crackling, lower it for a more immediate beeper.",
             );
-            ui.separator();
-            ui.label(match &self.zx81 {
-                Some(zx) => format!(
-                    "{}  frame {}  t={}  characters/frame {}",
-                    self.zx81_ram.name(),
-                    zx.bus.frame,
-                    zx.bus.tstates,
-                    zx.bus.video_bytes
-                ),
-                None => format!(
-                    "{}  frame {}  t={}  screen writes/frame {}",
-                    self.spec.bus.model.name(),
-                    self.spec.bus.frame,
-                    self.spec.bus.tstates,
-                    self.spec.bus.screen_writes
-                ),
-            });
         });
     }
 }

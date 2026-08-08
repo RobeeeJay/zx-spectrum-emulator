@@ -27,7 +27,7 @@ impl Default for BackBufferState {
 }
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
-    ui.checkbox(
+    ui.toggle_value(
         &mut app.spec.bus.tracker.detect_enabled,
         "Detect back buffers automatically",
     )
@@ -83,12 +83,12 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.separator();
 
     ui.horizontal(|ui| {
-        ui.checkbox(&mut app.spec.bus.slow.enabled, "Slow draw");
-        ui.checkbox(
+        ui.toggle_value(&mut app.spec.bus.slow.enabled, "Slow draw");
+        ui.toggle_value(
             &mut app.spec.bus.slow.watch_back_buffer,
             "watch back buffer",
         );
-        ui.checkbox(&mut app.spec.bus.slow.watch_screen, "watch video RAM");
+        ui.toggle_value(&mut app.spec.bus.slow.watch_screen, "watch video RAM");
         ui.add(
             egui::Slider::new(&mut app.spec.bus.slow.writes_per_slice, 1..=4096)
                 .logarithmic(true)

@@ -10,3 +10,4 @@
 !/tapes/.gitkeep
 
 .DS_Store
+*.afdesign~lock~
