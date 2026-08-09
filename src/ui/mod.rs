@@ -205,6 +205,13 @@ enum Machine {
 
 pub struct App {
     pub spec: Spectrum,
+    /// Labels and comments for the listing, and the file they are kept in.
+    pub notes: crate::notes::Notes,
+    /// The tape in the deck, if it came from a file. The notes belong beside
+    /// whatever is being disassembled, which is the tape when there is one.
+    pub tape_path: Option<std::path::PathBuf>,
+    /// The ROM the current machine booted from, for the same reason.
+    pub rom_path: Option<std::path::PathBuf>,
     pub running: bool,
     pub speed: f32,
     pub status: String,
@@ -281,6 +288,9 @@ impl App {
     ) -> Self {
         App {
             spec,
+            notes: crate::notes::Notes::unattached(),
+            tape_path: None,
+            rom_path: None,
             running: true,
             speed: 1.0,
             status,
@@ -372,6 +382,8 @@ impl App {
 
         // Remember it, so the toolbar offers that machine from now on.
         self.roms.set_for_model(model, data.clone());
+        self.rom_path = Some(path.to_path_buf());
+        self.reload_notes();
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -575,6 +587,8 @@ impl App {
                 self.tape.scroll_to_current = true;
                 self.tape.last_block = None;
                 self.prefs.remember_file(FileKind::Tape, path);
+                self.tape_path = Some(path.to_path_buf());
+                self.reload_notes();
                 // A tape waits for Play, as a real one does; a ZX81 also needs
                 // LOAD "" typed at it first, which is easy to forget.
                 let hint = if zx81 {
@@ -587,6 +601,21 @@ impl App {
             }
             Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
         }
+    }
+
+    /// Point the notes at whatever is being disassembled: the tape in the
+    /// deck if there is one, otherwise the ROM the machine booted from.
+    /// Anything unsaved is written out first, so switching tapes does not
+    /// throw away what was just typed.
+    pub fn reload_notes(&mut self) {
+        if let Err(e) = self.notes.save_if_dirty() {
+            self.set_status(format!("Could not save notes: {e}"), true);
+        }
+        let source = self.tape_path.clone().or_else(|| self.rom_path.clone());
+        self.notes = match source {
+            Some(path) => crate::notes::Notes::for_file(&path),
+            None => crate::notes::Notes::unattached(),
+        };
     }
 
     pub fn load_path(&mut self, path: &std::path::Path) {
@@ -1349,8 +1378,21 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Run the machine and put the debug windows up.
+    ///
+    /// This is deliberately not part of `ui`: eframe skips `ui` while the main
+    /// window is not visible — which on macOS includes the moment the
+    /// application is switched away from — and then prunes every viewport that
+    /// frame did not declare, destroying the windows. They came back on the
+    /// next switch as new windows, in creation order, which is why they
+    /// vanished, reappeared and shuffled themselves about. `logic` runs
+    /// whether the window is visible or not, so the windows stay put.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame_logic(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.draw(ui);
+        self.draw_main(ui);
     }
 
     /// Keep the layout for next time.
@@ -1362,12 +1404,22 @@ impl eframe::App for App {
 impl App {
     /// The whole user interface for one frame. Separate from the `eframe::App`
     /// impl so tests can drive it without a real window.
+    /// Everything for one frame: used by the tests, which drive the interface
+    /// through a single `Ui` rather than through eframe's split.
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.frame_logic(&ctx);
+        self.draw_main(ui);
+    }
+
+    /// The machine, the windows around it, and the repaint that keeps both
+    /// going. Runs every frame, visible or not.
+    pub fn frame_logic(&mut self, ctx: &egui::Context) {
         if !self.styled {
-            theme::apply(&ctx);
+            theme::apply(ctx);
             self.styled = true;
         }
+        let ctx = ctx.clone();
         let dt = ctx.input(|i| i.stable_dt);
         self.read_keyboard(&ctx);
         self.advance(dt);
@@ -1391,6 +1443,12 @@ impl App {
         // doing that after a menu popup has been opened discards the popup.
         self.debug_viewports(&ctx);
 
+        self.save_window_state_if_settled();
+        ctx.request_repaint();
+    }
+
+    /// The main window itself: its toolbars, the picture and the status line.
+    fn draw_main(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("menu").show(ui, |ui| {
             self.menu(ui);
             self.machine_row(ui);
@@ -1469,13 +1527,8 @@ impl App {
             }
         });
         self.beam_t = beam;
-
-        self.save_window_state_if_settled();
-        ctx.request_repaint();
     }
-}
 
-impl App {
     fn debug_viewports(&mut self, ctx: &egui::Context) {
         // A window that has been closed loses its viewport, and the next one
         // opened under the same name is a new window that the system will

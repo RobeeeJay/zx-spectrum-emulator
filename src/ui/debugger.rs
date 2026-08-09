@@ -10,7 +10,12 @@ use crate::ui::{theme, App};
 /// How wide the debugger window is, and stays: the disassembly and the
 /// registers beside it are laid out in columns, and a window narrow enough to
 /// wrap them is no use for reading either.
-pub const WINDOW_W: f32 = 820.0;
+pub const WINDOW_W: f32 = 1000.0;
+
+/// The label column, wide enough for a name somebody would actually type.
+const LABEL_W: f32 = 90.0;
+/// The listing between the two writable columns: address, bytes, mnemonic.
+const LISTING_W: f32 = 250.0;
 
 pub struct DebuggerState {
     pub follow_pc: bool,
@@ -435,11 +440,23 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
             .unwrap_or(0)
     };
 
+    // Column headings, so the two writable columns are named rather than
+    // left as mysterious blank space either side of the listing.
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [LABEL_W, ui.spacing().interact_size.y],
+            egui::Label::new(RichText::new("Label").small().color(theme::DIM)),
+        );
+        ui.add_space(LISTING_W);
+        ui.label(RichText::new("Comments").small().color(theme::DIM));
+    });
+
     egui::ScrollArea::vertical()
         .id_salt("disasm")
         .max_height(360.0)
         .show(ui, |ui| {
             let mut clicked: Option<u16> = None;
+            let mut finished_editing = false;
             for _ in 0..app.dbg.lines {
                 let insn = disasm::disasm(&peek, addr);
                 let is_pc = addr == pc;
@@ -462,12 +479,54 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                 } else if has_bp {
                     rich = rich.color(theme::RED);
                 }
-                if ui
-                    .add(egui::Label::new(rich).sense(egui::Sense::click()))
-                    .clicked()
-                {
-                    clicked = Some(addr);
-                }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+
+                    // The user's own name for this address, if it has one.
+                    let mut label = app.notes.label(addr).to_string();
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut label)
+                            .id_salt(("note-label", addr))
+                            .desired_width(LABEL_W)
+                            .font(egui::TextStyle::Monospace)
+                            .frame(egui::Frame::NONE),
+                    );
+                    if resp.changed() {
+                        app.notes.set_label(addr, &label);
+                    }
+                    finished_editing |= resp.lost_focus();
+
+                    let listing = ui.add_sized(
+                        [LISTING_W, ui.spacing().interact_size.y],
+                        egui::Label::new(rich)
+                            .sense(egui::Sense::click())
+                            .halign(egui::Align::LEFT),
+                    );
+                    if listing.clicked() {
+                        clicked = Some(addr);
+                    }
+
+                    // The semicolon is the listing's, not the file's: it marks
+                    // a comment where there is one and stays out of the way
+                    // where there is not.
+                    let mut comment = app.notes.comment(addr).to_string();
+                    ui.label(
+                        RichText::new(if comment.is_empty() { " " } else { ";" })
+                            .monospace()
+                            .color(theme::DIM),
+                    );
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut comment)
+                            .id_salt(("note-comment", addr))
+                            .desired_width(ui.available_width().max(40.0))
+                            .font(egui::TextStyle::Monospace)
+                            .frame(egui::Frame::NONE),
+                    );
+                    if resp.changed() {
+                        app.notes.set_comment(addr, &comment);
+                    }
+                    finished_editing |= resp.lost_focus();
+                });
                 addr = addr.wrapping_add(insn.len.max(1) as u16);
             }
             if let Some(a) = clicked {
@@ -475,6 +534,14 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                     app.breakpoints_mut().remove(i);
                 } else {
                     app.breakpoints_mut().push(a);
+                }
+            }
+            // Written out when a field is left rather than on every keystroke:
+            // the file is small, but a disk write per character typed is not
+            // something to do to somebody's SSD.
+            if finished_editing {
+                if let Err(e) = app.notes.save_if_dirty() {
+                    app.set_status(format!("Could not save notes: {e}"), true);
                 }
             }
         });
@@ -530,11 +597,21 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
                 app.dbg.mem_addr = a;
             }
         }
-        if ui.small_button("HL").clicked() {
-            app.dbg.mem_addr = app.cpu().hl();
-        }
-        if ui.small_button("SP").clicked() {
-            app.dbg.mem_addr = app.cpu().sp;
+        // The pointers a program is most likely to be using, so a look at
+        // what one of them is aimed at is one click rather than a retyped
+        // address.
+        for (name, addr) in [
+            ("HL", app.cpu().hl()),
+            ("BC", app.cpu().bc()),
+            ("DE", app.cpu().de()),
+            ("IX", app.cpu().ix),
+            ("IY", app.cpu().iy),
+            ("SP", app.cpu().sp),
+        ] {
+            if ui.small_button(name).clicked() {
+                app.dbg.mem_addr = addr;
+                app.dbg.mem_text = format!("{addr:04X}");
+            }
         }
     });
     egui::ScrollArea::vertical()

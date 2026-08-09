@@ -7,6 +7,7 @@ pub mod demo_rom;
 pub mod disasm;
 pub mod logo;
 pub mod machine;
+pub mod notes;
 pub mod prefs;
 pub mod profiler;
 pub mod resources;

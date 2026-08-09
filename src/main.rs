@@ -11,17 +11,41 @@ use zx_rustrum::{
 /// Look for ROM images in every place a ROM might plausibly live (see
 /// [`resources::search_dirs`]). The 48K one is needed to boot anything real;
 /// without it the built-in demo ROM runs instead.
-fn find_roms(prefs: &Prefs, dirs: &[PathBuf]) -> ui::Roms {
+/// Where the ROMs the emulator starts with were found, so the notes for a
+/// listing can be kept beside the ROM they describe.
+struct RomPaths {
+    spectrum: Option<PathBuf>,
+    zx81: Option<PathBuf>,
+}
+
+fn find_roms(prefs: &Prefs, dirs: &[PathBuf]) -> (ui::Roms, RomPaths) {
     // Spectrum ROMs are 16K or more; the ZX81's is 8K, so it needs its own
     // floor rather than being quietly rejected as too small.
-    let read_min =
-        |names: &[&str], min: usize| resources::find_file(dirs, names, min).map(|(_, data)| data);
+    let found = std::cell::RefCell::new(Vec::new());
+    let read_min = |names: &[&str], min: usize| {
+        resources::find_file(dirs, names, min).map(|(path, data)| {
+            found.borrow_mut().push((names[0].to_string(), path));
+            data
+        })
+    };
     let read = |names: &[&str]| read_min(names, 0x4000);
     let mut roms = ui::Roms {
         rom48: read(&["48.rom", "48k.rom", "spectrum48.rom"]),
         rom128: read(&["128.rom", "128k.rom"]),
         rom_plus3: read(&["plus3.rom", "plus2a.rom"]),
         rom_zx81: read_min(&["zx81.rom"], 0x2000),
+    };
+    let found = found.into_inner();
+    let path_of = |name: &str| {
+        found
+            .iter()
+            .find(|(found, _)| found == name)
+            .map(|(_, path)| path.clone())
+    };
+    // The 48K image is the one the emulator boots into unless told otherwise.
+    let paths = RomPaths {
+        spectrum: path_of("48.rom"),
+        zx81: path_of("zx81.rom"),
     };
 
     // Then whatever is in the directory the last ROM was opened from, so the
@@ -35,7 +59,7 @@ fn find_roms(prefs: &Prefs, dirs: &[PathBuf]) -> ui::Roms {
             }
         }
     }
-    roms
+    (roms, paths)
 }
 
 /// Files named on the command line are dispatched by extension:
@@ -127,7 +151,7 @@ fn main() -> eframe::Result<()> {
     // Created on first launch, so there is always a file to look at.
     let prefs = Prefs::load_or_create();
     let dirs = resources::search_dirs();
-    let mut roms = find_roms(&prefs, &dirs);
+    let (mut roms, rom_paths) = find_roms(&prefs, &dirs);
     let model = std::env::args()
         .find_map(|a| match a.as_str() {
             "--48" => Some(Model::Spectrum48),
@@ -201,6 +225,14 @@ fn main() -> eframe::Result<()> {
             if let Some(ram) = zx81_ram {
                 app.switch_to_zx81(ram);
             }
+            // Notes are kept beside whatever is being disassembled; with no
+            // tape loaded that is the ROM the machine booted from.
+            app.rom_path = if app.on_zx81() {
+                rom_paths.zx81.clone()
+            } else {
+                rom_paths.spectrum.clone()
+            };
+            app.reload_notes();
             if let Some(path) = zx81_tape {
                 app.load_path(&path);
             }

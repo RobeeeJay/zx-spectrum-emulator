@@ -68,6 +68,12 @@ own format work through the same path. Each machine has its own deck, because a
 tape is timed in the T-states of the machine playing it and the two clocks
 differ.
 
+**Listings are annotated in a file beside the tape.** Labels and comments
+typed into the disassembly go to `<name>.zxrs.txt` next to the tape, or next to
+the ROM when the deck is empty — plain text, one line per address, so it can be
+read, edited and diffed without the emulator, and a badly edited line is
+skipped rather than throwing the file away.
+
 **The cassette is rendered from the SVGs** in `designs/` by `src/svg.rs`, a
 deliberately small renderer covering only what the artwork uses: groups with
 matrix transforms, lines and cubic curves, rectangles, circles, solid and
@@ -87,6 +93,11 @@ the artwork changes the emulator without anyone redrawing anything in code.
 - **A window can be laid out more than once for a frame.** Anything accumulated
   per draw — the cassette's hubs turning, for instance — must come from the
   clock, or it runs at two or three times the intended rate.
+- **Anything the debug windows need must happen in `eframe::App::logic`, not
+  `ui`.** eframe skips `ui` while the main window is not visible — which on
+  macOS includes switching away from the application — and then prunes every
+  viewport that frame did not declare, destroying the windows. `logic` runs
+  either way. `App::draw` still does both, for the tests.
 - **Accessibility labels are not where you expect.** A plain label's text and a
   combo box's selection are in the node's `value`, not its `label`. Tests query
   by value for those.
