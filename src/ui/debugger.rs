@@ -12,10 +12,31 @@ use crate::ui::{theme, App};
 /// wrap them is no use for reading either.
 pub const WINDOW_W: f32 = 1000.0;
 
-/// The label column, wide enough for a name somebody would actually type.
-const LABEL_W: f32 = 90.0;
-/// The listing between the two writable columns: address, bytes, mnemonic.
-const LISTING_W: f32 = 250.0;
+/// How wide each column of the listing is. Fixed rather than taken from the
+/// space left over: a column that measures itself against what is available
+/// changes width as the scrollbar comes and goes, which egui then lays out
+/// again, and the listing shivers from frame to frame.
+const GUTTER_W: f32 = 12.0;
+const LABEL_W: f32 = 84.0;
+const ADDR_W: f32 = 44.0;
+const VALUE_W: f32 = 92.0;
+const INSN_W: f32 = 140.0;
+const COMMENT_W: f32 = 200.0;
+/// The gap between one column and the next.
+const COLUMN_GAP: f32 = 6.0;
+/// A row of the memory dump: address, eight bytes, eight characters. Fixed
+/// for the same reason the listing's columns are.
+const DUMP_W: f32 = 330.0;
+
+/// How much of the window the listing takes; the registers, breakpoints and
+/// memory dump have the rest.
+const LISTING_SHARE: f32 = 0.62;
+
+/// One row of either pane. Both are laid out to the same height, so the
+/// listing and the memory dump read as one instrument rather than two.
+fn row_height(ui: &egui::Ui) -> f32 {
+    ui.spacing().interact_size.y
+}
 
 pub struct DebuggerState {
     pub follow_pc: bool,
@@ -174,9 +195,22 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     registers(app, ui);
     ui.separator();
 
-    ui.columns(2, |cols| {
-        disassembly(app, &mut cols[0]);
-        right_column(app, &mut cols[1]);
+    // Not `columns`, which splits evenly: the listing now carries five
+    // columns of its own and needs the larger share.
+    let full = ui.available_width();
+    ui.horizontal_top(|ui| {
+        let listing = (full * LISTING_SHARE).floor();
+        ui.allocate_ui_with_layout(
+            egui::vec2(listing, ui.available_height()),
+            egui::Layout::top_down(egui::Align::LEFT),
+            |ui| disassembly(app, ui),
+        );
+        ui.separator();
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), ui.available_height()),
+            egui::Layout::top_down(egui::Align::LEFT),
+            |ui| right_column(app, ui),
+        );
     });
 }
 
@@ -440,21 +474,31 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
             .unwrap_or(0)
     };
 
-    // Column headings, so the two writable columns are named rather than
-    // left as mysterious blank space either side of the listing.
+    // Column headings. Every column is left justified and a fixed width, so
+    // the heading sits over what it names on every row beneath it.
     ui.horizontal(|ui| {
-        ui.add_sized(
-            [LABEL_W, ui.spacing().interact_size.y],
-            egui::Label::new(RichText::new("Label").small().color(theme::DIM)),
-        );
-        ui.add_space(LISTING_W);
-        ui.label(RichText::new("Comments").small().color(theme::DIM));
+        ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+        ui.add_space(GUTTER_W);
+        for (name, width) in [
+            ("Label", LABEL_W),
+            ("Address", ADDR_W),
+            ("Value", VALUE_W),
+            ("Instruction", INSN_W),
+            ("Comments", COMMENT_W),
+        ] {
+            heading(ui, name, width);
+        }
     });
 
     egui::ScrollArea::vertical()
         .id_salt("disasm")
         .max_height(360.0)
+        // A scroll area that shrinks to its contents makes its width depend on
+        // what is inside it, which is the other half of the feedback that had
+        // the listing shivering.
+        .auto_shrink([false, false])
         .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = COLUMN_GAP;
             let mut clicked: Option<u16> = None;
             let mut finished_editing = false;
             for _ in 0..app.dbg.lines {
@@ -466,21 +510,31 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                     .iter()
                     .map(|b| format!("{b:02X} "))
                     .collect::<String>();
-                let text = format!(
-                    "{}{:04X}  {:<12}{}",
-                    if has_bp { "●" } else { " " },
-                    addr,
-                    bytes,
-                    insn.text
-                );
-                let mut rich = RichText::new(text).monospace();
-                if is_pc {
-                    rich = rich.color(Color32::BLACK).background_color(theme::AMBER);
-                } else if has_bp {
-                    rich = rich.color(theme::RED);
-                }
+
+                // The listing's own three columns share one look: the current
+                // instruction is on an amber bar, a breakpoint is red.
+                let paint = |text: String| {
+                    let mut rich = RichText::new(text).monospace();
+                    if is_pc {
+                        rich = rich.color(Color32::BLACK).background_color(theme::AMBER);
+                    } else if has_bp {
+                        rich = rich.color(theme::RED);
+                    }
+                    rich
+                };
+
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+
+                    // The breakpoint marker sits in a gutter of its own, so a
+                    // dot appearing does not push the addresses sideways.
+                    cell(
+                        ui,
+                        RichText::new(if has_bp { "●" } else { " " })
+                            .monospace()
+                            .color(theme::RED),
+                        GUTTER_W,
+                    );
 
                     // The user's own name for this address, if it has one.
                     let mut label = app.notes.label(addr).to_string();
@@ -496,12 +550,9 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                     }
                     finished_editing |= resp.lost_focus();
 
-                    let listing = ui.add_sized(
-                        [LISTING_W, ui.spacing().interact_size.y],
-                        egui::Label::new(rich)
-                            .sense(egui::Sense::click())
-                            .halign(egui::Align::LEFT),
-                    );
+                    let mut listing = cell(ui, paint(format!("{addr:04X}")), ADDR_W);
+                    listing |= cell(ui, paint(bytes), VALUE_W);
+                    listing |= cell(ui, paint(insn.text.clone()), INSN_W);
                     if listing.clicked() {
                         clicked = Some(addr);
                     }
@@ -510,15 +561,10 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                     // a comment where there is one and stays out of the way
                     // where there is not.
                     let mut comment = app.notes.comment(addr).to_string();
-                    ui.label(
-                        RichText::new(if comment.is_empty() { " " } else { ";" })
-                            .monospace()
-                            .color(theme::DIM),
-                    );
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut comment)
                             .id_salt(("note-comment", addr))
-                            .desired_width(ui.available_width().max(40.0))
+                            .desired_width(COMMENT_W)
                             .font(egui::TextStyle::Monospace)
                             .frame(egui::Frame::NONE),
                     );
@@ -545,7 +591,34 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
-    ui.small("Click a line to toggle a breakpoint.");
+}
+
+/// A column heading: the same width as the column under it, and left
+/// justified like everything in it.
+fn heading(ui: &mut egui::Ui, name: &str, width: f32) {
+    cell(ui, RichText::new(name).small().color(theme::DIM), width);
+}
+
+/// One cell of the listing: a fixed width, its text against the left edge.
+///
+/// Not `add_sized`, which centres what it is given inside the space it
+/// allocates — that is what had the addresses drifting a few points either way
+/// as the text beside them changed length.
+fn cell(ui: &mut egui::Ui, text: RichText, width: f32) -> egui::Response {
+    let height = row_height(ui);
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, height),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_min_width(width);
+            ui.add(
+                egui::Label::new(text)
+                    .wrap_mode(egui::TextWrapMode::Extend)
+                    .sense(egui::Sense::click()),
+            )
+        },
+    )
+    .inner
 }
 
 fn right_column(app: &mut App, ui: &mut egui::Ui) {
@@ -617,7 +690,11 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .id_salt("memdump")
         .max_height(220.0)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Laid out row by row to the listing's height rather than left to
+            // the label's own, so a line of the dump sits on the same pitch as
+            // a line of disassembly.
             let base = app.dbg.mem_addr & !0x7;
             for row in 0..16u16 {
                 let addr = base.wrapping_add(row * 8);
@@ -634,7 +711,7 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
                         '.'
                     });
                 }
-                ui.monospace(line);
+                cell(ui, RichText::new(line).monospace(), DUMP_W);
             }
         });
 }
