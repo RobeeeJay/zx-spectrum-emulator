@@ -322,6 +322,11 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.toggle_value(&mut breaks.interrupt, "Interrupt")
                 .on_hover_text("Stop when the CPU accepts the frame interrupt");
+            ui.toggle_value(&mut breaks.rom, "ROM").on_hover_text(
+                "Stop when the program goes into the ROM from outside it. \
+                 Moving about within the ROM does not count, so a ROM routine \
+                 calling another one is left alone.",
+            );
         });
     }
 

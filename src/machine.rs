@@ -1004,12 +1004,16 @@ pub struct Breaks {
     pub ay: bool,
     /// The frame interrupt being accepted by the CPU.
     pub interrupt: bool,
+    /// Code entering the ROM from outside it: a program calling a ROM routine.
+    /// Moving about within the ROM is not entering it, so a ROM routine
+    /// calling another one does not count.
+    pub rom: bool,
 }
 
 impl Breaks {
     /// Whether anything at all is being watched.
     pub fn any(&self) -> bool {
-        self.screen || self.beeper || self.ay || self.interrupt
+        self.screen || self.beeper || self.ay || self.interrupt || self.rom
     }
 }
 
@@ -1049,6 +1053,8 @@ pub enum Event {
     Beeper,
     Ay,
     Interrupt,
+    /// Went into the ROM from this address.
+    Rom(u16),
 }
 
 impl Event {
@@ -1059,6 +1065,7 @@ impl Event {
             Event::Beeper => "Toggled the beeper".to_string(),
             Event::Ay => "Used the sound chip".to_string(),
             Event::Interrupt => "Took the frame interrupt".to_string(),
+            Event::Rom(from) => format!("Went into the ROM from ${from:04X}"),
         }
     }
 }
@@ -1080,6 +1087,9 @@ impl Default for Spectrum {
         Self::new()
     }
 }
+
+/// Where the ROM ends and RAM begins, on every machine here.
+const ROM_END: u16 = 0x4000;
 
 /// Read a byte without disturbing anything, for looking at the stack.
 fn raw_peek(bus: &SpectrumBus, addr: u16) -> u8 {
@@ -1188,14 +1198,26 @@ impl Spectrum {
     pub fn step_instruction(&mut self) {
         self.check_interrupt();
 
-        let watching = self.profiler.running || self.bus.observer.enabled;
+        let watching = self.profiler.running || self.bus.observer.enabled || self.bus.breaks.rom;
         let (pc0, sp0, t0) = if watching {
             (self.cpu.pc, self.cpu.sp, self.bus.total_t())
         } else {
             (0, 0, 0)
         };
 
+        // Where the code was before this instruction, for the ROM watch: only
+        // needed while it is on, and it is one comparison when it is not.
+        let was_outside_rom = self.bus.breaks.rom && self.cpu.pc >= ROM_END;
+
         self.cpu.step(&mut self.bus);
+
+        // Going into the ROM from outside it is a program calling a ROM
+        // routine. Moving about inside the ROM is not, so a ROM routine
+        // calling another one is left alone.
+        if was_outside_rom && self.cpu.pc < ROM_END {
+            self.bus.break_hit.get_or_insert(Event::Rom(pc0));
+        }
+
         if self.bus.tstates >= self.bus.frame_t() {
             self.bus.end_frame();
             self.frames_completed += 1;

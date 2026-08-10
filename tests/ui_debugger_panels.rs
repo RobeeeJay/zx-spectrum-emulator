@@ -508,3 +508,63 @@ fn clearing_the_notes_asks_first() {
         h.state().status
     );
 }
+
+/// Going into the ROM from outside it is a program calling a ROM routine,
+/// which is worth stopping for: it is how a game asks the machine to do
+/// something rather than doing it itself.
+#[test]
+fn entering_the_rom_from_outside_can_stop_the_machine() {
+    let mut spec = Spectrum::new();
+    // $8000: CALL $0D6B (CLS) — into the ROM from RAM.
+    for (offset, byte) in [(0u16, 0xCDu8), (1, 0x6B), (2, 0x0D), (3, 0x76)] {
+        spec.bus.poke(0x8000 + offset, byte);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.bus.breaks.rom = true;
+
+    match spec.run(FRAME_T) {
+        Stop::Watched(Event::Rom(from), at) => {
+            assert_eq!(from, 0x8000, "the call was made from $8000");
+            assert_eq!(at, 0x8000, "which is where it stopped");
+            assert_eq!(spec.cpu.pc, 0x0D6B, "and it is in the ROM now");
+        }
+        other => panic!("expected a ROM entry, got {other:?}"),
+    }
+}
+
+/// Moving about within the ROM is not entering it: a ROM routine calling
+/// another one would otherwise stop the machine on every step of anything the
+/// ROM does for itself.
+#[test]
+fn the_rom_calling_itself_does_not_stop_the_machine() {
+    let mut spec = Spectrum::new();
+    // A little ROM of its own: $0000 CALL $0100, and $0100 RET.
+    let mut rom = vec![0u8; 0x4000];
+    rom[0x0000..0x0004].copy_from_slice(&[0xCD, 0x00, 0x01, 0x76]);
+    rom[0x0100] = 0xC9;
+    spec.load_rom(&rom);
+    spec.cpu.pc = 0x0000;
+    spec.cpu.sp = 0xFF00;
+    spec.bus.breaks.rom = true;
+
+    if let Stop::Watched(event, _) = spec.run(FRAME_T) {
+        panic!("stopped inside the ROM for {event:?}");
+    }
+}
+
+/// And nothing stops when the watch is off.
+#[test]
+fn the_rom_watch_does_nothing_until_it_is_switched_on() {
+    let mut spec = Spectrum::new();
+    for (offset, byte) in [(0u16, 0xCDu8), (1, 0x6B), (2, 0x0D), (3, 0x76)] {
+        spec.bus.poke(0x8000 + offset, byte);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+
+    assert!(
+        !matches!(spec.run(FRAME_T), Stop::Watched(..)),
+        "it stopped without being asked to"
+    );
+}
