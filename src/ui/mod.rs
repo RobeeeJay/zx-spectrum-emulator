@@ -212,6 +212,8 @@ pub struct App {
     pub tape_path: Option<std::path::PathBuf>,
     /// The ROM the current machine booted from, for the same reason.
     pub rom_path: Option<std::path::PathBuf>,
+    /// When the notes last changed, so they are written a moment later.
+    notes_changed_at: Option<std::time::Instant>,
     pub running: bool,
     pub speed: f32,
     pub status: String,
@@ -291,6 +293,7 @@ impl App {
             notes: crate::notes::Notes::unattached(),
             tape_path: None,
             rom_path: None,
+            notes_changed_at: None,
             running: true,
             speed: 1.0,
             status,
@@ -600,6 +603,30 @@ impl App {
                 self.set_status(format!("Tape: {name} ({blocks} {plural}){hint}"), false);
             }
             Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
+        }
+    }
+
+    /// Write the notes out a little after they last changed.
+    ///
+    /// AutoDoc writes into them without anybody touching a field, so waiting
+    /// for one to lose focus would leave a session's worth of guesses unsaved.
+    /// The delay keeps it to one write rather than one per frame while the
+    /// listing is being scrolled about.
+    fn save_notes_if_due(&mut self) {
+        const AFTER: std::time::Duration = std::time::Duration::from_secs(3);
+        if !self.notes.is_dirty() {
+            self.notes_changed_at = None;
+            return;
+        }
+        let since = *self
+            .notes_changed_at
+            .get_or_insert_with(std::time::Instant::now);
+        if since.elapsed() < AFTER {
+            return;
+        }
+        self.notes_changed_at = None;
+        if let Err(e) = self.notes.save_if_dirty() {
+            self.set_status(format!("Could not save notes: {e}"), true);
         }
     }
 
@@ -1414,6 +1441,7 @@ impl eframe::App for App {
     /// Keep the layout for next time.
     fn on_exit(&mut self) {
         self.save_window_state();
+        let _ = self.notes.save_if_dirty();
     }
 }
 
@@ -1460,6 +1488,7 @@ impl App {
         self.debug_viewports(&ctx);
 
         self.save_window_state_if_settled();
+        self.save_notes_if_due();
         ctx.request_repaint();
     }
 

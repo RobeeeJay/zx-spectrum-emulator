@@ -70,11 +70,17 @@ differ.
 
 **AutoDoc guesses, and says so.** `src/autodoc.rs` reads the code from where
 the machine is, names every routine that gets called, and applies ordered rules
-to what each one touches — ports, screen ranges, ROM calls, block moves. The
-guesses appear as hint text where the user has typed nothing, are never written
-to their notes file, and hedge in the wording when the evidence is thin
-("possibly a protection check"). A rule that always has an answer would be
-worse than none, so code with no tell is left unnamed.
+to what each one touches — ports, screen ranges, ROM calls, block moves. It
+hedges in the wording when the evidence is thin ("possibly a protection
+check"), and a rule that always has an answer would be worse than none, so code
+with no tell is left unnamed.
+
+**A guess is marked with `@` and never overwrites a person.** Guesses are kept
+in the same notes file as everything else, written as `@label ; @comment`. A
+later guess replaces an earlier one — by then the program may have unpacked
+itself, and the second look is the better one — but nothing the user typed is
+ever replaced, and typing over a guess makes it theirs. Guesses are drawn in
+the dim colour so the two are told apart at a glance.
 
 **Listings are annotated in a file beside the tape.** Labels and comments
 typed into the disassembly go to `<name>.zxrs.txt` next to the tape, or next to

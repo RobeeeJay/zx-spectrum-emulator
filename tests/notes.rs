@@ -146,3 +146,95 @@ fn tempdir(name: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
+
+/// A guess is written with an `@` in front of it, so the file says which lines
+/// are the emulator's opinion and which are the user's.
+#[test]
+fn guesses_are_marked_in_the_file() {
+    let dir = tempdir("marked");
+    let source = dir.join("game.tap");
+    let mut notes = Notes::for_file(&source);
+    notes.set_label(0x8000, "mine");
+    notes.suggest(0x9000, "clear_screen_9000", "Fills the display file");
+    notes.save_if_dirty().unwrap();
+
+    let written = std::fs::read_to_string(dir.join("game.zxrs.txt")).unwrap();
+    assert!(
+        written.contains("8000 mine"),
+        "the user's line should be plain:\n{written}"
+    );
+    assert!(
+        written.contains("9000 @clear_screen_9000 ; @Fills the display file"),
+        "the guess should be marked:\n{written}"
+    );
+
+    // And it comes back knowing which was which.
+    let read_back = Notes::for_file(&source);
+    assert!(read_back.label_is_auto(0x9000), "the mark was lost");
+    assert!(
+        !read_back.label_is_auto(0x8000),
+        "the user's line was marked"
+    );
+    assert_eq!(read_back.label(0x9000), "clear_screen_9000", "@ kept in");
+}
+
+/// A later run replaces an earlier guess: the machine may have unpacked the
+/// code by then, and the second look is the better one.
+#[test]
+fn a_later_guess_replaces_an_earlier_one() {
+    let mut notes = Notes::unattached();
+    notes.suggest(0x9000, "routine_9000", "");
+    notes.suggest(0x9000, "draw_sprite_9000", "Merges bytes into the screen");
+
+    assert_eq!(notes.label(0x9000), "draw_sprite_9000");
+    assert_eq!(notes.comment(0x9000), "Merges bytes into the screen");
+    assert!(notes.label_is_auto(0x9000));
+}
+
+/// But a guess never replaces what somebody typed, in either half of the note.
+#[test]
+fn a_guess_leaves_the_users_own_words_alone() {
+    let mut notes = Notes::unattached();
+    notes.set_label(0x9000, "sprite_masker");
+    notes.suggest(0x9000, "draw_sprite_9000", "Merges bytes into the screen");
+
+    assert_eq!(
+        notes.label(0x9000),
+        "sprite_masker",
+        "the name was taken over"
+    );
+    assert!(!notes.label_is_auto(0x9000));
+    assert_eq!(
+        notes.comment(0x9000),
+        "Merges bytes into the screen",
+        "the empty half is fair game, though"
+    );
+    assert!(notes.comment_is_auto(0x9000));
+}
+
+/// Typing over a guess makes it the user's own, and it stops being replaced.
+#[test]
+fn typing_over_a_guess_makes_it_yours() {
+    let mut notes = Notes::unattached();
+    notes.suggest(0x9000, "routine_9000", "");
+    notes.set_label(0x9000, "the_loader");
+    assert!(!notes.label_is_auto(0x9000), "it should be the user's now");
+
+    notes.suggest(0x9000, "decompress_9000", "");
+    assert_eq!(
+        notes.label(0x9000),
+        "the_loader",
+        "a later guess took it back"
+    );
+}
+
+/// An empty guess does not wipe out a better one from a previous run.
+#[test]
+fn an_empty_guess_does_not_erase_a_previous_one() {
+    let mut notes = Notes::unattached();
+    notes.suggest(0x9000, "decompress_9000", "Unpacks compressed data");
+    notes.suggest(0x9000, "", "");
+
+    assert_eq!(notes.label(0x9000), "decompress_9000");
+    assert_eq!(notes.comment(0x9000), "Unpacks compressed data");
+}

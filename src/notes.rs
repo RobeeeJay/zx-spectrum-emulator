@@ -9,8 +9,12 @@
 //! # ZX-Rustrum notes
 //! 8000 start      ; wait for the frame to finish
 //! 8003            ; the border is set here
-//! 800A loop
+//! 800A @clear_screen_800A ; @Fills the display file with one value
 //! ```
+//!
+//! An `@` marks something AutoDoc worked out rather than something the user
+//! wrote. The distinction is what lets a later, better guess replace an
+//! earlier one while never touching a line somebody typed themselves.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,6 +25,11 @@ use std::path::{Path, PathBuf};
 pub struct Note {
     pub label: String,
     pub comment: String,
+    /// Whether each half is AutoDoc's guess rather than the user's own words.
+    /// Tracked separately: somebody may name a routine themselves and leave
+    /// the guessed comment under it, or the other way about.
+    pub label_auto: bool,
+    pub comment_auto: bool,
 }
 
 impl Note {
@@ -85,12 +94,62 @@ impl Notes {
         self.entries.is_empty()
     }
 
+    /// Whether each half of a note is a guess.
+    pub fn label_is_auto(&self, addr: u16) -> bool {
+        self.entries.get(&addr).is_some_and(|n| n.label_auto)
+    }
+
+    pub fn comment_is_auto(&self, addr: u16) -> bool {
+        self.entries.get(&addr).is_some_and(|n| n.comment_auto)
+    }
+
+    /// Every address with a label, for the list of places to go.
+    pub fn labelled(&self) -> impl Iterator<Item = (u16, &str, bool)> {
+        self.entries
+            .iter()
+            .filter(|(_, note)| !note.label.is_empty())
+            .map(|(addr, note)| (*addr, note.label.as_str(), note.label_auto))
+    }
+
+    /// What the user typed. Typing over a guess makes it theirs.
     pub fn set_label(&mut self, addr: u16, label: &str) {
-        self.edit(addr, |note| note.label = label.trim().to_string());
+        self.edit(addr, |note| {
+            note.label = label.trim().to_string();
+            note.label_auto = false;
+        });
     }
 
     pub fn set_comment(&mut self, addr: u16, comment: &str) {
-        self.edit(addr, |note| note.comment = comment.trim().to_string());
+        self.edit(addr, |note| {
+            note.comment = comment.trim().to_string();
+            note.comment_auto = false;
+        });
+    }
+
+    /// What AutoDoc worked out. A guess replaces an earlier guess — a later
+    /// run may have better code to look at — but never a line the user wrote,
+    /// and never puts an empty guess over an existing one.
+    pub fn suggest(&mut self, addr: u16, label: &str, comment: &str) {
+        let (label, comment) = (label.trim(), comment.trim());
+        let user_label = self
+            .entries
+            .get(&addr)
+            .is_some_and(|n| !n.label_auto && !n.label.is_empty());
+        let user_comment = self
+            .entries
+            .get(&addr)
+            .is_some_and(|n| !n.comment_auto && !n.comment.is_empty());
+
+        self.edit(addr, |note| {
+            if !label.is_empty() && !user_label {
+                note.label = label.to_string();
+                note.label_auto = true;
+            }
+            if !comment.is_empty() && !user_comment {
+                note.comment = comment.to_string();
+                note.comment_auto = true;
+            }
+        });
     }
 
     fn edit(&mut self, addr: u16, change: impl FnOnce(&mut Note)) {
@@ -150,10 +209,12 @@ impl Notes {
         for (addr, note) in &self.entries {
             out.push_str(&format!("{addr:04X}"));
             if !note.label.is_empty() {
-                out.push_str(&format!(" {}", note.label));
+                let mark = if note.label_auto { "@" } else { "" };
+                out.push_str(&format!(" {mark}{}", note.label));
             }
             if !note.comment.is_empty() {
-                out.push_str(&format!(" ; {}", note.comment));
+                let mark = if note.comment_auto { "@" } else { "" };
+                out.push_str(&format!(" ; {mark}{}", note.comment));
             }
             out.push('\n');
         }
@@ -182,8 +243,10 @@ pub fn parse(text: &str) -> BTreeMap<u16, Note> {
             None => (rest, ""),
         };
         let note = Note {
-            label: label.to_string(),
-            comment: comment.to_string(),
+            label: label.trim_start_matches('@').to_string(),
+            comment: comment.trim_start_matches('@').to_string(),
+            label_auto: label.starts_with('@'),
+            comment_auto: comment.starts_with('@'),
         };
         if !note.is_empty() {
             entries.insert(addr, note);

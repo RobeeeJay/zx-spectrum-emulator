@@ -394,10 +394,10 @@ fn the_autodoc_toggle_names_routines() {
     );
 }
 
-/// A guess is a guess: it is shown where the user has typed nothing, and never
-/// goes anywhere near their notes file.
+/// Guesses are kept with the rest of the notes, marked so they can be told
+/// from anything the user wrote.
 #[test]
-fn a_guess_is_never_written_to_the_users_notes() {
+fn guesses_go_into_the_notes_marked_as_guesses() {
     let mut app = app();
     app.dbg.autodoc = true;
     app.spec.bus.poke(0x9000, 0xC9);
@@ -407,13 +407,60 @@ fn a_guess_is_never_written_to_the_users_notes() {
     let mut h = harness(app);
     h.run_steps(3);
 
-    assert!(!h.state().dbg.doc.is_empty(), "nothing was guessed at all");
+    let notes = &h.state().notes;
+    assert!(!notes.is_empty(), "nothing was written down at all");
     assert!(
-        h.state().notes.is_empty(),
-        "the user's notes should still be empty"
+        notes.label_is_auto(0x9000),
+        "the guess at $9000 is not marked as one: {:?}",
+        notes.label(0x9000)
     );
     assert!(
-        !h.state().notes.is_dirty(),
-        "and there should be nothing waiting to be written to their file"
+        notes.to_text().contains("@"),
+        "the file should mark guesses:\n{}",
+        notes.to_text()
+    );
+}
+
+/// A guess never replaces a line somebody wrote themselves, however good the
+/// guess is.
+#[test]
+fn a_guess_never_replaces_what_the_user_wrote() {
+    let mut app = app();
+    app.spec.bus.poke(0x9000, 0xC9);
+    app.notes.set_label(0x9000, "my_own_name");
+    app.notes.set_comment(0x9000, "my own words");
+    app.dbg.autodoc = true;
+    app.dbg.follow_pc = false;
+    app.dbg.view_addr = 0x9000;
+
+    let mut h = harness(app);
+    h.run_steps(3);
+
+    let notes = &h.state().notes;
+    assert_eq!(notes.label(0x9000), "my_own_name");
+    assert_eq!(notes.comment(0x9000), "my own words");
+    assert!(
+        !notes.label_is_auto(0x9000) && !notes.comment_is_auto(0x9000),
+        "the user's own line was marked as a guess"
+    );
+}
+
+/// The list of names is there to be clicked, and clicking one takes the
+/// listing to it.
+#[test]
+fn clicking_a_label_takes_the_listing_to_it() {
+    let mut app = app();
+    app.notes.set_label(0xABCD, "the_place");
+    app.dbg.view_addr = 0x0000;
+    app.dbg.follow_pc = true;
+
+    let mut h = harness(app);
+    h.get_by_label_contains("ABCD the_place").click();
+    h.run_steps(2);
+
+    assert_eq!(h.state().dbg.view_addr, 0xABCD, "the listing did not move");
+    assert!(
+        !h.state().dbg.follow_pc,
+        "and it should stay there rather than snapping back to PC"
     );
 }

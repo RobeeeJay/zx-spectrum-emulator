@@ -36,6 +36,10 @@ const REGISTERS_W: f32 = 420.0;
 const STACK_DEPTH: u16 = 12;
 const STACK_W: f32 = 130.0;
 
+/// The list of names, and how far it runs before it scrolls.
+const LABELS_W: f32 = 150.0;
+const LABELS_H: f32 = 150.0;
+
 /// The picture beside the registers: wide enough to make out what is being
 /// drawn, with a margin of case around it.
 const VIDEO_W: f32 = 176.0;
@@ -323,6 +327,7 @@ fn registers(app: &mut App, ui: &mut egui::Ui) {
             });
         });
         stack(app, ui);
+        labels(app, ui);
         video(app, ui);
     });
     // The clock and the memory map are lines rather than columns, and putting
@@ -383,6 +388,55 @@ fn stack(app: &mut App, ui: &mut egui::Ui) {
             }
             if let Some(addr) = go_to {
                 show_in_dump(app, addr);
+            }
+        });
+    });
+}
+
+/// Everything that has a name, as a way of getting to it.
+///
+/// The list is the labels from the notes — the user's own and AutoDoc's, the
+/// guesses in the dim colour — because a name is the thing somebody remembers
+/// a place in a program by.
+fn labels(app: &mut App, ui: &mut egui::Ui) {
+    let entries: Vec<(u16, String, bool)> = app
+        .notes
+        .labelled()
+        .map(|(addr, label, auto)| (addr, label.to_string(), auto))
+        .collect();
+
+    theme::lcd().show(ui, |ui| {
+        ui.vertical(|ui| {
+            ui.set_min_width(LABELS_W);
+            ui.set_max_width(LABELS_W);
+            ui.label(RichText::new("Labels").small().color(theme::DIM));
+            if entries.is_empty() {
+                ui.label(RichText::new("none yet").monospace().color(theme::DIM));
+                return;
+            }
+            let mut go_to = None;
+            egui::ScrollArea::vertical()
+                .id_salt("labels")
+                .max_height(LABELS_H)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for (addr, label, auto) in &entries {
+                        let colour = if *auto { theme::DIM } else { theme::LCD_FG };
+                        let text = format!("{addr:04X} {label}");
+                        let row = ui.add(
+                            egui::Label::new(RichText::new(text).monospace().color(colour))
+                                .wrap_mode(egui::TextWrapMode::Truncate)
+                                .sense(egui::Sense::click()),
+                        );
+                        if row.clicked() {
+                            go_to = Some(*addr);
+                        }
+                        row.on_hover_text(format!("Show the listing at ${addr:04X}"));
+                    }
+                });
+            if let Some(addr) = go_to {
+                app.dbg.view_addr = addr;
+                app.dbg.follow_pc = false;
             }
         });
     });
@@ -718,21 +772,20 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                         GUTTER_W,
                     );
 
-                    // The user's own name for this address, if it has one,
-                    // and otherwise whatever AutoDoc made of it — as hint
-                    // text, so it reads as the guess it is and vanishes the
-                    // moment anything is typed over it.
+                    // What is written against this address. A guess is shown
+                    // in the dim colour, so it reads as a guess; typing over
+                    // one makes it the user's own and it goes to full ink.
                     let mut label = app.notes.label(addr).to_string();
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut label)
                             .id_salt(("note-label", addr))
                             .desired_width(LABEL_W)
                             .font(egui::TextStyle::Monospace)
-                            .hint_text(
-                                RichText::new(app.dbg.doc.label(addr))
-                                    .monospace()
-                                    .color(theme::DIM),
-                            )
+                            .text_color(if app.notes.label_is_auto(addr) {
+                                theme::DIM
+                            } else {
+                                theme::INK
+                            })
                             .frame(egui::Frame::NONE),
                     );
                     if resp.changed() {
@@ -756,11 +809,11 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                             .id_salt(("note-comment", addr))
                             .desired_width(COMMENT_W)
                             .font(egui::TextStyle::Monospace)
-                            .hint_text(
-                                RichText::new(app.dbg.doc.comment(addr))
-                                    .monospace()
-                                    .color(theme::DIM),
-                            )
+                            .text_color(if app.notes.comment_is_auto(addr) {
+                                theme::DIM
+                            } else {
+                                theme::INK
+                            })
                             .frame(egui::Frame::NONE),
                     );
                     if resp.changed() {
@@ -809,7 +862,19 @@ fn refresh_autodoc(app: &mut App) {
     // listing may be somewhere the machine has not reached yet.
     let entries = [from.0, from.1];
     let peek = |a: u16| app.peek(a);
-    app.dbg.doc = crate::autodoc::analyse(&peek, &entries);
+    let doc = crate::autodoc::analyse(&peek, &entries);
+
+    // Into the notes, where they are kept with the rest. A guess replaces an
+    // earlier guess but never a line the user wrote.
+    for (addr, label) in &doc.labels {
+        app.notes.suggest(*addr, label, doc.comment(*addr));
+    }
+    for (addr, comment) in &doc.comments {
+        if !doc.labels.contains_key(addr) {
+            app.notes.suggest(*addr, "", comment);
+        }
+    }
+    app.dbg.doc = doc;
 }
 
 /// A column heading: the same width as the column under it, and left
