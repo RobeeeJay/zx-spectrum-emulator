@@ -28,6 +28,10 @@ const COLUMN_GAP: f32 = 6.0;
 /// for the same reason the listing's columns are.
 const DUMP_W: f32 = 330.0;
 
+/// How wide the register panel is allowed to be, so what sits beside it has
+/// somewhere to be.
+const REGISTERS_W: f32 = 420.0;
+
 /// How many words of the stack are shown, and how wide that column is.
 const STACK_DEPTH: u16 = 12;
 const STACK_W: f32 = 130.0;
@@ -288,10 +292,33 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
 
 fn registers(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_top(|ui| {
-        theme::lcd().show(ui, |ui| registers_lcd(app, ui));
+        theme::lcd().show(ui, |ui| {
+            ui.set_max_width(REGISTERS_W);
+            registers_lcd(app, ui);
+        });
         stack(app, ui);
         video(app, ui);
     });
+    // The clock and the memory map are lines rather than columns, and putting
+    // them in the panel above made it 300 points wider than the window, which
+    // pushed the stack off the right-hand edge entirely.
+    machine_state(app, ui);
+}
+
+/// Where the machine is in the frame, and what is paged in where.
+fn machine_state(app: &mut App, ui: &mut egui::Ui) {
+    let (frame, t, frame_t) = app.machine_clock();
+    ui.label(
+        RichText::new(format!(
+            "frame {frame}   T {t:5}/{frame_t}   instructions {}",
+            app.cpu().instructions
+        ))
+        .monospace(),
+    );
+    memory_map(app, ui);
+    if !app.on_zx81() && app.spec.bus.model.has_ay() {
+        ay_registers(app, ui);
+    }
 }
 
 /// What is on the stack, from the stack pointer up.
@@ -442,20 +469,6 @@ fn registers_lcd(app: &mut App, ui: &mut egui::Ui) {
             ui.label(RichText::new("HALTED").color(theme::AMBER).monospace());
         }
     });
-
-    let (frame, t, frame_t) = app.machine_clock();
-    ui.label(
-        RichText::new(format!(
-            "frame {frame}   T {t:5}/{frame_t}   instructions {}",
-            app.cpu().instructions
-        ))
-        .monospace(),
-    );
-
-    memory_map(app, ui);
-    if !app.on_zx81() && app.spec.bus.model.has_ay() {
-        ay_registers(app, ui);
-    }
 }
 
 /// What each 16K slot currently points at, and the 128K paging latch.

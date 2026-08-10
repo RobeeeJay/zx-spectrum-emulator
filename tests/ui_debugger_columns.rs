@@ -207,3 +207,35 @@ fn geometry(h: &Harness<'_, App>) -> Vec<(i32, i32, i32, i32)> {
         })
         .collect()
 }
+
+/// Nothing in the debugger reaches past the edge of the window it is drawn in.
+///
+/// The window is a fixed width, and there is no horizontal scrolling in it, so
+/// anything wider than that is simply not there: the stack view went in beside
+/// a register panel that turned out to be 300 points wider than the window,
+/// and both it and the memory dump ended up off the right-hand edge.
+#[test]
+fn nothing_in_the_debugger_falls_off_the_right_hand_edge() {
+    use zx_rustrum::ui::debugger;
+
+    let mut h = Harness::builder()
+        .with_size([debugger::WINDOW_W, 900.0])
+        .build_ui_state(|ui, app: &mut App| debugger::ui(app, ui), app());
+    h.run_steps(4);
+
+    let mut overflowing: Vec<_> = collect(&h, |value, label| {
+        Some(if value.is_empty() { label } else { value })
+    })
+    .into_iter()
+    .filter(|(_, rect)| rect.max.x > debugger::WINDOW_W)
+    .map(|(text, rect)| format!("{text:?} reaches {}", rect.max.x))
+    .collect();
+    overflowing.dedup();
+
+    assert!(
+        overflowing.is_empty(),
+        "{} things are off the edge of a {}-point window: {overflowing:#?}",
+        overflowing.len(),
+        debugger::WINDOW_W
+    );
+}
