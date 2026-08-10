@@ -587,11 +587,18 @@ impl App {
             Some(FileKind::Rom) => dialog.add_filter("ROM image", &["rom", "bin"]),
             Some(FileKind::Tape) => dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81"]),
             Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80"]),
-            Some(FileKind::Recording) => dialog.add_filter("RZX recording", &["rzx"]),
+            // No filter, deliberately. rfd's macOS backend sets the panel's
+            // allowed types from the extension list through an API that wants
+            // types the system knows, and nothing on the machine claims
+            // `.rzx`: the recordings end up greyed out and unselectable. The
+            // file is checked when it is opened instead.
+            Some(FileKind::Recording) => dialog,
             None => dialog
                 .add_filter(
                     "Tape, snapshot or ROM",
-                    &["tzx", "tap", "p", "81", "p81", "sna", "z80", "rom", "bin"],
+                    &[
+                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "rom", "bin", "rzx",
+                    ],
                 )
                 .add_filter("Tape", &["tzx", "tap", "p", "81", "p81"])
                 .add_filter("Snapshot", &["sna", "z80"])

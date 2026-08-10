@@ -193,3 +193,46 @@ fn a_recording_tells_autodoc_where_the_program_goes() {
         doc.labels.len()
     );
 }
+
+/// The file picker does not filter recordings by extension.
+///
+/// rfd's macOS backend hands the extension list to the panel through an API
+/// that wants types the system knows about, and nothing on a Mac claims
+/// `.rzx`: with a filter set, the recordings show up greyed out and cannot be
+/// chosen at all. The file is checked when it is opened instead.
+#[test]
+fn the_picker_does_not_filter_recordings_out_of_existence() {
+    let source = include_str!("../src/ui/mod.rs");
+    let picker = source
+        .split("pub fn pick_file")
+        .nth(1)
+        .expect("pick_file has gone");
+    let arm = picker
+        .split("Some(FileKind::Recording) =>")
+        .nth(1)
+        .expect("the picker no longer knows about recordings");
+    let arm = arm.split(',').next().unwrap_or_default();
+    assert!(
+        !arm.contains("add_filter"),
+        "a filter on .rzx makes the recordings unselectable on macOS: {arm}"
+    );
+}
+
+/// Anything that is not a recording still gets turned away when it is opened.
+#[test]
+fn opening_something_that_is_not_a_recording_says_so() {
+    let dir = std::env::temp_dir().join(format!("zxrs-rzx-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("notreally.rzx");
+    std::fs::write(&path, b"this is not a recording").unwrap();
+
+    let mut app = app();
+    app.load_path(&path);
+
+    assert!(app.rzx.is_none(), "it should not have started playing");
+    assert!(
+        app.status.contains("not an RZX"),
+        "and it should say why: {}",
+        app.status
+    );
+}
