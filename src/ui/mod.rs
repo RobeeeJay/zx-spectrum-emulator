@@ -1136,6 +1136,13 @@ impl App {
                 self.show_debugger = true;
                 self.dbg.raise = true;
             }
+            Stop::Watched(event) => {
+                self.running = false;
+                self.status = event.describe();
+                self.dbg.follow_pc = true;
+                self.show_debugger = true;
+                self.dbg.raise = true;
+            }
             Stop::SlowDraw => {
                 self.leftover = 0.0;
             }
@@ -1143,6 +1150,12 @@ impl App {
         }
         self.spec.bus.audio_sync();
         self.spec.bus.audio.flush();
+    }
+
+    /// The picture as it stands, for anything that wants to show it: the
+    /// debugger keeps a small copy beside the registers.
+    pub fn screen_texture(&self) -> Option<TextureHandle> {
+        self.screen_tex.clone()
     }
 
     fn draw_screen_texture(&mut self, ctx: &egui::Context) {

@@ -215,6 +215,10 @@ pub struct SpectrumBus {
     tape_edge_scratch: Vec<(u64, bool)>,
 
     pub slow: SlowDraw,
+    /// What the debugger is watching for, and what it caught. The bus is
+    /// where all four things happen, so it is the bus that notices them.
+    pub breaks: Breaks,
+    pub break_hit: Option<Event>,
     /// Writes to video RAM in the frame just finished, for the UI readout.
     pub screen_writes: u32,
     screen_writes_acc: u32,
@@ -259,6 +263,8 @@ impl SpectrumBus {
             tape_edge_scratch: Vec::new(),
             slow: SlowDraw::default(),
             screen_writes: 0,
+            breaks: Breaks::default(),
+            break_hit: None,
             screen_writes_acc: 0,
             contention: vec![0; TABLE_LEN],
         };
@@ -819,6 +825,9 @@ impl Bus for SpectrumBus {
         self.tracker.on_write(phys, addr);
         if (SCREEN_START..SCREEN_END).contains(&addr) {
             self.screen_writes_acc += 1;
+            if self.breaks.screen {
+                self.break_hit.get_or_insert(Event::Screen(addr));
+            }
         }
         if self.slow.enabled && self.watched(addr) {
             if self.slow.budget_left == 0 {
@@ -841,6 +850,9 @@ impl Bus for SpectrumBus {
         let sampled = self.contend_io(port);
         // AY register read: $FFFD.
         if self.model.has_ay() && port & 0xc002 == 0xc000 {
+            if self.breaks.ay {
+                self.break_hit.get_or_insert(Event::Ay);
+            }
             return self.audio.ay.read();
         }
         if port & 1 == 0 {
@@ -865,6 +877,9 @@ impl Bus for SpectrumBus {
             let speaker = value & 0x10 != 0;
             let mic = value & 0x08 != 0;
             if speaker != self.speaker || mic != self.mic {
+                if self.breaks.beeper {
+                    self.break_hit.get_or_insert(Event::Beeper);
+                }
                 self.audio_sync();
                 self.speaker = speaker;
                 self.mic = mic;
@@ -889,8 +904,14 @@ impl Bus for SpectrumBus {
             }
             // $FFFD: AY register select, $BFFD: AY data.
             if port & 0xc002 == 0xc000 {
+                if self.breaks.ay {
+                    self.break_hit.get_or_insert(Event::Ay);
+                }
                 self.audio.ay.selected = value & 0x0f;
             } else if port & 0xc002 == 0x8000 {
+                if self.breaks.ay {
+                    self.break_hit.get_or_insert(Event::Ay);
+                }
                 self.audio_sync();
                 self.audio.ay.write(value);
             }
@@ -911,6 +932,54 @@ pub enum Stop {
     Breakpoint(u16),
     /// A single-step request completed.
     Stepped,
+    /// Something the debugger was watching for happened.
+    Watched(Event),
+}
+
+/// What the machine can be told to stop on besides reaching an address.
+///
+/// These are the things a program does that are hard to find by address:
+/// where it draws, where it makes a noise, and where the frame interrupt takes
+/// it. Each is only tested when it is switched on, so nothing is paid for a
+/// watch that is off.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Breaks {
+    /// A write anywhere in the display file.
+    pub screen: bool,
+    /// The speaker or MIC bit of port $FE changing state.
+    pub beeper: bool,
+    /// Any access to the sound chip, read or write.
+    pub ay: bool,
+    /// The frame interrupt being accepted by the CPU.
+    pub interrupt: bool,
+}
+
+impl Breaks {
+    /// Whether anything at all is being watched.
+    pub fn any(&self) -> bool {
+        self.screen || self.beeper || self.ay || self.interrupt
+    }
+}
+
+/// Which of those happened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Event {
+    Screen(u16),
+    Beeper,
+    Ay,
+    Interrupt,
+}
+
+impl Event {
+    /// What to tell the user the machine stopped for.
+    pub fn describe(&self) -> String {
+        match self {
+            Event::Screen(addr) => format!("Wrote to the screen at ${addr:04X}"),
+            Event::Beeper => "Toggled the beeper".to_string(),
+            Event::Ay => "Used the sound chip".to_string(),
+            Event::Interrupt => "Took the frame interrupt".to_string(),
+        }
+    }
 }
 
 pub struct Spectrum {
@@ -1007,6 +1076,9 @@ impl Spectrum {
                 self.bus.irq_pending = false;
             } else if self.cpu.interrupt(&mut self.bus) {
                 self.bus.irq_pending = false;
+                if self.bus.breaks.interrupt {
+                    self.bus.break_hit.get_or_insert(Event::Interrupt);
+                }
                 // The handler is profiled like any other call.
                 if self.profiler.running {
                     let now = self.bus.total_t();
@@ -1060,6 +1132,9 @@ impl Spectrum {
                 after + frame_t - before
             };
 
+            if let Some(event) = self.bus.break_hit.take() {
+                return Stop::Watched(event);
+            }
             if self.bus.slow.enabled && self.bus.slow.hit {
                 return Stop::SlowDraw;
             }

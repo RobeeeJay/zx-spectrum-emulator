@@ -28,6 +28,20 @@ const COLUMN_GAP: f32 = 6.0;
 /// for the same reason the listing's columns are.
 const DUMP_W: f32 = 330.0;
 
+/// How many words of the stack are shown, and how wide that column is.
+const STACK_DEPTH: u16 = 12;
+const STACK_W: f32 = 130.0;
+
+/// The picture beside the registers: wide enough to make out what is being
+/// drawn, with a margin of case around it.
+const VIDEO_W: f32 = 176.0;
+const VIDEO_BORDER: f32 = 5.0;
+
+/// One register, and the address it would take the dump to.
+fn pair(name: &str, value: u16) -> (String, Option<u16>) {
+    (format!("{name:<3} {value:04X}"), Some(value))
+}
+
 /// How much of the window the listing takes; the registers, breakpoints and
 /// memory dump have the rest.
 const LISTING_SHARE: f32 = 0.62;
@@ -239,6 +253,28 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         ui.toggle_value(&mut app.dbg.follow_pc, "Follow PC");
     });
 
+    // Stopping on what a program does rather than on where it is: the things
+    // that are awkward to find by address. The ZX81's bus is a different one
+    // and none of these are wired to it, so they are not offered there — and
+    // a machine with no sound chip is not offered the sound chip.
+    if !app.on_zx81() {
+        let has_ay = app.spec.bus.model.has_ay();
+        ui.horizontal_wrapped(|ui| {
+            theme::group_label(ui, "Break");
+            let breaks = &mut app.spec.bus.breaks;
+            ui.toggle_value(&mut breaks.screen, "Screen")
+                .on_hover_text("Stop on a write anywhere in the display file");
+            ui.toggle_value(&mut breaks.beeper, "Beeper")
+                .on_hover_text("Stop when the speaker or MIC bit of port $FE changes");
+            if has_ay {
+                ui.toggle_value(&mut breaks.ay, "AY")
+                    .on_hover_text("Stop on any access to the sound chip");
+            }
+            ui.toggle_value(&mut breaks.interrupt, "Interrupt")
+                .on_hover_text("Stop when the CPU accepts the frame interrupt");
+        });
+    }
+
     if ui.input(|i| i.key_pressed(egui::Key::F7)) {
         app.step_into();
     }
@@ -251,36 +287,142 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn registers(app: &mut App, ui: &mut egui::Ui) {
-    theme::lcd().show(ui, |ui| registers_lcd(app, ui));
+    ui.horizontal_top(|ui| {
+        theme::lcd().show(ui, |ui| registers_lcd(app, ui));
+        stack(app, ui);
+        video(app, ui);
+    });
+}
+
+/// What is on the stack, from the stack pointer up.
+///
+/// Return addresses and saved registers are the fastest way to work out where
+/// a routine came from, so clicking one takes the dump to it — the same as
+/// clicking a register.
+fn stack(app: &mut App, ui: &mut egui::Ui) {
+    let sp = app.cpu().sp;
+    let entries: Vec<(u16, u16)> = (0..STACK_DEPTH)
+        .map(|i| {
+            let at = sp.wrapping_add(i * 2);
+            let word = u16::from_le_bytes([app.peek(at), app.peek(at.wrapping_add(1))]);
+            (at, word)
+        })
+        .collect();
+
+    theme::lcd().show(ui, |ui| {
+        ui.vertical(|ui| {
+            ui.set_min_width(STACK_W);
+            ui.label(RichText::new("Stack").small().color(theme::DIM));
+            let mut go_to = None;
+            for (i, (at, word)) in entries.iter().enumerate() {
+                // The top of the stack is what SP points at; the rest is what
+                // is under it, counted in words as a Z80 programmer would.
+                let text = format!("+{:<2} {at:04X}  {word:04X}", i * 2);
+                let cell = ui.add(
+                    egui::Label::new(RichText::new(text).monospace().color(theme::LCD_FG))
+                        .wrap_mode(egui::TextWrapMode::Extend)
+                        .sense(egui::Sense::click()),
+                );
+                if cell.clicked() {
+                    go_to = Some(*word);
+                }
+                cell.on_hover_text(format!("Show ${word:04X} in the memory dump"));
+            }
+            if let Some(addr) = go_to {
+                show_in_dump(app, addr);
+            }
+        });
+    });
+}
+
+/// A small picture of what the machine is putting out, so it is clear what the
+/// code being stepped through is drawing without going back to the main
+/// window. The border around it is the machine's own, in its current colour.
+fn video(app: &mut App, ui: &mut egui::Ui) {
+    let Some(texture) = app.screen_texture() else {
+        return;
+    };
+    let size = texture.size_vec2();
+    if size.x <= 0.0 {
+        return;
+    }
+    let scale = VIDEO_W / size.x;
+    egui::Frame::new()
+        .fill(theme::CASE_DARK)
+        .inner_margin(egui::Margin::same(VIDEO_BORDER as i8))
+        .show(ui, |ui| {
+            ui.add(egui::Image::new(&texture).fit_to_exact_size(size * scale));
+        });
+}
+
+/// Point the memory dump at an address, and say so in its own box.
+fn show_in_dump(app: &mut App, addr: u16) {
+    app.dbg.mem_addr = addr;
+    app.dbg.mem_text = format!("{addr:04X}");
 }
 
 fn registers_lcd(app: &mut App, ui: &mut egui::Ui) {
     let c = app.cpu();
-    let mono =
-        |ui: &mut egui::Ui, s: String| ui.label(RichText::new(s).monospace().color(theme::LCD_FG));
+    // Read out first: every sixteen-bit register is a pointer as far as the
+    // debugger is concerned, and clicking one takes the dump there. The
+    // eight-bit ones and the interrupt mode are not addresses, so they are
+    // shown but not offered.
+    let grid: [[(String, Option<u16>); 4]; 4] = [
+        [
+            pair("AF", c.af()),
+            pair("AF'", (c.a_ as u16) << 8 | c.f_ as u16),
+            pair("IX", c.ix),
+            pair("PC", c.pc),
+        ],
+        [
+            pair("BC", c.bc()),
+            pair("BC'", (c.b_ as u16) << 8 | c.c_ as u16),
+            pair("IY", c.iy),
+            pair("SP", c.sp),
+        ],
+        [
+            pair("DE", c.de()),
+            pair("DE'", (c.d_ as u16) << 8 | c.e_ as u16),
+            (format!("{:<3} {:02X}", "I", c.i), None),
+            pair("WZ", c.wz),
+        ],
+        [
+            pair("HL", c.hl()),
+            pair("HL'", (c.h_ as u16) << 8 | c.l_ as u16),
+            (format!("{:<3} {:02X}", "R", c.r_full()), None),
+            (format!("{:<3} {}", "IM", c.im), None),
+        ],
+    ];
 
+    let mut go_to = None;
     egui::Grid::new("regs").num_columns(4).show(ui, |ui| {
-        mono(ui, format!("AF  {:04X}", c.af()));
-        mono(ui, format!("AF' {:04X}", (c.a_ as u16) << 8 | c.f_ as u16));
-        mono(ui, format!("IX  {:04X}", c.ix));
-        mono(ui, format!("PC  {:04X}", c.pc));
-        ui.end_row();
-        mono(ui, format!("BC  {:04X}", c.bc()));
-        mono(ui, format!("BC' {:04X}", (c.b_ as u16) << 8 | c.c_ as u16));
-        mono(ui, format!("IY  {:04X}", c.iy));
-        mono(ui, format!("SP  {:04X}", c.sp));
-        ui.end_row();
-        mono(ui, format!("DE  {:04X}", c.de()));
-        mono(ui, format!("DE' {:04X}", (c.d_ as u16) << 8 | c.e_ as u16));
-        mono(ui, format!("I   {:02X}", c.i));
-        mono(ui, format!("WZ  {:04X}", c.wz));
-        ui.end_row();
-        mono(ui, format!("HL  {:04X}", c.hl()));
-        mono(ui, format!("HL' {:04X}", (c.h_ as u16) << 8 | c.l_ as u16));
-        mono(ui, format!("R   {:02X}", c.r_full()));
-        mono(ui, format!("IM  {}", c.im));
-        ui.end_row();
+        for row in &grid {
+            for (text, addr) in row {
+                let rich = RichText::new(text).monospace().color(theme::LCD_FG);
+                match addr {
+                    Some(addr) => {
+                        let cell = ui.add(
+                            egui::Label::new(rich)
+                                .wrap_mode(egui::TextWrapMode::Extend)
+                                .sense(egui::Sense::click()),
+                        );
+                        if cell.clicked() {
+                            go_to = Some(*addr);
+                        }
+                        cell.on_hover_text(format!("Show ${addr:04X} in the memory dump"));
+                    }
+                    None => {
+                        ui.label(rich);
+                    }
+                }
+            }
+            ui.end_row();
+        }
     });
+    if let Some(addr) = go_to {
+        show_in_dump(app, addr);
+    }
+    let c = app.cpu();
 
     ui.horizontal(|ui| {
         ui.label("Flags:");
