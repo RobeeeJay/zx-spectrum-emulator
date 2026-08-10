@@ -25,8 +25,9 @@ the actual values.
 **`cargo fmt` and `cargo clippy --all-targets` stay clean.** CI gates on
 `-D warnings`.
 
-**There is no network.** No crate can be added that is not already in the lock
-file. That is why `src/svg.rs` exists rather than a dependency, and why the
+**No crate can be added that is not already in the lock file.** (The network
+itself does work — that is how the ROM symbol files were fetched — but the
+build must stay offline-reproducible.) That is why `src/svg.rs` exists rather than a dependency, and why the
 logo is drawn in code rather than decoded from a file.
 
 **Prose:** plain, no salesmanship, British spelling. Say what happened,
@@ -97,7 +98,13 @@ socket at once, so it proves nothing on its own: the beeper is told apart by
 hammering the port while writing almost nothing to memory. Watching costs a
 branch on every access, so it only runs while AutoDoc is on.
 
-**Anything else known goes in a file, not in the source.** `<name>.symbols.txt`
+**Anything else known goes in a file, not in the source.** `tools/rom-symbols.py`
+turns a disassembly from
+<https://github.com/ZXSpectrumVault/rom-disassemblies> into `symbols-48.txt`
+or `symbols-zx81.txt` in the preferences directory — 1117 and 675 named
+routines. They are somebody else's work, so they are generated rather than
+committed. The 128K disassemblies use a different convention and the converter
+gets nothing from them. `<name>.symbols.txt`
 beside the notes takes `ADDR name ; comment` lines and `bytes …` signatures. A
 full ROM disassembly cannot be shipped here and a signature that cannot be
 checked should not be invented, so the mechanism is in the emulator and the

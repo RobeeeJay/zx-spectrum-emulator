@@ -1119,18 +1119,15 @@ fn refresh_autodoc(app: &mut App) {
     // Anything else known goes in a file beside the notes: symbols from a ROM
     // disassembly, signatures for loaders and compressors. Nobody can ship
     // those here, and anybody who has them can drop them in.
-    let symbols = match app.notes.file() {
-        Some(notes) => {
-            let beside = notes.with_extension("symbols.txt");
-            if let Ok(text) = std::fs::read_to_string(&beside) {
-                known.add_from_text(&text);
-                crate::autodoc::Symbols::from_text(&text)
-            } else {
-                crate::autodoc::Symbols::default()
-            }
+    let mut text = String::new();
+    for file in app.symbol_files() {
+        if let Ok(supplied) = std::fs::read_to_string(&file) {
+            text.push_str(&supplied);
+            text.push('\n');
         }
-        None => crate::autodoc::Symbols::default(),
-    };
+    }
+    known.add_from_text(&text);
+    let symbols = crate::autodoc::Symbols::from_text(&text);
     let peek = |a: u16| app.peek(a);
     let mut doc = crate::autodoc::analyse_with(&peek, &entries, &known);
 

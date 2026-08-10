@@ -424,3 +424,69 @@ fn a_signature_from_a_file_matches_anywhere() {
         "a signature with no address of its own is not a copy of anything"
     );
 }
+
+/// Where the emulator looks for names supplied by hand: beside the file being
+/// disassembled, under that file's own name, and in the preferences directory
+/// for a set that describes the machine rather than any one game.
+#[test]
+fn symbol_files_are_named_after_what_they_describe() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{App, Roms};
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.rom_path = Some("roms/48.rom".into());
+    let files = app.symbol_files();
+
+    assert!(
+        files.iter().any(|f| f.ends_with("48.symbols.txt")),
+        "the ROM's own symbols should sit beside it as 48.symbols.txt: {files:?}"
+    );
+    assert!(
+        files
+            .iter()
+            .any(|f| f.ends_with("symbols.txt") && !f.to_string_lossy().contains("48")),
+        "and there should be a shared one for the machine: {files:?}"
+    );
+
+    app.tape_path = Some("tapes/manic.tap".into());
+    assert!(
+        app.symbol_files()
+            .iter()
+            .any(|f| f.ends_with("manic.symbols.txt")),
+        "a tape's symbols go beside the tape"
+    );
+}
+
+/// A symbol file generated from a ROM disassembly names the ROM's routines.
+///
+/// Skipped when there is none installed: the disassemblies are somebody else's
+/// work and are not part of this repository — `tools/rom-symbols.py` turns one
+/// into a file the emulator reads.
+#[test]
+fn a_generated_rom_symbol_file_names_the_rom() {
+    let Some(dir) = zx_rustrum::prefs::config_dir() else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("symbols-48.txt")) else {
+        return;
+    };
+    let symbols = zx_rustrum::autodoc::Symbols::from_text(&text);
+
+    assert!(
+        symbols.len() > 500,
+        "only {} names came out of it",
+        symbols.len()
+    );
+    // Three the emulator's own table also knows, so the file can be checked
+    // against something rather than trusted.
+    for (addr, expected) in [
+        (0x0D6Bu16, "cls"),
+        (0x028E, "key_scan"),
+        (0x0556, "ld_bytes"),
+    ] {
+        let (name, _) = symbols
+            .get(addr)
+            .unwrap_or_else(|| panic!("nothing named at ${addr:04X}"));
+        assert_eq!(name, expected, "${addr:04X}");
+    }
+}

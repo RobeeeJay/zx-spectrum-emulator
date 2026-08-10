@@ -836,6 +836,49 @@ impl App {
         }
     }
 
+    /// The file the notes and symbols belong to: the recording if one is
+    /// playing, otherwise the tape, otherwise the ROM.
+    pub fn notes_source(&self) -> Option<std::path::PathBuf> {
+        self.rzx
+            .as_ref()
+            .map(|rzx| rzx.path.clone())
+            .or_else(|| self.tape_path.clone())
+            .or_else(|| self.rom_path.clone())
+    }
+
+    /// Where names supplied by hand are read from: one file beside whatever is
+    /// being disassembled, and one shared file in the preferences directory.
+    ///
+    /// The shared one is where a ROM disassembly goes. It describes the
+    /// machine rather than any one game, so tying it to a tape would mean
+    /// copying it beside every tape.
+    pub fn symbol_files(&self) -> Vec<std::path::PathBuf> {
+        let mut files = Vec::new();
+        if let Some(dir) = crate::prefs::config_dir() {
+            // Per machine as well as shared: the ZX81 and the Spectrum have
+            // entirely different routines at the same addresses, so one file
+            // for both would name each after the other.
+            let machine = if self.on_zx81() {
+                "zx81"
+            } else {
+                match self.spec.bus.model {
+                    Model::Spectrum48 => "48",
+                    Model::Spectrum128 => "128",
+                    Model::Plus2A => "plus2a",
+                    Model::Plus3 => "plus3",
+                }
+            };
+            files.push(dir.join("symbols.txt"));
+            files.push(dir.join(format!("symbols-{machine}.txt")));
+        }
+        if let Some(source) = self.notes_source() {
+            // Named after the file itself: `manic.tap` has `manic.symbols.txt`
+            // beside it, not `manic.zxrs.symbols.txt`.
+            files.push(source.with_extension("symbols.txt"));
+        }
+        files
+    }
+
     /// Point the notes at whatever is being disassembled: the tape in the
     /// deck if there is one, otherwise the ROM the machine booted from.
     /// Anything unsaved is written out first, so switching tapes does not
@@ -846,12 +889,7 @@ impl App {
         }
         // A recording is what is being read when one is playing, so its notes
         // go beside it rather than beside the tape or the ROM.
-        let source = self
-            .rzx
-            .as_ref()
-            .map(|rzx| rzx.path.clone())
-            .or_else(|| self.tape_path.clone())
-            .or_else(|| self.rom_path.clone());
+        let source = self.notes_source();
         self.notes = match source {
             Some(path) => crate::notes::Notes::for_file(&path),
             None => crate::notes::Notes::unattached(),
