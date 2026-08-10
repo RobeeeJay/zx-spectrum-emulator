@@ -346,3 +346,74 @@ fn the_flags_are_below_the_registers() {
         flags.min.x
     );
 }
+
+/// AutoDoc is off until it is switched on, and switching it on names the
+/// routines being called.
+#[test]
+fn the_autodoc_toggle_names_routines() {
+    let mut app = app();
+    // A screen clear at $8000, called from $9000, where the listing is put.
+    for (offset, byte) in [
+        (0u16, 0x21u8),
+        (1, 0x00),
+        (2, 0x40),
+        (3, 0x11),
+        (4, 0x01),
+        (5, 0x40),
+        (6, 0x01),
+        (7, 0x00),
+        (8, 0x18),
+        (9, 0x36),
+        (10, 0x00),
+        (11, 0xED),
+        (12, 0xB0),
+        (13, 0xC9),
+    ] {
+        app.spec.bus.poke(0x8000 + offset, byte);
+    }
+    for (offset, byte) in [(0u16, 0xCDu8), (1, 0x00), (2, 0x80), (3, 0xC9)] {
+        app.spec.bus.poke(0x9000 + offset, byte);
+    }
+    app.dbg.follow_pc = false;
+    app.dbg.view_addr = 0x9000;
+
+    let mut h = harness(app);
+    assert!(
+        h.state().dbg.doc.is_empty(),
+        "nothing should be guessed at until it is asked for"
+    );
+
+    h.get_by_label("AutoDoc").click();
+    h.run_steps(3);
+
+    let doc = &h.state().dbg.doc;
+    assert_eq!(
+        doc.label(0x8000),
+        "clear_screen_8000",
+        "the routine called from the listing was not named: {doc:?}"
+    );
+}
+
+/// A guess is a guess: it is shown where the user has typed nothing, and never
+/// goes anywhere near their notes file.
+#[test]
+fn a_guess_is_never_written_to_the_users_notes() {
+    let mut app = app();
+    app.dbg.autodoc = true;
+    app.spec.bus.poke(0x9000, 0xC9);
+    app.dbg.follow_pc = false;
+    app.dbg.view_addr = 0x9000;
+
+    let mut h = harness(app);
+    h.run_steps(3);
+
+    assert!(!h.state().dbg.doc.is_empty(), "nothing was guessed at all");
+    assert!(
+        h.state().notes.is_empty(),
+        "the user's notes should still be empty"
+    );
+    assert!(
+        !h.state().notes.is_dirty(),
+        "and there should be nothing waiting to be written to their file"
+    );
+}

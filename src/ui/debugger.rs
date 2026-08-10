@@ -61,6 +61,11 @@ pub struct DebuggerState {
     /// Set when the machine stops at a breakpoint. The window asks to be
     /// raised on the next frame it draws, and clears it.
     pub raise: bool,
+    /// Whether to guess at what the code is doing, and the last guess made.
+    pub autodoc: bool,
+    pub doc: crate::autodoc::Doc,
+    /// What the guess was made from, so it is not made again every frame.
+    doc_from: Option<(u16, u16)>,
     pub view_addr: u16,
     pub lines: usize,
     pub goto_text: String,
@@ -74,6 +79,9 @@ impl Default for DebuggerState {
         DebuggerState {
             follow_pc: true,
             raise: false,
+            autodoc: false,
+            doc: crate::autodoc::Doc::default(),
+            doc_from: None,
             view_addr: 0,
             lines: 24,
             goto_text: String::new(),
@@ -255,6 +263,18 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.separator();
         ui.toggle_value(&mut app.dbg.follow_pc, "Follow PC");
+        let was = app.dbg.autodoc;
+        ui.toggle_value(&mut app.dbg.autodoc, "AutoDoc")
+            .on_hover_text(
+                "Guess at what the routines being called are for, and note it \
+             against them. Guesses are shown in place of an empty label or \
+             comment and are never written to your notes file.",
+            );
+        if app.dbg.autodoc != was {
+            // Turned on or off: the guess is stale either way.
+            app.dbg.doc = crate::autodoc::Doc::default();
+            app.dbg.doc_from = None;
+        }
     });
 
     // Stopping on what a program does rather than on where it is: the things
@@ -599,6 +619,7 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     if app.dbg.follow_pc {
         app.dbg.view_addr = pc;
     }
+    refresh_autodoc(app);
 
     ui.horizontal(|ui| {
         ui.label("Go to:");
@@ -697,13 +718,21 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                         GUTTER_W,
                     );
 
-                    // The user's own name for this address, if it has one.
+                    // The user's own name for this address, if it has one,
+                    // and otherwise whatever AutoDoc made of it — as hint
+                    // text, so it reads as the guess it is and vanishes the
+                    // moment anything is typed over it.
                     let mut label = app.notes.label(addr).to_string();
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut label)
                             .id_salt(("note-label", addr))
                             .desired_width(LABEL_W)
                             .font(egui::TextStyle::Monospace)
+                            .hint_text(
+                                RichText::new(app.dbg.doc.label(addr))
+                                    .monospace()
+                                    .color(theme::DIM),
+                            )
                             .frame(egui::Frame::NONE),
                     );
                     if resp.changed() {
@@ -727,6 +756,11 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                             .id_salt(("note-comment", addr))
                             .desired_width(COMMENT_W)
                             .font(egui::TextStyle::Monospace)
+                            .hint_text(
+                                RichText::new(app.dbg.doc.comment(addr))
+                                    .monospace()
+                                    .color(theme::DIM),
+                            )
                             .frame(egui::Frame::NONE),
                     );
                     if resp.changed() {
@@ -752,6 +786,30 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
+}
+
+/// Make the guess again, if what it was made from has changed.
+///
+/// Reading a few hundred instructions is cheap, but not cheap enough to do
+/// sixty times a second for no reason: it is redone when the listing moves or
+/// the machine stops somewhere new.
+fn refresh_autodoc(app: &mut App) {
+    if !app.dbg.autodoc {
+        if !app.dbg.doc.is_empty() {
+            app.dbg.doc = crate::autodoc::Doc::default();
+        }
+        return;
+    }
+    let from = (app.dbg.view_addr, app.cpu().pc);
+    if app.dbg.doc_from == Some(from) {
+        return;
+    }
+    app.dbg.doc_from = Some(from);
+    // Both the code on screen and the code being run are worth following: the
+    // listing may be somewhere the machine has not reached yet.
+    let entries = [from.0, from.1];
+    let peek = |a: u16| app.peek(a);
+    app.dbg.doc = crate::autodoc::analyse(&peek, &entries);
 }
 
 /// A column heading: the same width as the column under it, and left

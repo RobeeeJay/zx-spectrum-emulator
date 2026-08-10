@@ -68,6 +68,14 @@ own format work through the same path. Each machine has its own deck, because a
 tape is timed in the T-states of the machine playing it and the two clocks
 differ.
 
+**AutoDoc guesses, and says so.** `src/autodoc.rs` reads the code from where
+the machine is, names every routine that gets called, and applies ordered rules
+to what each one touches — ports, screen ranges, ROM calls, block moves. The
+guesses appear as hint text where the user has typed nothing, are never written
+to their notes file, and hedge in the wording when the evidence is thin
+("possibly a protection check"). A rule that always has an answer would be
+worse than none, so code with no tell is left unnamed.
+
 **Listings are annotated in a file beside the tape.** Labels and comments
 typed into the disassembly go to `<name>.zxrs.txt` next to the tape, or next to
 the ROM when the deck is empty — plain text, one line per address, so it can be
