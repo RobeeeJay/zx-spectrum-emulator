@@ -256,7 +256,7 @@ impl Prefs {
         match kind {
             FileKind::Rom => self.rom_dir = Some(dir),
             FileKind::Tape => self.tape_dir = Some(dir),
-            FileKind::Snapshot => self.snapshot_dir = Some(dir),
+            FileKind::Snapshot | FileKind::Recording => self.snapshot_dir = Some(dir),
         }
         self.save();
     }
@@ -275,7 +275,7 @@ impl Prefs {
         match kind {
             FileKind::Rom => self.rom_dir.as_ref(),
             FileKind::Tape => self.tape_dir.as_ref(),
-            FileKind::Snapshot => self.snapshot_dir.as_ref(),
+            FileKind::Snapshot | FileKind::Recording => self.snapshot_dir.as_ref(),
         }
     }
 }
@@ -285,6 +285,9 @@ pub enum FileKind {
     Rom,
     Tape,
     Snapshot,
+    /// An RZX recording, which is kept with the snapshots: they are opened
+    /// from much the same place.
+    Recording,
 }
 
 impl FileKind {

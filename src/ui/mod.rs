@@ -178,6 +178,14 @@ pub fn zoom_dropdown(scale: &mut f32, ui: &mut egui::Ui) {
 /// written in.
 pub const APP_NAME: &str = "ZX-Rustrum";
 
+/// The most frames of a recording to play in one go, so a long pause or a
+/// slow host frame does not run half the tape past in one step.
+const MAX_RECORDED_FRAMES: f32 = 24.0;
+
+/// How many places a recording is remembered as having reached. Enough to
+/// document a program, not enough to grow without limit over a long recording.
+const VISITED_CAP: usize = 4096;
+
 pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("1%", 0.01),
     ("5%", 0.05),
@@ -203,6 +211,37 @@ enum Machine {
     Zx81(zx81::Ram),
 }
 
+/// A recording being played back, and where it has got to.
+pub struct RzxPlayback {
+    pub recording: crate::rzx::Recording,
+    pub path: std::path::PathBuf,
+    /// Which frame is next.
+    pub frame: usize,
+    /// What is left of the current frame, when a breakpoint stopped it
+    /// part-way through.
+    pub remaining: u32,
+    /// Fractional frames carried over, so playback runs at the speed the
+    /// emulator is set to rather than at whatever the host frame rate is.
+    pub owed: f32,
+    /// Addresses the recording has actually reached: what AutoDoc reads on
+    /// top of what it can work out from the code alone.
+    pub visited: std::collections::BTreeSet<u16>,
+}
+
+impl RzxPlayback {
+    /// How far through, for the status line.
+    pub fn progress(&self) -> f32 {
+        if self.recording.is_empty() {
+            return 0.0;
+        }
+        self.frame as f32 / self.recording.len() as f32
+    }
+
+    pub fn finished(&self) -> bool {
+        self.frame >= self.recording.len()
+    }
+}
+
 pub struct App {
     pub spec: Spectrum,
     /// Labels and comments for the listing, and the file they are kept in.
@@ -214,6 +253,8 @@ pub struct App {
     pub rom_path: Option<std::path::PathBuf>,
     /// When the notes last changed, so they are written a moment later.
     notes_changed_at: Option<std::time::Instant>,
+    /// The recording being played back, if there is one.
+    pub rzx: Option<RzxPlayback>,
     pub running: bool,
     pub speed: f32,
     pub status: String,
@@ -294,6 +335,7 @@ impl App {
             tape_path: None,
             rom_path: None,
             notes_changed_at: None,
+            rzx: None,
             running: true,
             speed: 1.0,
             status,
@@ -545,6 +587,7 @@ impl App {
             Some(FileKind::Rom) => dialog.add_filter("ROM image", &["rom", "bin"]),
             Some(FileKind::Tape) => dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81"]),
             Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80"]),
+            Some(FileKind::Recording) => dialog.add_filter("RZX recording", &["rzx"]),
             None => dialog
                 .add_filter(
                     "Tape, snapshot or ROM",
@@ -630,6 +673,144 @@ impl App {
         }
     }
 
+    /// Load a recording and start it playing.
+    ///
+    /// The snapshot inside it says which machine it was made on, so that one
+    /// is brought up first; everything after that is the recording's doing.
+    fn load_recording(&mut self, path: &std::path::Path) {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return self.set_status(format!("Could not read {}: {e}", path.display()), true)
+            }
+        };
+        let recording = match crate::rzx::parse(&bytes) {
+            Ok(recording) => recording,
+            Err(e) => return self.set_status(format!("{}: {e}", path.display()), true),
+        };
+        let Some(snapshot) = recording.snapshot.clone() else {
+            return self.set_status(
+                "The recording carries no snapshot to start from".into(),
+                true,
+            );
+        };
+
+        match snapshot::probe_model_bytes(&snapshot.extension, &snapshot.data) {
+            Ok(model) => self.switch_model(model),
+            Err(e) => return self.set_status(format!("{}: {e}", path.display()), true),
+        }
+        let loaded = match snapshot.extension.as_str() {
+            "sna" => snapshot::load_sna(&mut self.spec, &snapshot.data),
+            "z80" => snapshot::load_z80(&mut self.spec, &snapshot.data),
+            other => Err(format!(
+                "unsupported snapshot type in the recording: .{other}"
+            )),
+        };
+        if let Err(e) = loaded {
+            return self.set_status(format!("{}: {e}", path.display()), true);
+        }
+
+        let frames = recording.len();
+        let by = if recording.creator.is_empty() {
+            String::new()
+        } else {
+            format!(" by {}", recording.creator)
+        };
+        self.rzx = Some(RzxPlayback {
+            recording,
+            path: path.to_path_buf(),
+            frame: 0,
+            remaining: 0,
+            owed: 0.0,
+            visited: Default::default(),
+        });
+        self.spec.bus.playback = Some(crate::machine::Playback::default());
+        self.running = true;
+        // The notes belong beside the recording now: it is what is being read.
+        self.reload_notes();
+        self.set_status(
+            format!(
+                "Playing {}{by}: {frames} frames. The keyboard is the recording's, not yours.",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            false,
+        );
+    }
+
+    /// Stop playing, and give the machine back to the user.
+    pub fn stop_recording(&mut self) {
+        self.rzx = None;
+        self.spec.bus.playback = None;
+        self.reload_notes();
+    }
+
+    /// Play the recording forward by however much time has passed.
+    fn advance_recording(&mut self, dt: f32, boost: f32) {
+        let Some(rzx) = &self.rzx else { return };
+        if rzx.finished() {
+            let done = rzx.recording.len();
+            self.stop_recording();
+            self.running = false;
+            self.set_status(format!("The recording ended after {done} frames"), false);
+            return;
+        }
+
+        // A recording is a frame at a time, so the speed control counts frames
+        // rather than T-states.
+        let rate = crate::machine::CPU_HZ as f32 / self.spec.bus.model.frame_t() as f32;
+        let owed = rzx.owed + dt * rate * self.speed * boost;
+        let mut due = owed.min(MAX_RECORDED_FRAMES) as u32;
+        if let Some(rzx) = &mut self.rzx {
+            rzx.owed = owed - due as f32;
+        }
+
+        while due > 0 {
+            let Some(rzx) = &mut self.rzx else { return };
+            if rzx.finished() {
+                return;
+            }
+            // A frame that was interrupted part-way through is picked up where
+            // it stopped, with the input it had already been handed.
+            if rzx.remaining == 0 {
+                let frame = &rzx.recording.frames[rzx.frame];
+                rzx.remaining = frame.fetches as u32;
+                let inputs = frame.inputs.clone();
+                if let Some(playback) = &mut self.spec.bus.playback {
+                    playback.inputs = inputs;
+                    playback.cursor = 0;
+                }
+            }
+            let remaining = self.rzx.as_ref().map_or(0, |rzx| rzx.remaining);
+            let (stop, ran) = self.spec.run_fetches(remaining);
+            let pc = self.spec.cpu.pc;
+
+            let mut ended = false;
+            if let Some(rzx) = &mut self.rzx {
+                rzx.remaining -= ran;
+                if rzx.remaining == 0 {
+                    rzx.frame += 1;
+                    // Where the recording actually got to: AutoDoc reads this
+                    // on top of what it can work out from the code alone.
+                    if rzx.visited.len() < VISITED_CAP {
+                        rzx.visited.insert(pc);
+                    }
+                    ended = true;
+                }
+            }
+            if ended {
+                // The frame boundary is the recording's, so the interrupt is
+                // raised here rather than by the T-state count.
+                self.spec.bus.irq_pending = true;
+                due -= 1;
+            }
+            self.last_stop = Some(stop);
+            if !matches!(stop, Stop::Budget) {
+                self.handle_stop(stop);
+                return;
+            }
+        }
+    }
+
     /// Point the notes at whatever is being disassembled: the tape in the
     /// deck if there is one, otherwise the ROM the machine booted from.
     /// Anything unsaved is written out first, so switching tapes does not
@@ -638,7 +819,14 @@ impl App {
         if let Err(e) = self.notes.save_if_dirty() {
             self.set_status(format!("Could not save notes: {e}"), true);
         }
-        let source = self.tape_path.clone().or_else(|| self.rom_path.clone());
+        // A recording is what is being read when one is playing, so its notes
+        // go beside it rather than beside the tape or the ROM.
+        let source = self
+            .rzx
+            .as_ref()
+            .map(|rzx| rzx.path.clone())
+            .or_else(|| self.tape_path.clone())
+            .or_else(|| self.rom_path.clone());
         self.notes = match source {
             Some(path) => crate::notes::Notes::for_file(&path),
             None => crate::notes::Notes::unattached(),
@@ -662,6 +850,7 @@ impl App {
                     self.insert_tape(path);
                 }
             }
+            "rzx" => self.load_recording(path),
             "sna" | "z80" => match snapshot::probe_model(path) {
                 Ok(model) => {
                     self.switch_model(model);
@@ -1125,6 +1314,16 @@ impl App {
         self.spec.bus.slow.begin_slice();
 
         let dt = dt.clamp(0.0, 0.1);
+        // A recording is measured in frames of instructions rather than in
+        // T-states, so it does its own running.
+        if self.rzx.is_some() {
+            let boost = if self.tape_boost() { 4.0 } else { 1.0 };
+            self.spec.bus.audio.speed_ok = (0.85..=1.2).contains(&(self.speed * boost));
+            self.advance_recording(dt, boost);
+            self.spec.bus.audio_sync();
+            self.spec.bus.audio.flush();
+            return;
+        }
         // Loading a real tape takes minutes; run faster while it moves.
         let boost = if self.tape_boost() && self.tape_is_playing() {
             8.0
@@ -1152,6 +1351,13 @@ impl App {
         let budget = budget.min(self.spec.bus.frame_t() * 24);
         let stop = self.spec.run(budget);
         self.last_stop = Some(stop);
+        self.handle_stop(stop);
+        self.spec.bus.audio_sync();
+        self.spec.bus.audio.flush();
+    }
+
+    /// What to do about the machine having stopped.
+    fn handle_stop(&mut self, stop: Stop) {
         match stop {
             Stop::Breakpoint(pc) => {
                 self.running = false;
@@ -1178,8 +1384,6 @@ impl App {
             }
             _ => {}
         }
-        self.spec.bus.audio_sync();
-        self.spec.bus.audio.flush();
     }
 
     /// The picture as it stands, for anything that wants to show it: the
@@ -1251,6 +1455,12 @@ impl App {
                 }
                 if ui.button("Load tape…").clicked() {
                     if let Some(path) = self.pick_file(Some(FileKind::Tape)) {
+                        self.load_path(&path);
+                    }
+                    ui.close();
+                }
+                if ui.button("Load recording…").clicked() {
+                    if let Some(path) = self.pick_file(Some(FileKind::Recording)) {
                         self.load_path(&path);
                     }
                     ui.close();
@@ -1365,6 +1575,36 @@ impl App {
                 ui.toggle_value(&mut self.spec.bus.slow.watch_back_buffer, "back buffer");
             });
             ui.separator();
+            if let Some(rzx) = &self.rzx {
+                let (frame, total) = (rzx.frame, rzx.recording.len());
+                let short = self.spec.bus.playback.as_ref().map_or(0, |p| p.short);
+                theme::group_label(ui, "Recording");
+                ui.label(
+                    egui::RichText::new(format!("{frame}/{total}"))
+                        .monospace()
+                        .color(theme::LCD_FG),
+                );
+                // A recording that asks for more input than was recorded has
+                // come adrift from the machine: what is on screen after that
+                // is the emulator's guess, not what was played, and saying so
+                // is better than letting it look authentic.
+                if short > 0 {
+                    ui.label(
+                        egui::RichText::new(format!("out of step ({short})"))
+                            .color(theme::RED),
+                    )
+                    .on_hover_text(
+                        "The program has read more from the ports than the \
+                         recording holds, so it is no longer following the \
+                         path it was recorded taking.",
+                    );
+                }
+                if ui.button("Stop").clicked() {
+                    self.stop_recording();
+                    self.set_status("Stopped the recording".into(), false);
+                }
+                ui.separator();
+            }
             if self.tape_ref().is_some() {
                 let playing = self.tape_is_playing();
                 if ui
@@ -1729,6 +1969,12 @@ impl App {
     /// Map host keys onto the 8x5 Spectrum keyboard matrix.
     fn read_keyboard(&mut self, ctx: &egui::Context) {
         use egui::Key;
+        // A recording supplies every byte the machine reads from a port,
+        // including the keyboard: typing at it would do nothing, and letting
+        // the host keys through would only be confusing.
+        if self.rzx.is_some() {
+            return;
+        }
         let mut matrix = [0xffu8; 8];
         let mut press = |row: usize, bit: u8| matrix[row] &= !(1 << bit);
 

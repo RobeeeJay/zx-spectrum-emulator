@@ -12,6 +12,7 @@ pub mod notes;
 pub mod prefs;
 pub mod profiler;
 pub mod resources;
+pub mod rzx;
 pub mod screen;
 pub mod snapshot;
 pub mod svg;

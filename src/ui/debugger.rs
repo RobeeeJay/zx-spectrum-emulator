@@ -860,7 +860,14 @@ fn refresh_autodoc(app: &mut App) {
     app.dbg.doc_from = Some(from);
     // Both the code on screen and the code being run are worth following: the
     // listing may be somewhere the machine has not reached yet.
-    let entries = [from.0, from.1];
+    //
+    // A recording adds the best evidence there is. Static reading has to guess
+    // which bytes are code; a recording says where the program actually went,
+    // past the loader and the protection and into the game itself.
+    let mut entries = vec![from.0, from.1];
+    if let Some(rzx) = &app.rzx {
+        entries.extend(rzx.visited.iter().copied());
+    }
     let peek = |a: u16| app.peek(a);
     let doc = crate::autodoc::analyse(&peek, &entries);
 

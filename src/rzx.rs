@@ -1,0 +1,193 @@
+//! RZX recordings: a snapshot, then every byte the machine read from a port,
+//! frame by frame, for as long as somebody played.
+//!
+//! Playing one back is not emulating input — it is replacing it. The machine
+//! runs the number of instructions the recording says, and every IN gives back
+//! the byte that was read at that point when the recording was made, so the
+//! program takes exactly the path it took then. That is why a recording is
+//! worth having for reading a program: it is a run of the real thing, with the
+//! keyboard and the loading and the copy protection already dealt with.
+//!
+//! The format is a header, then blocks: `$10` says who made it, `$30` carries
+//! the snapshot to start from, `$80` carries the frames. Both of the last two
+//! are usually deflated.
+
+use std::io::Read;
+
+/// One frame of the recording.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    /// How many instructions to run before the next frame starts.
+    pub fetches: u16,
+    /// What each IN in that stretch should give back, in order.
+    pub inputs: Vec<u8>,
+}
+
+/// The machine to start from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    /// "Z80" or "SNA", as the file says.
+    pub extension: String,
+    pub data: Vec<u8>,
+}
+
+/// A whole recording.
+#[derive(Clone, Debug)]
+pub struct Recording {
+    pub creator: String,
+    pub snapshot: Option<Snapshot>,
+    pub frames: Vec<Frame>,
+    /// The T-state the first frame starts at.
+    pub start_t: u32,
+}
+
+impl Recording {
+    /// How long the recording runs, in frames.
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+}
+
+/// Read a recording from the bytes of a file.
+pub fn parse(data: &[u8]) -> Result<Recording, String> {
+    if data.len() < 10 || &data[0..4] != b"RZX!" {
+        return Err("not an RZX recording".into());
+    }
+    let mut recording = Recording {
+        creator: String::new(),
+        snapshot: None,
+        frames: Vec::new(),
+        start_t: 0,
+    };
+
+    let mut off = 10;
+    while off + 5 <= data.len() {
+        let id = data[off];
+        let len = u32(data, off + 1) as usize;
+        if len < 5 || off + len > data.len() {
+            // A block that runs off the end is where the file stops being
+            // readable; what has been read so far is still worth having.
+            break;
+        }
+        let body = &data[off + 5..off + len];
+        match id {
+            0x10 => recording.creator = creator_name(body),
+            0x30 => recording.snapshot = Some(snapshot(body)?),
+            0x80 => {
+                let (frames, start_t) = frames(body)?;
+                recording.start_t = start_t;
+                recording.frames.extend(frames);
+            }
+            // $11 and $12 are the security blocks, which say who signed the
+            // recording. Nothing here depends on that.
+            _ => {}
+        }
+        off += len;
+    }
+
+    if recording.frames.is_empty() {
+        return Err("the recording has no frames in it".into());
+    }
+    Ok(recording)
+}
+
+/// Who made it: twenty bytes of name, padded with spaces or nulls.
+fn creator_name(body: &[u8]) -> String {
+    let name: String = body
+        .iter()
+        .take(20)
+        .map(|b| *b as char)
+        .filter(|c| !c.is_control())
+        .collect();
+    name.trim().to_string()
+}
+
+/// The snapshot block: flags, the extension it would have had as a file, its
+/// length unpacked, and the snapshot itself.
+fn snapshot(body: &[u8]) -> Result<Snapshot, String> {
+    if body.len() < 12 {
+        return Err("the snapshot block is too short".into());
+    }
+    let flags = u32(body, 0);
+    let extension: String = body[4..8]
+        .iter()
+        .take_while(|b| **b != 0)
+        .map(|b| (*b as char).to_ascii_lowercase())
+        .collect();
+    let uncompressed = u32(body, 8) as usize;
+
+    // Bit 0 means the snapshot is not here at all, only a name to go and find,
+    // which is no use without the file it names.
+    if flags & 1 != 0 {
+        return Err("the recording points at a snapshot file rather than carrying one".into());
+    }
+    let data = if flags & 2 != 0 {
+        inflate(&body[12..], uncompressed)?
+    } else {
+        body[12..].to_vec()
+    };
+    Ok(Snapshot { extension, data })
+}
+
+/// The input recording block: a count of frames, where in the frame to start,
+/// and then the frames themselves.
+fn frames(body: &[u8]) -> Result<(Vec<Frame>, u32), String> {
+    if body.len() < 13 {
+        return Err("the input block is too short".into());
+    }
+    let count = u32(body, 0) as usize;
+    let start_t = u32(body, 5);
+    let flags = u32(body, 9);
+    let packed = &body[13..];
+    let data = if flags & 2 != 0 {
+        // The unpacked length is not recorded, so it is grown as needed.
+        inflate(packed, count * 8 + 1024)?
+    } else {
+        packed.to_vec()
+    };
+
+    let mut frames = Vec::with_capacity(count.min(1 << 20));
+    let mut off = 0usize;
+    let mut previous: Vec<u8> = Vec::new();
+    while off + 4 <= data.len() && frames.len() < count {
+        let fetches = u16v(&data, off);
+        let ins = u16v(&data, off + 2) as usize;
+        off += 4;
+        // $FFFF means this frame reads exactly what the last one did, which is
+        // how a recording of somebody not touching anything stays small.
+        let inputs = if ins == 0xFFFF {
+            previous.clone()
+        } else {
+            if off + ins > data.len() {
+                break;
+            }
+            let inputs = data[off..off + ins].to_vec();
+            off += ins;
+            previous = inputs.clone();
+            inputs
+        };
+        frames.push(Frame { fetches, inputs });
+    }
+    Ok((frames, start_t))
+}
+
+/// Unpack a deflated block. `hint` is only a starting size for the buffer.
+fn inflate(data: &[u8], hint: usize) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(hint.min(8 << 20));
+    flate2::read::ZlibDecoder::new(data)
+        .read_to_end(&mut out)
+        .map_err(|e| format!("could not unpack the block: {e}"))?;
+    Ok(out)
+}
+
+fn u32(data: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
+}
+
+fn u16v(data: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([data[at], data[at + 1]])
+}

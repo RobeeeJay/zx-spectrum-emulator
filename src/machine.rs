@@ -215,6 +215,13 @@ pub struct SpectrumBus {
     tape_edge_scratch: Vec<(u64, bool)>,
 
     pub slow: SlowDraw,
+    /// The bytes an RZX recording says the ports gave back, while one is
+    /// playing. Every IN takes the next one instead of reading the hardware,
+    /// which is what makes the program follow the path it followed then.
+    pub playback: Option<Playback>,
+    /// Opcode fetches since the machine started, which is how a recording
+    /// measures the length of a frame.
+    pub fetches: u32,
     /// What the debugger is watching for, and what it caught. The bus is
     /// where all four things happen, so it is the bus that notices them.
     pub breaks: Breaks,
@@ -263,6 +270,8 @@ impl SpectrumBus {
             tape_edge_scratch: Vec::new(),
             slow: SlowDraw::default(),
             screen_writes: 0,
+            playback: None,
+            fetches: 0,
             breaks: Breaks::default(),
             break_hit: None,
             screen_writes_acc: 0,
@@ -764,7 +773,10 @@ impl SpectrumBus {
     pub fn end_frame(&mut self) {
         self.tstates -= self.model.frame_t();
         self.frame += 1;
-        self.irq_pending = true;
+        // While a recording is playing, the frame boundary is where the
+        // recording says it is — an instruction count, not a T-state count —
+        // so the interrupt is raised there instead of here.
+        self.irq_pending = self.playback.is_none();
         self.screen_writes = self.screen_writes_acc;
         self.screen_writes_acc = 0;
         // Keep the finished frame; the renderer needs it for the part of the
@@ -806,6 +818,10 @@ pub fn screen_attr_addr(line: u16, cell: u16) -> u16 {
 
 impl Bus for SpectrumBus {
     fn fetch_op(&mut self, addr: u16) -> u8 {
+        // Counted for RZX playback, which measures a frame in opcode fetches:
+        // a prefixed instruction is two or more of them, so counting whole
+        // instructions instead runs past the end of every frame.
+        self.fetches = self.fetches.wrapping_add(1);
         self.access(addr, 4);
         let phys = self.phys_index(addr);
         self.tracker.on_exec(phys, addr);
@@ -848,6 +864,16 @@ impl Bus for SpectrumBus {
 
     fn io_read(&mut self, port: u16) -> u8 {
         let sampled = self.contend_io(port);
+        // A recording replaces the hardware, not just the keyboard: the
+        // floating bus, the tape and the sound chip all read back what they
+        // read back on the day.
+        if let Some(playback) = &mut self.playback {
+            let byte = playback.next();
+            if self.breaks.ay && self.model.has_ay() && port & 0xc002 == 0xc000 {
+                self.break_hit.get_or_insert(Event::Ay);
+            }
+            return byte;
+        }
         // AY register read: $FFFD.
         if self.model.has_ay() && port & 0xc002 == 0xc000 {
             if self.breaks.ay {
@@ -963,6 +989,35 @@ impl Breaks {
     /// Whether anything at all is being watched.
     pub fn any(&self) -> bool {
         self.screen || self.beeper || self.ay || self.interrupt
+    }
+}
+
+/// One frame's worth of recorded input, being handed out.
+#[derive(Clone, Debug, Default)]
+pub struct Playback {
+    pub inputs: Vec<u8>,
+    pub cursor: usize,
+    /// How many times a frame has asked for more input than was recorded.
+    /// Never zero on a recording that has come adrift from the machine, so it
+    /// is worth telling the user about rather than playing on regardless.
+    pub short: u32,
+}
+
+impl Playback {
+    /// The next recorded byte. A frame that reads more than was recorded is
+    /// out of step; the last byte is repeated rather than inventing one, and
+    /// the shortfall is counted.
+    fn next(&mut self) -> u8 {
+        match self.inputs.get(self.cursor) {
+            Some(byte) => {
+                self.cursor += 1;
+                *byte
+            }
+            None => {
+                self.short += 1;
+                self.inputs.last().copied().unwrap_or(0xFF)
+            }
+        }
     }
 }
 
@@ -1163,6 +1218,43 @@ impl Spectrum {
             }
         }
         Stop::Budget
+    }
+
+    /// Run exactly `fetches` instructions, or until something stops it.
+    ///
+    /// A recording is measured in instructions, not in T-states, so playing
+    /// one back means running the number it says and no more. Returns how many
+    /// were actually run, so a stop part-way through a frame can be picked up
+    /// where it left off.
+    pub fn run_fetches(&mut self, fetches: u32) -> (Stop, u32) {
+        let start = self.bus.fetches;
+        let done_now = |bus: &SpectrumBus| bus.fetches.wrapping_sub(start);
+        while done_now(&self.bus) < fetches {
+            let done = done_now(&self.bus);
+            self.check_interrupt();
+            if let Some(event) = self.bus.break_hit.take() {
+                return (Stop::Watched(event, self.cpu.pc), done);
+            }
+            let at = self.cpu.pc;
+            self.step_instruction();
+            let done = done_now(&self.bus);
+
+            if let Some(event) = self.bus.break_hit.take() {
+                return (Stop::Watched(event, at), done);
+            }
+            if self.bus.slow.enabled && self.bus.slow.hit {
+                return (Stop::SlowDraw, done);
+            }
+            let pc = self.cpu.pc;
+            if self.temp_bp == Some(pc) {
+                self.temp_bp = None;
+                return (Stop::Breakpoint(pc), done);
+            }
+            if self.breakpoints.contains(&pc) {
+                return (Stop::Breakpoint(pc), done);
+            }
+        }
+        (Stop::Budget, done_now(&self.bus).min(fetches))
     }
 
     /// True when the instruction at `pc` is one that "step over" should run to

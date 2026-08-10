@@ -63,6 +63,17 @@ stays where it is and is merely blanked — which is what draws the ZX81's
 loading pattern. The screen is painted over rather than wiped, so a display
 that keeps restarting looks like one.
 
+**An RZX recording is played back by fetch count, not by time.** A frame of a
+recording is a number of *opcode fetches* — a prefixed instruction is two or
+more — and every IN takes the next byte the recording holds instead of reading
+the hardware. Counting whole instructions instead runs past the end of every
+frame and reads input that was never recorded; that showed up as thousands of
+"short reads" until it was fixed. The frame interrupt is raised at the
+recording's frame boundary rather than by the T-state count. A recording that
+asks for more input than it holds has come adrift, and the toolbar says so
+rather than letting the picture look authentic. `recordings/` is gitignored for
+the same reason as `tapes/`.
+
 **Tapes are played as pulses**, never decoded, so turbo loaders and the ZX81's
 own format work through the same path. Each machine has its own deck, because a
 tape is timed in the T-states of the machine playing it and the two clocks

@@ -6,13 +6,18 @@ use crate::machine::{Model, Spectrum};
 /// models (and ROMs) before calling [`load`].
 pub fn probe_model(path: &std::path::Path) -> Result<Model, String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
-    match path
+    let kind = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
+        .to_ascii_lowercase();
+    probe_model_bytes(&kind, &data)
+}
+
+/// The same, for a snapshot that is not a file of its own: the one inside an
+/// RZX recording, for instance.
+pub fn probe_model_bytes(kind: &str, data: &[u8]) -> Result<Model, String> {
+    match kind {
         "sna" => Ok(if data.len() >= 131_103 {
             Model::Spectrum128
         } else {
