@@ -54,6 +54,27 @@ CATEGORIES = {
     "variables": ["variable", "flag", "counter", "pointer", "table of", "store the"],
     "interrupt": ["interrupt", "im 2", "frame counter", "frames"],
     "logic": ["main loop", "game loop", "update the", "move the", "control", "turn"],
+    # The ROM is a BASIC interpreter, and most of it is about running BASIC
+    # rather than about anything a game does. Without these the score is taken
+    # over a small and unrepresentative corner of it.
+    "interpreter": ["command", "syntax", "token", "expression", "evaluate", "statement",
+                    "keyword", "parameter", "operand", "function", "basic line"],
+    "tables": ["table", "tables", "look-up", "lookup"],
+    "error": ["error", "report", "restart"],
+    "stack": ["stack", "push", "pop", "workspace", "spare"],
+    "editor": ["edit", "cursor", "input", "line entry", "editing"],
+    "system": ["restart", "initialis", "initializ", "reset", "start-up", "startup", "housekeeping"],
+}
+
+# Some claims are less specific than the truth rather than wrong. On this
+# machine printing a character *is* drawing on the screen, and colouring is
+# writing to a part of it: a rule saying "draw" where the description says
+# "print_text" has not made a mistake, it has said less. Counted separately so
+# neither flattery nor punishment is hidden in the total.
+LESS_SPECIFIC = {
+    "draw": {"print_text", "colour"},
+    "logic": {"score", "lives", "collision"},
+    "copy": {"decompress"},
 }
 
 # What the rules call things, in the same terms.
@@ -118,6 +139,7 @@ def main():
     silent = 0
     scored = 0
     agree = 0
+    vague = 0
     unmapped = 0
     described = 0
     confusion = defaultdict(Counter)
@@ -139,6 +161,8 @@ def main():
         scored += 1
         if claim in truth:
             agree += 1
+        elif truth & LESS_SPECIFIC.get(claim, set()):
+            vague += 1
         else:
             confusion[claim][sorted(truth)[0]] += 1
 
@@ -148,7 +172,11 @@ def main():
     print(f"  unmapped truth   {unmapped:5} ({pct(unmapped, described)}) description "
           f"fits no category here")
     print(f"  scored           {scored:5} rules claimed something checkable")
-    print(f"  AGREEMENT        {agree:5} ({pct(agree, scored)})")
+    print(f"  agreement        {agree:5} ({pct(agree, scored)})")
+    print(f"  less specific    {vague:5} ({pct(vague, scored)}) right sort of thing, "
+          f"vaguer than the description")
+    print(f"  WRONG            {scored - agree - vague:5} "
+          f"({pct(scored - agree - vague, scored)})")
 
     if confusion:
         print("\nwhere they differ, most often first:")
