@@ -932,8 +932,13 @@ pub enum Stop {
     Breakpoint(u16),
     /// A single-step request completed.
     Stepped,
-    /// Something the debugger was watching for happened.
-    Watched(Event),
+    /// Something the debugger was watching for happened, at this address.
+    ///
+    /// For an interrupt that is the first instruction of the handler, which
+    /// has not run yet. For the others it is the instruction that did it,
+    /// which has: a write or an OUT takes effect part-way through an
+    /// instruction and the CPU is only stoppable between them.
+    Watched(Event, u16),
 }
 
 /// What the machine can be told to stop on besides reaching an address.
@@ -1124,6 +1129,16 @@ impl Spectrum {
         let mut spent = 0u32;
         while spent < budget {
             let before = self.bus.tstates;
+
+            // The interrupt is taken before the next instruction is fetched,
+            // so a watch on it stops with the handler's first instruction
+            // still to run rather than after it.
+            self.check_interrupt();
+            if let Some(event) = self.bus.break_hit.take() {
+                return Stop::Watched(event, self.cpu.pc);
+            }
+
+            let at = self.cpu.pc;
             self.step_instruction();
             let after = self.bus.tstates;
             spent += if after >= before {
@@ -1133,7 +1148,7 @@ impl Spectrum {
             };
 
             if let Some(event) = self.bus.break_hit.take() {
-                return Stop::Watched(event);
+                return Stop::Watched(event, at);
             }
             if self.bus.slow.enabled && self.bus.slow.hit {
                 return Stop::SlowDraw;

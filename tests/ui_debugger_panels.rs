@@ -37,7 +37,7 @@ fn a_write_to_the_screen_can_stop_the_machine() {
 
     let mut stopped = None;
     for _ in 0..80 {
-        if let Stop::Watched(event) = spec.run(FRAME_T) {
+        if let Stop::Watched(event, _) = spec.run(FRAME_T) {
             stopped = Some(event);
             break;
         }
@@ -68,7 +68,7 @@ fn the_frame_interrupt_can_stop_the_machine() {
 
     let mut stopped = None;
     for _ in 0..8 {
-        if let Stop::Watched(event) = spec.run(FRAME_T) {
+        if let Stop::Watched(event, _) = spec.run(FRAME_T) {
             stopped = Some(event);
             break;
         }
@@ -107,7 +107,7 @@ fn nothing_stops_the_machine_unless_it_is_asked_for() {
 
     for _ in 0..20 {
         match spec.run(FRAME_T) {
-            Stop::Watched(event) => panic!("stopped for {event:?} with every watch off"),
+            Stop::Watched(event, _) => panic!("stopped for {event:?} with every watch off"),
             _ => continue,
         }
     }
@@ -133,19 +133,23 @@ fn a_watched_stop_says_what_it_was_and_shows_the_debugger() {
 
     for _ in 0..8 {
         app.advance(1.0 / 60.0);
-        if matches!(app.last_stop, Some(Stop::Watched(_))) {
+        if matches!(app.last_stop, Some(Stop::Watched(..))) {
             break;
         }
     }
 
     assert!(
-        matches!(app.last_stop, Some(Stop::Watched(Event::Interrupt))),
+        matches!(app.last_stop, Some(Stop::Watched(Event::Interrupt, _))),
         "never stopped: {:?}",
         app.last_stop
     );
     assert!(!app.running, "a watched stop should stop the machine");
     assert!(app.show_debugger && app.dbg.raise, "and show the debugger");
-    assert_eq!(app.status, "Took the frame interrupt");
+    assert!(
+        app.status.starts_with("Took the frame interrupt (PC $"),
+        "the status should say where it stopped, not {:?}",
+        app.status
+    );
 }
 
 /// The stack is on show beside the registers, from the stack pointer up.
@@ -230,4 +234,115 @@ fn every_string(h: &Harness<'_, App>) -> Vec<String> {
     let mut found = Vec::new();
     walk(&h.root(), &mut found);
     found
+}
+
+/// An interrupt watch stops with the handler still to run, not after its first
+/// instruction. The interrupt is accepted between instructions, so this one
+/// really can be caught at the moment it fires.
+///
+/// The handler has to do something visible for the test to mean anything: an
+/// empty machine reads $FF everywhere, which is RST $38, so it sits in a loop
+/// where before and after the first instruction look exactly the same.
+#[test]
+fn an_interrupt_stops_before_the_handler_runs() {
+    let mut rom = vec![0u8; 0x4000];
+    rom[0x0000] = 0xFB; // EI
+    rom[0x0001] = 0x18; // JR -2: wait here for the frame interrupt
+    rom[0x0002] = 0xFE;
+    rom[0x0038] = 0x3C; // INC A, the first thing the handler does
+    rom[0x0039] = 0xED; // RETI
+    rom[0x003A] = 0x4D;
+
+    let mut spec = Spectrum::new();
+    spec.load_rom(&rom);
+    spec.cpu.im = 1;
+    spec.bus.breaks.interrupt = true;
+    // A is $FF out of reset, which INC A would wrap to zero; set it so the
+    // check below reads as what it means.
+    spec.cpu.a = 0;
+
+    let mut stopped = None;
+    for _ in 0..8 {
+        if let Stop::Watched(event, at) = spec.run(FRAME_T) {
+            stopped = Some((event, at));
+            break;
+        }
+    }
+
+    let (event, at) = stopped.expect("no interrupt was caught");
+    assert_eq!(event, Event::Interrupt);
+    assert_eq!(
+        at, 0x0038,
+        "mode 1 vectors to $0038; stopped at ${at:04X} instead"
+    );
+    assert_eq!(
+        spec.cpu.pc, 0x0038,
+        "the handler should still be waiting to run"
+    );
+    assert_eq!(
+        spec.cpu.a, 0,
+        "the handler's INC A has already run, so the machine stopped too late"
+    );
+}
+
+/// A write or an OUT happens part-way through an instruction, and the CPU is
+/// only stoppable between them, so the machine stops at the end of the one
+/// that did it — and says which one that was, rather than leaving the user
+/// looking at the instruction after.
+#[test]
+fn a_write_says_which_instruction_did_it() {
+    let mut spec = Spectrum::new();
+    // LD HL,$4000 : LD (HL),A — the write is the second instruction. In RAM
+    // at $8000, because a poke into the ROM area does not stick.
+    for (offset, byte) in [
+        (0u16, 0x21u8),
+        (1, 0x00),
+        (2, 0x40),
+        (3, 0x77),
+        (4, 0x76), // HALT, so nothing else happens
+    ] {
+        spec.bus.poke(0x8000 + offset, byte);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.bus.breaks.screen = true;
+
+    match spec.run(FRAME_T) {
+        Stop::Watched(Event::Screen(addr), at) => {
+            assert_eq!(addr, 0x4000, "wrote to ${addr:04X}");
+            assert_eq!(at, 0x8003, "LD (HL),A is at $8003, not ${at:04X}");
+            assert_eq!(
+                spec.cpu.pc, 0x8004,
+                "the instruction that wrote has finished, so PC is past it"
+            );
+        }
+        other => panic!("expected a screen write, got {other:?}"),
+    }
+}
+
+/// The flags are under the registers, in the same panel, not off beside them.
+/// A frame takes the layout of the `Ui` it is shown in, and this one is shown
+/// in a row: the flags were being laid out to the right of the register grid
+/// and over the top of the stack.
+#[test]
+fn the_flags_are_below_the_registers() {
+    use zx_rustrum::ui::debugger;
+
+    let mut h = Harness::builder()
+        .with_size([debugger::WINDOW_W, 900.0])
+        .build_ui_state(|ui, app: &mut App| debugger::ui(app, ui), app());
+    h.run_steps(4);
+
+    let flags = h.get_by_label_contains("Flags:").rect();
+    let last_register = h.get_by_label_contains("HL  ").rect();
+    assert!(
+        flags.min.y > last_register.min.y,
+        "the flags are at y {} and the last register row at y {}",
+        flags.min.y,
+        last_register.min.y
+    );
+    assert!(
+        flags.min.x < last_register.max.x + 8.0,
+        "the flags start at x {}, away to the right of the registers",
+        flags.min.x
+    );
 }

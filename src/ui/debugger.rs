@@ -293,8 +293,14 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
 fn registers(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_top(|ui| {
         theme::lcd().show(ui, |ui| {
-            ui.set_max_width(REGISTERS_W);
-            registers_lcd(app, ui);
+            // Explicitly downwards: a frame inherits the layout of the `Ui` it
+            // is shown in, and this one is shown in a row, so the flags ended
+            // up beside the register grid rather than under it — and past the
+            // width the panel is meant to keep to.
+            ui.vertical(|ui| {
+                ui.set_max_width(REGISTERS_W);
+                registers_lcd(app, ui);
+            });
         });
         stack(app, ui);
         video(app, ui);
