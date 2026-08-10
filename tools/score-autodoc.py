@@ -57,9 +57,13 @@ CATEGORIES = {
     # The ROM is a BASIC interpreter, and most of it is about running BASIC
     # rather than about anything a game does. Without these the score is taken
     # over a small and unrepresentative corner of it.
-    "interpreter": ["command", "syntax", "token", "expression", "evaluate", "statement",
-                    "keyword", "parameter", "operand", "function", "basic line"],
-    "tables": ["table", "tables", "look-up", "lookup"],
+    # Only phrases that mean BASIC and nothing else. "command", "function",
+    # "parameter" and "table" are ordinary words in a game's annotations —
+    # they put 140 game routines in here, which flattered nothing and
+    # confused everything.
+    "interpreter": ["syntax", "token", "basic line", "basic program", "keyword",
+                    "expression", "evaluate", "statement", "operand", "interpreter"],
+    "tables": ["look-up table", "lookup table", "table of addresses", "jump table"],
     "error": ["error", "report", "restart"],
     "stack": ["stack", "push", "pop", "workspace", "spare"],
     "editor": ["edit", "cursor", "input", "line entry", "editing"],
