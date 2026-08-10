@@ -94,6 +94,15 @@ pub struct Observed {
     pub loops: BTreeMap<u16, u32>,
     /// Deepest it was seen nested, which spots recursion.
     pub max_depth: u32,
+    /// When in the frame it was entered, in T-states: what it is doing
+    /// relative to the beam. A routine that runs while the picture is being
+    /// painted is timed against it; one that runs in the border above the
+    /// picture is getting ready for the frame.
+    pub entered_at: Seen,
+    /// The handful of addresses it writes to, when there are few enough to be
+    /// worth naming. A routine that always writes the same three bytes is
+    /// keeping something.
+    pub hot: Vec<u16>,
     /// Frames in which it ran at least once.
     pub frames: u32,
     /// The last frame it was seen in, so `frames` counts frames not calls.
@@ -141,6 +150,8 @@ pub struct Observer {
     pub frames: u64,
     /// The back-jump being counted at the moment, and how far round it is.
     loop_at: Option<(u16, u32)>,
+    /// Where in the frame the machine is, in T-states, as last told.
+    frame_t: u32,
     /// How deep to follow before giving up on a runaway stack.
     max_depth: usize,
     /// Addresses that have been executed: what is code, as against what is
@@ -309,6 +320,12 @@ impl Observer {
         let Some(entry) = self.current() else { return };
         let stats = self.stats(entry);
         stats.writes.add(addr);
+        // Only worth keeping while there are few of them: a routine writing
+        // half the screen is not keeping a variable, and the list is dropped
+        // once it stops being a short one.
+        if stats.hot.len() < 8 && !stats.hot.contains(&addr) {
+            stats.hot.push(addr);
+        }
         stats.wrote_between = Some(match stats.wrote_between {
             Some((low, high)) => (low.min(addr), high.max(addr)),
             None => (addr, addr),
@@ -388,6 +405,24 @@ impl Observer {
         }
     }
 
+    /// Where the beam is, so a routine can be timed against the picture.
+    pub fn set_frame_t(&mut self, t: u32) {
+        self.frame_t = t;
+    }
+
+    /// Everything that writes to an address, and everything that reads its
+    /// page: what a variable is used by.
+    pub fn users_of(&self, addr: u16) -> Vec<u16> {
+        let mut who: Vec<u16> = self
+            .routines
+            .values()
+            .filter(|r| r.hot.contains(&addr))
+            .map(|r| r.entry)
+            .collect();
+        who.sort_unstable();
+        who
+    }
+
     fn enter(&mut self, entry: u16, sp: u16, registers: Registers) {
         if self.stack.len() >= self.max_depth {
             return;
@@ -397,6 +432,7 @@ impl Observer {
         let caller = self.current();
         let depth = self.stack.len() as u32 + 1;
         let frame = self.frames;
+        let frame_t_now = self.frame_t;
         {
             let stats = self.stats(entry);
             stats.calls += 1;
@@ -405,6 +441,9 @@ impl Observer {
             stats.entry_bc.note(registers.bc);
             stats.entry_de.note(registers.de);
             stats.entry_hl.note(registers.hl);
+            stats
+                .entered_at
+                .note(frame_t_now.min(u16::MAX as u32) as u16);
             if stats.frames == 0 || stats.last_frame != frame {
                 stats.frames += 1;
                 stats.last_frame = frame;

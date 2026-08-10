@@ -366,3 +366,61 @@ fn code_that_matches_nothing_is_not_claimed_to() {
         "it should have fallen through to the rules, not matched a signature"
     );
 }
+
+/// Symbols and signatures can be supplied in a file, which is how a full ROM
+/// disassembly gets in: nobody can ship one here, and anybody who has one can
+/// turn its symbol list into a few thousand lines of this.
+#[test]
+fn symbols_and_signatures_can_be_supplied_in_a_file() {
+    let text = "\
+# the ROM's own names
+0D6B rom_cls ; clears the screen
+$028E rom_key_scan ; scans the keyboard
+# and something recognised by its bytes wherever it sits
+bytes 21 00 40 11 01 40 01 FF 17 36 00 ED zx7_unpack ; a decompressor
+not a line anybody can read
+";
+    let (symbols, signatures) = zx_rustrum::autodoc::parse_symbols(text);
+
+    assert_eq!(symbols.len(), 2, "got {symbols:?}");
+    assert_eq!(
+        symbols[0],
+        (0x0D6B, "rom_cls".into(), "clears the screen".into())
+    );
+    assert_eq!(symbols[1].0, 0x028E, "a leading $ is allowed");
+    assert_eq!(signatures.len(), 1);
+    assert_eq!(signatures[0].1, "zx7_unpack");
+    assert_eq!(signatures[0].0.len(), 12, "twelve bytes to match on");
+}
+
+/// A supplied name is used in place of anything worked out.
+#[test]
+fn a_supplied_symbol_names_the_address() {
+    let symbols = zx_rustrum::autodoc::Symbols::from_text("9000 the_loader ; unpacks the game\n");
+    assert_eq!(
+        symbols.get(0x9000),
+        Some(("the_loader", "unpacks the game"))
+    );
+    assert_eq!(symbols.get(0x9001), None, "and only that address");
+}
+
+/// A signature from a file matches wherever the code sits, and does not claim
+/// to be a copy of anything.
+#[test]
+fn a_signature_from_a_file_matches_anywhere() {
+    let mut known = zx_rustrum::autodoc::Signatures::empty();
+    known.add_from_text("bytes 3E 01 86 27 77 C9 00 00 00 00 00 00 scorer ; adds to the score\n");
+
+    let mut memory = vec![0u8; 0x10000];
+    memory[0x8000..0x8004].copy_from_slice(&[0xCD, 0x00, 0x90, 0xC9]);
+    memory[0x9000..0x9006].copy_from_slice(&[0x3E, 0x01, 0x86, 0x27, 0x77, 0xC9]);
+    let peek = |a: u16| memory[a as usize];
+    let doc = zx_rustrum::autodoc::analyse_with(&peek, &[0x8000], &known);
+
+    assert_eq!(doc.label(0x9000), "scorer_9000");
+    assert_eq!(
+        doc.comment(0x9000),
+        "adds to the score",
+        "a signature with no address of its own is not a copy of anything"
+    );
+}

@@ -97,6 +97,12 @@ socket at once, so it proves nothing on its own: the beeper is told apart by
 hammering the port while writing almost nothing to memory. Watching costs a
 branch on every access, so it only runs while AutoDoc is on.
 
+**Anything else known goes in a file, not in the source.** `<name>.symbols.txt`
+beside the notes takes `ADDR name ; comment` lines and `bytes …` signatures. A
+full ROM disassembly cannot be shipped here and a signature that cannot be
+checked should not be invented, so the mechanism is in the emulator and the
+knowledge is the user's to supply.
+
 **Signatures come from the ROM in the machine, not from a table somebody
 typed.** Games copy ROM routines into RAM; the same bytes hash the same
 wherever they land, so a copy is named after the original and said to be one.

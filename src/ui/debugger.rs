@@ -544,8 +544,32 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                         if row.clicked() {
                             go_to = Some(block.at);
                         }
+                        // Who reads it, and who calls them: a graphics block
+                        // plus its reader plus its reader's caller is most of
+                        // "this is the sprite table for the guardians".
                         let read_by = match block.readers.first() {
-                            Some(entry) => format!("Read by the routine at ${entry:04X}"),
+                            Some(entry) => {
+                                let name = app.notes.label(*entry);
+                                let named = if name.is_empty() {
+                                    format!("${entry:04X}")
+                                } else {
+                                    format!("{name} (${entry:04X})")
+                                };
+                                let caller = app
+                                    .spec
+                                    .bus
+                                    .observer
+                                    .edges
+                                    .keys()
+                                    .find(|(_, to)| to == entry)
+                                    .map(|(from, _)| *from);
+                                match caller {
+                                    Some(from) => {
+                                        format!("Read by {named}, which is called from ${from:04X}")
+                                    }
+                                    None => format!("Read by {named}"),
+                                }
+                            }
                             None => "Nothing has read it".to_string(),
                         };
                         row.on_hover_ui(|ui| {
@@ -1088,24 +1112,97 @@ fn refresh_autodoc(app: &mut App) {
     }
     // Built from whatever ROM the machine is running: a game that has copied
     // the print routine into RAM is then recognised wherever it put it.
-    let known = match app.roms.for_model(app.spec.bus.model) {
+    let mut known = match app.roms.for_model(app.spec.bus.model) {
         Some(rom) => crate::autodoc::Signatures::from_rom(rom),
         None => crate::autodoc::Signatures::empty(),
     };
+    // Anything else known goes in a file beside the notes: symbols from a ROM
+    // disassembly, signatures for loaders and compressors. Nobody can ship
+    // those here, and anybody who has them can drop them in.
+    let symbols = match app.notes.file() {
+        Some(notes) => {
+            let beside = notes.with_extension("symbols.txt");
+            if let Ok(text) = std::fs::read_to_string(&beside) {
+                known.add_from_text(&text);
+                crate::autodoc::Symbols::from_text(&text)
+            } else {
+                crate::autodoc::Symbols::default()
+            }
+        }
+        None => crate::autodoc::Symbols::default(),
+    };
     let peek = |a: u16| app.peek(a);
-    let doc = crate::autodoc::analyse_with(&peek, &entries, &known);
+    let mut doc = crate::autodoc::analyse_with(&peek, &entries, &known);
+
+    // A name somebody supplied outranks anything worked out here.
+    for entry in doc.labels.keys().copied().collect::<Vec<_>>() {
+        if let Some((name, comment)) = symbols.get(entry) {
+            doc.labels.insert(entry, name.to_string());
+            if !comment.is_empty() {
+                doc.comments.insert(entry, comment.to_string());
+            }
+        }
+    }
 
     // What was measured outranks what was read: a routine that wrote 6144
     // bytes into the display file did that, whatever its instructions look
     // like. Only routines the machine has actually been through have
     // measurements, so the rest keep their static guess.
-    let mut doc = doc;
-    let frames = app.spec.bus.observer.frames as u32;
-    for (entry, seen) in &app.spec.bus.observer.routines {
+    let observer = &app.spec.bus.observer;
+    let frames = observer.frames as u32;
+    let first_pixel = app.spec.bus.first_pixel_t();
+    let frame_t = app.spec.bus.frame_t();
+    let mut named: std::collections::BTreeMap<u16, String> = Default::default();
+
+    for (entry, seen) in &observer.routines {
         if let Some((label, comment)) = crate::autodoc::describe_measured(seen, frames) {
+            // Where in the frame it runs, and what it appears to be handed:
+            // both are measurements, so both are said outright.
+            let phase = crate::autodoc::beam_phase(seen, first_pixel, frame_t);
+            let args = crate::autodoc::arguments(seen);
             doc.labels.insert(*entry, format!("{label}_{entry:04X}"));
-            doc.comments.insert(*entry, comment);
+            doc.comments
+                .insert(*entry, format!("{comment}{phase}{args}"));
+            named.insert(*entry, label);
         }
+    }
+
+    // A routine is also described by what it calls. One whose callees read the
+    // keys, draw and keep the score is a game's turn, whatever its own
+    // instructions do — and that is worth more than anything read off them.
+    for (entry, seen) in &observer.routines {
+        if seen.calls == 0 {
+            continue;
+        }
+        let mut children: Vec<&str> = observer
+            .edges
+            .keys()
+            .filter(|(from, _)| from == entry)
+            .filter_map(|(_, to)| named.get(to).map(|s| s.as_str()))
+            .collect();
+        children.sort_unstable();
+        children.dedup();
+        if children.len() < 2 {
+            continue;
+        }
+        let what = children.join(", ");
+        doc.labels
+            .entry(*entry)
+            .and_modify(|label| {
+                if label.starts_with("routine_") || label.starts_with("game_") {
+                    *label = format!("game_turn_{entry:04X}");
+                }
+            })
+            .or_insert_with(|| format!("game_turn_{entry:04X}"));
+        let note = format!("Calls {what}: the shape of a turn of the game");
+        doc.comments
+            .entry(*entry)
+            .and_modify(|c| {
+                if c.is_empty() {
+                    *c = note.clone();
+                }
+            })
+            .or_insert(note);
     }
 
     // Into the notes, where they are kept with the rest. A guess replaces an

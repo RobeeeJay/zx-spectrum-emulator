@@ -185,3 +185,67 @@ fn nothing_is_watched_until_it_is_switched_on() {
     assert!(spec.bus.observer.routines.is_empty());
     assert_eq!(spec.bus.observer.frames, 0);
 }
+
+/// Where in the frame a routine runs is measured, so a routine timed against
+/// the beam can be told from one doing its work in the border.
+#[test]
+fn when_in_the_frame_a_routine_runs_is_measured() {
+    let program = vec![
+        (0x8000, 0xCD),
+        (0x8001, 0x00),
+        (0x8002, 0x90), // CALL $9000
+        (0x8003, 0x18),
+        (0x8004, 0xFB), // JR back
+        (0x9000, 0xC9), // RET
+    ];
+    let spec = watch(&program, 0x8000, 1);
+    let seen = &spec.bus.observer.routines[&0x9000];
+
+    assert!(
+        seen.entered_at.high > 0,
+        "nothing was noted about when it ran"
+    );
+    assert!(
+        seen.entered_at.high > seen.entered_at.low,
+        "a routine called all frame long should have been seen at more than \
+         one point in it: {}..{}",
+        seen.entered_at.low,
+        seen.entered_at.high
+    );
+}
+
+/// A routine that only ever writes a few addresses has them remembered, which
+/// is what makes a variable findable.
+#[test]
+fn the_addresses_a_routine_keeps_are_remembered() {
+    let program = vec![
+        (0x8000, 0xCD),
+        (0x8001, 0x00),
+        (0x8002, 0x90),
+        (0x8003, 0x18),
+        (0x8004, 0xFB),
+        // $9000: LD A,1 : LD ($C000),A : LD ($C001),A : RET
+        (0x9000, 0x3E),
+        (0x9001, 0x01),
+        (0x9002, 0x32),
+        (0x9003, 0x00),
+        (0x9004, 0xC0),
+        (0x9005, 0x32),
+        (0x9006, 0x01),
+        (0x9007, 0xC0),
+        (0x9008, 0xC9),
+    ];
+    let spec = watch(&program, 0x8000, 1);
+    let seen = &spec.bus.observer.routines[&0x9000];
+
+    assert_eq!(
+        seen.hot,
+        vec![0xC000, 0xC001],
+        "it writes two addresses and nothing else"
+    );
+    assert_eq!(
+        spec.bus.observer.users_of(0xC000),
+        vec![0x9000],
+        "and that is what writes to $C000"
+    );
+}

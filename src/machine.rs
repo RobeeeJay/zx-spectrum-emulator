@@ -1201,6 +1201,8 @@ impl Spectrum {
                     });
             }
             if self.bus.observer.enabled {
+                let t = self.bus.tstates;
+                self.bus.observer.set_frame_t(t);
                 let registers = crate::observe::Registers {
                     af: self.cpu.af(),
                     bc: self.cpu.bc(),

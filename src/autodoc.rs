@@ -126,6 +126,23 @@ impl Signatures {
         Signatures { by_hash }
     }
 
+    /// Add signatures written out as bytes in a file.
+    pub fn add_from_text(&mut self, text: &str) {
+        let (_, signatures) = parse_symbols(text);
+        for (bytes, name, comment) in signatures {
+            if bytes.len() < SIGNATURE_LEN as usize {
+                continue;
+            }
+            let hash = fingerprint(|i| bytes[i as usize]);
+            // Leaked deliberately: the table lives as long as the analysis and
+            // the alternative is threading a lifetime through every rule for
+            // the sake of a few dozen strings.
+            let name: &'static str = Box::leak(name.into_boxed_str());
+            let comment: &'static str = Box::leak(comment.into_boxed_str());
+            self.by_hash.insert(hash, (0, name, comment));
+        }
+    }
+
     pub fn empty() -> Signatures {
         Signatures {
             by_hash: BTreeMap::new(),
@@ -144,13 +161,116 @@ impl Signatures {
     pub fn identify<F: Fn(u16) -> u8>(&self, peek: &F, at: u16) -> Option<(&'static str, String)> {
         let hash = fingerprint(|i| peek(at.wrapping_add(i)));
         let (from, label, comment) = self.by_hash.get(&hash)?;
-        if at == *from {
+        if at == *from || *from == 0 {
             return Some((label, (*comment).to_string()));
         }
         Some((
             label,
             format!("{comment} — the same code as ${from:04X}, copied here"),
         ))
+    }
+}
+
+/// Read symbols and signatures out of a file, so anything known can be
+/// supplied without changing the emulator.
+///
+/// Two kinds of line, both optional in any file:
+///
+/// ```text
+/// # a symbol: an address, a name, and what it is
+/// 0D6B rom_cls ; clears the screen
+/// # a signature: bytes to match anywhere, a name, and what it is
+/// bytes 21 00 40 11 01 40 01 FF 17 36 00 ED  zx7_unpack ; ZX7 decompressor
+/// ```
+///
+/// This is where a full ROM disassembly goes: nobody can ship one here, but
+/// anybody who has one can turn its symbol list into a file of the first kind
+/// and get every ROM call named instead of the four dozen in the table below.
+pub fn parse_symbols(text: &str) -> (Vec<Symbol>, Vec<Signature>) {
+    let mut symbols = Vec::new();
+    let mut signatures = Vec::new();
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (body, comment) = match line.split_once(';') {
+            Some((body, comment)) => (body.trim(), comment.trim().to_string()),
+            None => (line, String::new()),
+        };
+        if let Some(rest) = body.strip_prefix("bytes ") {
+            // Bytes up to the name, which is the first thing that is not a
+            // pair of hex digits.
+            let mut bytes = Vec::new();
+            let mut name = String::new();
+            for word in rest.split_whitespace() {
+                match u8::from_str_radix(word, 16) {
+                    Ok(byte) if word.len() == 2 && name.is_empty() => bytes.push(byte),
+                    _ => {
+                        name = word.to_string();
+                        break;
+                    }
+                }
+            }
+            if !bytes.is_empty() && !name.is_empty() {
+                signatures.push((bytes, name, comment));
+            }
+            continue;
+        }
+        let mut words = body.split_whitespace();
+        let (Some(addr), Some(name)) = (words.next(), words.next()) else {
+            continue;
+        };
+        if let Ok(addr) = u16::from_str_radix(addr.trim_start_matches('$'), 16) {
+            symbols.push((addr, name.to_string(), comment));
+        }
+    }
+    (symbols, signatures)
+}
+
+/// One name for one address, as read out of a file.
+pub type Symbol = (u16, String, String);
+/// One run of bytes to recognise, with its name.
+pub type Signature = (Vec<u8>, String, String);
+
+/// Names for addresses, supplied by whoever has the disassembly.
+#[derive(Clone, Debug, Default)]
+pub struct Symbols {
+    by_address: BTreeMap<u16, (String, String)>,
+}
+
+impl Symbols {
+    pub fn from_text(text: &str) -> Symbols {
+        let (symbols, _) = parse_symbols(text);
+        Symbols {
+            by_address: symbols
+                .into_iter()
+                .map(|(addr, name, comment)| (addr, (name, comment)))
+                .collect(),
+        }
+    }
+
+    /// Read the file if it is there. Failure is not an error: most people will
+    /// not have one.
+    pub fn from_file(path: &std::path::Path) -> Symbols {
+        std::fs::read_to_string(path)
+            .map(|text| Symbols::from_text(&text))
+            .unwrap_or_default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_address.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_address.is_empty()
+    }
+
+    pub fn get(&self, addr: u16) -> Option<(&str, &str)> {
+        self.by_address
+            .get(&addr)
+            .map(|(name, comment)| (name.as_str(), comment.as_str()))
     }
 }
 
@@ -607,6 +727,61 @@ pub fn describe(f: &Features) -> (String, String) {
 /// The numbers are quoted in the comment rather than summarised away: "writes
 /// 6144 bytes to the display file, once a frame" is a fact the user can check,
 /// where "screen blit" is only a claim.
+/// When in the frame a routine runs, said in terms of the picture.
+///
+/// The frame is border, then picture, then border, and where a routine sits in
+/// that says what kind of thing it is: work done above the picture is getting
+/// ready for the frame, work done while the beam is on the picture is timed
+/// against it, and the rest is thinking.
+pub fn beam_phase(
+    seen: &crate::observe::Observed,
+    first_pixel_t: u32,
+    frame_t: u32,
+) -> &'static str {
+    if seen.calls == 0 || seen.entered_at.high == 0 {
+        return "";
+    }
+    let (low, high) = (seen.entered_at.low as u32, seen.entered_at.high as u32);
+    // 192 lines of 224 T-states is the picture on a 48K; near enough on the
+    // others for the purpose of saying which third of the frame this is.
+    let picture_ends = first_pixel_t + 192 * 224;
+    if high < first_pixel_t {
+        return ", always before the picture is painted";
+    }
+    if low >= first_pixel_t && high < picture_ends {
+        return ", always while the beam is on the picture";
+    }
+    if low >= picture_ends && high < frame_t {
+        return ", always after the picture";
+    }
+    ""
+}
+
+/// What a routine appears to be handed, from what its registers held on the
+/// way in across every call.
+pub fn arguments(seen: &crate::observe::Observed) -> String {
+    let mut said = Vec::new();
+    let hl = seen.entry_hl;
+    if !hl.constant() {
+        if hl.low >= 0x4000 && hl.high < 0x5B00 {
+            said.push("HL is a screen address".to_string());
+        } else if hl.high.wrapping_sub(hl.low) > 8 {
+            said.push(format!("HL varies ${:04X}..${:04X}", hl.low, hl.high));
+        }
+    } else if seen.calls > 2 {
+        said.push(format!("HL is always ${:04X}", hl.low));
+    }
+    let bc = seen.entry_bc;
+    if !bc.constant() && (bc.high >> 8) <= 23 && (bc.low & 0xFF) <= 31 && seen.calls > 2 {
+        said.push("BC looks like character coordinates".to_string());
+    }
+    if said.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", said.join("; "))
+    }
+}
+
 pub fn describe_measured(seen: &crate::observe::Observed, frames: u32) -> Option<(String, String)> {
     let calls = seen.calls.max(1);
     let per_call = |n: u32| n / calls;
@@ -701,13 +876,20 @@ pub fn describe_measured(seen: &crate::observe::Observed, frames: u32) -> Option
 
     // Something that only ever pokes a byte or two in the same place is a
     // variable being kept, which is worth saying even without knowing which.
-    if let Some((low, high)) = seen.wrote_between {
-        if high.wrapping_sub(low) <= 3 && seen.writes.other > 0 && often {
-            return Some((
-                "update_variable".into(),
-                format!("Writes only to ${low:04X}..${high:04X}{rhythm}: keeping a value"),
-            ));
-        }
+    // Something that only ever pokes the same few addresses is keeping them,
+    // and naming the addresses is the useful part: the same ones turn up in
+    // whatever else reads or writes them.
+    if !seen.hot.is_empty() && seen.hot.len() <= 4 && seen.writes.other > 0 && often {
+        let mut hot = seen.hot.clone();
+        hot.sort_unstable();
+        let list: Vec<String> = hot.iter().map(|a| format!("${a:04X}")).collect();
+        return Some((
+            "update_variable".into(),
+            format!(
+                "Writes only to {}{rhythm}: keeping a value",
+                list.join(", ")
+            ),
+        ));
     }
 
     if often && seen.writes.other > 200 {
