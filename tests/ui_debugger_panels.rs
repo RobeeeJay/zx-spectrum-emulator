@@ -400,7 +400,12 @@ fn the_autodoc_toggle_names_routines() {
 fn guesses_go_into_the_notes_marked_as_guesses() {
     let mut app = app();
     app.dbg.autodoc = true;
-    app.spec.bus.poke(0x9000, 0xC9);
+    // A call, so there is a routine to name: the address being looked at is
+    // not one, only what it calls.
+    for (offset, byte) in [(0u16, 0xCDu8), (1, 0x00), (2, 0xA0), (3, 0xC9)] {
+        app.spec.bus.poke(0x9000 + offset, byte);
+    }
+    app.spec.bus.poke(0xA000, 0xC9);
     app.dbg.follow_pc = false;
     app.dbg.view_addr = 0x9000;
 
@@ -410,9 +415,9 @@ fn guesses_go_into_the_notes_marked_as_guesses() {
     let notes = &h.state().notes;
     assert!(!notes.is_empty(), "nothing was written down at all");
     assert!(
-        notes.label_is_auto(0x9000),
-        "the guess at $9000 is not marked as one: {:?}",
-        notes.label(0x9000)
+        notes.label_is_auto(0xA000),
+        "the guess at $A000 is not marked as one: {:?}",
+        notes.label(0xA000)
     );
     assert!(
         notes.to_text().contains("@"),
@@ -426,9 +431,12 @@ fn guesses_go_into_the_notes_marked_as_guesses() {
 #[test]
 fn a_guess_never_replaces_what_the_user_wrote() {
     let mut app = app();
-    app.spec.bus.poke(0x9000, 0xC9);
-    app.notes.set_label(0x9000, "my_own_name");
-    app.notes.set_comment(0x9000, "my own words");
+    for (offset, byte) in [(0u16, 0xCDu8), (1, 0x00), (2, 0xA0), (3, 0xC9)] {
+        app.spec.bus.poke(0x9000 + offset, byte);
+    }
+    app.spec.bus.poke(0xA000, 0xC9);
+    app.notes.set_label(0xA000, "my_own_name");
+    app.notes.set_comment(0xA000, "my own words");
     app.dbg.autodoc = true;
     app.dbg.follow_pc = false;
     app.dbg.view_addr = 0x9000;
@@ -437,10 +445,10 @@ fn a_guess_never_replaces_what_the_user_wrote() {
     h.run_steps(3);
 
     let notes = &h.state().notes;
-    assert_eq!(notes.label(0x9000), "my_own_name");
-    assert_eq!(notes.comment(0x9000), "my own words");
+    assert_eq!(notes.label(0xA000), "my_own_name");
+    assert_eq!(notes.comment(0xA000), "my own words");
     assert!(
-        !notes.label_is_auto(0x9000) && !notes.comment_is_auto(0x9000),
+        !notes.label_is_auto(0xA000) && !notes.comment_is_auto(0xA000),
         "the user's own line was marked as a guess"
     );
 }

@@ -230,6 +230,8 @@ fn rom_routines_are_named_where_they_are_called() {
 
 /// Every routine reached from the entry point gets a name, and the name
 /// carries its address so two guesses of the same kind are still distinct.
+/// Where the reading started does not get one: only what is called or jumped
+/// to is a routine.
 #[test]
 fn every_routine_called_is_labelled() {
     let mut memory = vec![0u8; 0x10000];
@@ -246,7 +248,13 @@ fn every_routine_called_is_labelled() {
         "the routine called should be named after what it does, with its \
          address to tell it from the next one"
     );
-    assert!(!doc.label(0x8000).is_empty(), "and so should the caller");
+    assert_eq!(
+        doc.label(0x8000),
+        "",
+        "the code being read from is not a routine: nothing calls or jumps to \
+         $8000, and the middle of a loop is a perfectly ordinary place for the \
+         machine to be stopped"
+    );
 }
 
 /// Reading code is bounded: a run through uninitialised memory must not take

@@ -165,6 +165,12 @@ impl Features {
 }
 
 /// Read the code from `entries` and describe what it finds.
+///
+/// `entries` are only where the reading starts — where the listing is pointed
+/// and where the machine is — and are not routines in themselves: the middle
+/// of a loop is a perfectly ordinary place for the machine to be stopped, and
+/// naming it would put a label on something that is not an entry point. Only
+/// the addresses something calls or jumps to are named.
 pub fn analyse<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> Doc {
     let mut doc = Doc::default();
     let routines = walk(peek, entries);
@@ -182,8 +188,9 @@ pub fn analyse<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> Doc {
         doc.comments.insert(*entry, comment);
     }
 
-    // Lines worth a note of their own, wherever they turn up.
-    for addr in &routines {
+    // Lines worth a note of their own, wherever they turn up — including
+    // along the code being looked at, which has no label of its own.
+    for addr in routines.iter().chain(entries) {
         annotate_lines(peek, *addr, &mut doc);
     }
     doc
@@ -194,7 +201,7 @@ pub fn analyse<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> Doc {
 /// table is still read.
 fn walk<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> BTreeSet<u16> {
     let mut seen: BTreeSet<u16> = BTreeSet::new();
-    let mut routines: BTreeSet<u16> = entries.iter().copied().collect();
+    let mut routines: BTreeSet<u16> = BTreeSet::new();
     let mut queue: Vec<u16> = entries.to_vec();
     let mut read = 0usize;
 
@@ -215,7 +222,15 @@ fn walk<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> BTreeSet<u16> {
                     queue.push(target);
                 }
             }
+            // A JP is how a routine hands over to another one — a tail call,
+            // or a jump table — so its target is an entry point too. A JR is
+            // not: two bytes of reach makes it a loop within a routine
+            // nine times out of ten, and labelling those would bury the
+            // entry points in noise.
             if let Some(target) = jump_target(text) {
+                if text.starts_with("JP ") {
+                    routines.insert(target);
+                }
                 if !seen.contains(&target) {
                     queue.push(target);
                 }
