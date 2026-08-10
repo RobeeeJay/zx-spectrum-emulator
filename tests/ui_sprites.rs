@@ -20,14 +20,23 @@ fn app() -> App {
 /// many cells across and down it is, and that is what the sheet steps by.
 #[test]
 fn a_sprites_size_decides_how_far_the_sheet_steps() {
-    let mut view = SpriteView::default();
-    view.cells_across = 2;
-    view.cells_down = 2;
-    assert_eq!(view.stride(), 32, "two by two cells is thirty-two bytes");
+    let two_by_two = SpriteView {
+        cells_across: 2,
+        cells_down: 2,
+        ..Default::default()
+    };
+    assert_eq!(
+        two_by_two.stride(),
+        32,
+        "two by two cells is thirty-two bytes"
+    );
 
-    view.cells_across = 3;
-    view.cells_down = 1;
-    assert_eq!(view.stride(), 24);
+    let three_across = SpriteView {
+        cells_across: 3,
+        cells_down: 1,
+        ..Default::default()
+    };
+    assert_eq!(three_across.stride(), 24);
 }
 
 /// The window opens from the Windows row and draws without complaint.
