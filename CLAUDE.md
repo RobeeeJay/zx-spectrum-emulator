@@ -120,6 +120,14 @@ full ROM disassembly cannot be shipped here and a signature that cannot be
 checked should not be invented, so the mechanism is in the emulator and the
 knowledge is the user's to supply.
 
+**`tools/skool-symbols.py` reads the SkoolKit game disassemblies** at
+<https://github.com/mrcook/zx-spectrum-games> — 6,677 routines across fifteen
+games, 5,736 of them described. SkoolKit takes addresses either way, `$8000`
+or `32768`, and four of those games are written in decimal: reading them as hex
+finds nothing at all and says so quietly, which is how it looked at first.
+Its `#R$8000` cross-reference markup means nothing in a text file and is taken
+out, along with titles that only say "Routine at 32768".
+
 **Signatures come from the ROM in the machine, not from a table somebody
 typed.** Games copy ROM routines into RAM; the same bytes hash the same
 wherever they land, so a copy is named after the original and said to be one.
