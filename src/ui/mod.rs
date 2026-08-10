@@ -870,6 +870,14 @@ impl App {
             };
             files.push(dir.join("symbols.txt"));
             files.push(dir.join(format!("symbols-{machine}.txt")));
+            // The 128K's ROM is two 16K ROMs and the +3's is four, each
+            // addressed $0000-$3FFF in its own right. A name only means
+            // anything alongside which one is paged in, so they have a file
+            // each and only the one in use is read.
+            if !self.on_zx81() && self.spec.bus.rom_pages() > 1 {
+                let rom = self.spec.bus.rom_in_use();
+                files.push(dir.join(format!("symbols-{machine}-rom{rom}.txt")));
+            }
         }
         if let Some(source) = self.notes_source() {
             // Named after the file itself: `manic.tap` has `manic.symbols.txt`

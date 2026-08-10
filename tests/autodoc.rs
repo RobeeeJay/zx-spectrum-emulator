@@ -490,3 +490,61 @@ fn a_generated_rom_symbol_file_names_the_rom() {
         assert_eq!(name, expected, "${addr:04X}");
     }
 }
+
+/// The 128K and +3 keep their symbols per ROM, because each of the two or four
+/// 16K ROMs is addressed $0000-$3FFF in its own right: a name for an address
+/// only means anything alongside which ROM is paged in.
+#[test]
+fn each_rom_of_a_paged_machine_has_its_own_symbols() {
+    use zx_rustrum::machine::{Model, Spectrum};
+    use zx_rustrum::ui::{App, Roms};
+
+    let roms = Roms {
+        rom128: Some(vec![0u8; 0x8000]),
+        ..Default::default()
+    };
+    let mut app = App::with_roms(
+        Spectrum::with_model(Model::Spectrum128),
+        String::new(),
+        roms,
+        None,
+    );
+    app.rom_path = Some("roms/128.rom".into());
+
+    let files = app.symbol_files();
+    let names: Vec<String> = files
+        .iter()
+        .map(|f| {
+            f.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "symbols-128-rom0.txt"),
+        "the ROM in use should have a file of its own: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "symbols-128-rom1.txt"),
+        "and the one that is not paged in should not be read: {names:?}"
+    );
+
+    // A 48K has one ROM, so there is nothing to tell apart.
+    let mut plain = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    plain.rom_path = Some("roms/48.rom".into());
+    let names: Vec<String> = plain
+        .symbol_files()
+        .iter()
+        .map(|f| {
+            f.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.contains("-rom")),
+        "a 48K has no ROM to choose between: {names:?}"
+    );
+}

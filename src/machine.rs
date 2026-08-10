@@ -467,6 +467,18 @@ impl SpectrumBus {
         (0..4).find(|&slot| self.slots[slot] == Slot::Ram(bank))
     }
 
+    /// Which ROM page is paged in at $0000, which is the one whose routines a
+    /// program calling into the ROM will reach.
+    ///
+    /// The 128K's ROM image is two 16K ROMs and the +3's is four; each is
+    /// addressed $0000-$3FFF in its own right, so a name for an address only
+    /// means anything alongside which of them is in.
+    pub fn rom_in_use(&self) -> usize {
+        (0..self.rom_pages())
+            .find(|page| self.rom_page_slot(*page) == Some(0))
+            .unwrap_or(0)
+    }
+
     /// Which slot, if any, a ROM page is currently paged into.
     pub fn rom_page_slot(&self, page: usize) -> Option<usize> {
         (0..4).find(|&slot| self.slots[slot] == Slot::Rom(page))

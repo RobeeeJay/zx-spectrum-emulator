@@ -100,11 +100,21 @@ branch on every access, so it only runs while AutoDoc is on.
 
 **Anything else known goes in a file, not in the source.** `tools/rom-symbols.py`
 turns a disassembly from
-<https://github.com/ZXSpectrumVault/rom-disassemblies> into `symbols-48.txt`
-or `symbols-zx81.txt` in the preferences directory — 1117 and 675 named
-routines. They are somebody else's work, so they are generated rather than
-committed. The 128K disassemblies use a different convention and the converter
-gets nothing from them. `<name>.symbols.txt`
+<https://github.com/ZXSpectrumVault/rom-disassemblies> into a symbol file in
+the preferences directory. They are somebody else's work, so they are
+generated rather than committed.
+
+Three conventions are in use across those files and the converter reads all
+three: `;; NAME` then `Lxxxx:` for the 48K and ZX81, a title between rules of
+dashes for the 128K, and dZ80's `.lxxxx` with `defc NAME=$xxxx` for the +3.
+A title only names a label within a dozen lines of it, or the pages of prose
+at the top of a file end up naming the reset vector.
+
+**A paged machine needs a symbol file per ROM.** The 128K's ROM image is two
+16K ROMs and the +3's is four, each addressed `$0000-$3FFF` in its own right,
+so a name means nothing without knowing which is in: they are
+`symbols-128-rom0.txt` and so on, and only the one paged in at `$0000` is
+read. `<name>.symbols.txt`
 beside the notes takes `ADDR name ; comment` lines and `bytes …` signatures. A
 full ROM disassembly cannot be shipped here and a signature that cannot be
 checked should not be invented, so the mechanism is in the emulator and the

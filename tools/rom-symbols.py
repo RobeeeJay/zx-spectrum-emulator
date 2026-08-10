@@ -23,24 +23,89 @@ import sys
 NAME = re.compile(r"^;;\s+(\S+)")
 LABEL = re.compile(r"^L([0-9A-Fa-f]{4}):")
 HEADING = re.compile(r"^;\s+(THE .*)$")
+# The 128K and +3 ROMs are written up differently: a title between two rules
+# of dashes, and then the label a few lines later.
+RULE = re.compile(r"^;\s*-{4,}\s*$")
+TITLE = re.compile(r"^;\s+(\S.*?)\s*$")
+# Both sets name their system variables and entry points with EQU.
+EQU = re.compile(r"^(\w+)\s+EQU\s+\$([0-9A-Fa-f]{1,4})", re.IGNORECASE)
+# The +3 disassemblies are a third sort again: dZ80 output assembled with
+# Z80ASM, so labels are `.lXXXX` and names are `defc NAME=$xxxx`.
+DEFC = re.compile(r"^\s*defc\s+(\w+)\s*=\s*\$([0-9A-Fa-f]{1,4})", re.IGNORECASE)
+DOT_LABEL = re.compile(r"^\.l([0-9A-Fa-f]{4})\b", re.IGNORECASE)
+
+
+def slug(text):
+    """A name somebody would be willing to type."""
+    text = re.sub(r"[^A-Za-z0-9]+", "_", text.strip()).strip("_").lower()
+    return re.sub(r"_+", "_", text)[:40] or "routine"
 
 
 def symbols(lines):
-    """Yield (address, name, comment) for every named routine."""
+    """Yield (address, name, comment) for every named routine.
+
+    Two conventions are in use across these files. The 48K and ZX81 put the
+    name on its own line as `;; NAME`; the 128K and +3 put a title between two
+    rules of dashes and the label a few lines below it. Both also name their
+    system variables with EQU.
+    """
     heading = ""
     pending = None
+    banner = None
+    in_rule = False
+    # A title only names the label that follows it closely. These files open
+    # with pages of prose under the same sort of banner as a routine, and
+    # without this the first label in the file is called "assembler details".
+    since_title = 0
+    REACH = 12
+
     for line in lines:
         line = line.rstrip("\n")
+        since_title += 1
+        if pending is not None and since_title > REACH:
+            pending = None
+
+        found = EQU.match(line) or DEFC.match(line)
+        if found:
+            # A system variable or entry point named outright.
+            yield int(found.group(2), 16), slug(found.group(1)), ""
+            continue
+
+        if RULE.match(line):
+            # The line between two rules is the title; the second rule closes
+            # it and hands it to the next label.
+            if banner is not None:
+                pending, heading = slug(banner), banner
+                banner = None
+                since_title = 0
+            in_rule = True
+            continue
 
         found = HEADING.match(line)
         if found:
             # "THE 'CREATE BC SPACES' RESTART" -> "the 'create bc spaces' restart"
             heading = found.group(1).strip().rstrip(".")
+            in_rule = False
             continue
 
         found = NAME.match(line)
         if found:
             pending = found.group(1)
+            since_title = 0
+            in_rule = False
+            continue
+
+        if in_rule:
+            found = TITLE.match(line)
+            if found:
+                banner = found.group(1).rstrip(".")
+            in_rule = False
+            continue
+
+        found = DOT_LABEL.match(line)
+        if found and pending:
+            yield int(found.group(1), 16), slug(pending), heading
+            pending = None
             continue
 
         found = LABEL.match(line)
@@ -48,7 +113,7 @@ def symbols(lines):
             address = int(found.group(1), 16)
             name = pending.lower().replace("-", "_").replace("'", "")
             comment = heading[0] + heading[1:].lower() if heading else ""
-            yield address, name, comment
+            yield address, slug(name), comment
             pending = None
 
 
