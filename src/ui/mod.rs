@@ -5,6 +5,7 @@ pub mod cassette;
 pub mod debugger;
 pub mod profiler;
 pub mod ram_map;
+pub mod sprites;
 pub mod tape;
 pub mod theme;
 
@@ -266,6 +267,9 @@ pub struct App {
     pub show_ram_map: bool,
     pub show_debugger: bool,
     pub show_back_buffer: bool,
+    /// Memory read as graphics.
+    pub show_sprites: bool,
+    pub sprites: sprites::SpriteView,
     pub show_tape: bool,
     pub show_profiler: bool,
 
@@ -346,6 +350,8 @@ impl App {
             show_ram_map: true,
             show_debugger: true,
             show_back_buffer: false,
+            show_sprites: false,
+            sprites: sprites::SpriteView::default(),
             show_tape: false,
             show_profiler: false,
             screen_pixels: vec![0; screen::View::OVERSCAN.buffer_len()],
@@ -580,6 +586,7 @@ impl App {
             ui.toggle_value(&mut self.show_debugger, "Debugger");
             ui.toggle_value(&mut self.show_tape, "Tape");
             ui.toggle_value(&mut self.show_back_buffer, "Back buffer");
+            ui.toggle_value(&mut self.show_sprites, "Sprites");
             ui.toggle_value(&mut self.show_profiler, "Profiler");
         });
     }
@@ -1049,6 +1056,7 @@ impl App {
             self.show_debugger = is_open("debugger");
             self.show_tape = is_open("tape");
             self.show_back_buffer = is_open("back_buffer");
+            self.show_sprites = is_open("sprites");
             self.show_profiler = is_open("profiler");
         }
     }
@@ -1061,6 +1069,7 @@ impl App {
             ("debugger", self.show_debugger),
             ("tape", self.show_tape),
             ("back_buffer", self.show_back_buffer),
+            ("sprites", self.show_sprites),
             ("profiler", self.show_profiler),
         ]
         .into_iter()
@@ -1870,6 +1879,7 @@ impl App {
             ("profiler", self.show_profiler),
             ("tape", self.show_tape),
             ("back_buffer", self.show_back_buffer),
+            ("sprites", self.show_sprites),
         ] {
             if !shown {
                 self.placed.remove(name);
@@ -1984,6 +1994,30 @@ impl App {
                 },
             );
             self.show_tape = open;
+        }
+
+        if self.show_sprites {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("sprites"),
+                self.restore_window(
+                    "sprites",
+                    ViewportBuilder::default().with_title("Sprites"),
+                    [340.0, 200.0],
+                    [720.0, 640.0],
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("sprites", &ctx, [340.0, 200.0], [720.0, 640.0]) {
+                        self.remember_window("sprites", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| sprites::ui(self, ui));
+                },
+            );
+            self.show_sprites = open;
         }
 
         if self.show_back_buffer {

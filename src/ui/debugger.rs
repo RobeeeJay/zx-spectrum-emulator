@@ -36,6 +36,9 @@ const REGISTERS_W: f32 = 350.0;
 const STACK_DEPTH: u16 = 12;
 const STACK_W: f32 = 124.0;
 
+/// How tall the listing is, and so how much of memory is on show.
+const LISTING_H: f32 = 360.0;
+
 /// The list of names, and how far it runs before it scrolls.
 const LABELS_W: f32 = 132.0;
 /// The list of data blocks found.
@@ -342,6 +345,7 @@ fn registers(app: &mut App, ui: &mut egui::Ui) {
             // width the panel is meant to keep to.
             ui.vertical(|ui| {
                 ui.set_max_width(REGISTERS_W);
+                ui.label(RichText::new("Registers").small().color(theme::DIM));
                 registers_lcd(app, ui);
             });
         });
@@ -609,12 +613,15 @@ fn video(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let scale = VIDEO_W / size.x;
-    egui::Frame::new()
-        .fill(theme::CASE_DARK)
-        .inner_margin(egui::Margin::same(VIDEO_BORDER as i8))
-        .show(ui, |ui| {
-            ui.add(egui::Image::new(&texture).fit_to_exact_size(size * scale));
-        });
+    ui.vertical(|ui| {
+        ui.label(RichText::new("Screen").small().color(theme::DIM));
+        egui::Frame::new()
+            .fill(theme::CASE_DARK)
+            .inner_margin(egui::Margin::same(VIDEO_BORDER as i8))
+            .show(ui, |ui| {
+                ui.add(egui::Image::new(&texture).fit_to_exact_size(size * scale));
+            });
+    });
 }
 
 /// Point the memory dump at an address, and say so in its own box.
@@ -881,9 +888,13 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
+    // The listing is a window onto the whole address space, not a list with
+    // ends: rolling the wheel moves it through memory an instruction at a
+    // time, so it can be followed as far as it goes in either direction.
+    let listing_top = ui.cursor().min.y;
     egui::ScrollArea::vertical()
         .id_salt("disasm")
-        .max_height(360.0)
+        .max_height(LISTING_H)
         // A scroll area that shrinks to its contents makes its width depend on
         // what is inside it, which is the other half of the feedback that had
         // the listing shivering.
@@ -959,10 +970,15 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                     // a comment where there is one and stays out of the way
                     // where there is not.
                     let mut comment = app.notes.comment(addr).to_string();
+                    // Multi-line, so a comment long enough to say something
+                    // useful can be read in full rather than trailing off the
+                    // end of a field. A row with nothing in it is still one
+                    // line tall, so the listing keeps its pitch.
                     let resp = ui.add(
-                        egui::TextEdit::singleline(&mut comment)
+                        egui::TextEdit::multiline(&mut comment)
                             .id_salt(("note-comment", addr))
                             .desired_width(COMMENT_W)
+                            .desired_rows(1)
                             .font(egui::TextStyle::Monospace)
                             .text_color(if app.notes.comment_is_auto(addr) {
                                 theme::DIM
@@ -994,6 +1010,50 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
+
+    scroll_through_memory(app, ui, listing_top);
+}
+
+/// Move the listing through memory as the wheel is rolled over it.
+///
+/// A disassembly has no length to scroll within: what is wanted is to travel
+/// through the address space. Backwards means finding an instruction boundary
+/// above the one on show, which is what `sync_start` is for.
+fn scroll_through_memory(app: &mut App, ui: &mut egui::Ui, top: f32) {
+    let area = egui::Rect::from_min_max(
+        egui::pos2(ui.min_rect().left(), top),
+        egui::pos2(ui.min_rect().right(), top + LISTING_H),
+    );
+    let over_it = ui
+        .input(|i| i.pointer.hover_pos())
+        .is_some_and(|p| area.contains(p));
+    if !over_it {
+        return;
+    }
+    let wheel = ui.input(|i| i.smooth_scroll_delta.y);
+    if wheel == 0.0 {
+        return;
+    }
+    // A notch of the wheel is about one line, whichever way it goes.
+    let lines = (wheel / row_height(ui)).round() as i32;
+    if lines == 0 {
+        return;
+    }
+    app.dbg.follow_pc = false;
+    let peek = |a: u16| app.peek(a);
+    let mut addr = app.dbg.view_addr;
+    if lines < 0 {
+        for _ in 0..(-lines) {
+            let insn = disasm::disasm(&peek, addr);
+            addr = addr.wrapping_add(insn.len.max(1) as u16);
+        }
+    } else {
+        for _ in 0..lines {
+            // Back one instruction: the boundary above where we are.
+            addr = disasm::sync_start(&peek, addr.wrapping_sub(1), 4);
+        }
+    }
+    app.dbg.view_addr = addr;
 }
 
 /// Make the guess again, if what it was made from has changed.
