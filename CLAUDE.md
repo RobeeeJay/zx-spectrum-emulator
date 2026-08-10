@@ -97,6 +97,14 @@ socket at once, so it proves nothing on its own: the beeper is told apart by
 hammering the port while writing almost nothing to memory. Watching costs a
 branch on every access, so it only runs while AutoDoc is on.
 
+**Signatures come from the ROM in the machine, not from a table somebody
+typed.** Games copy ROM routines into RAM; the same bytes hash the same
+wherever they land, so a copy is named after the original and said to be one.
+Only the first twelve bytes are hashed, which stays in front of most absolute
+addresses inside a routine. Anything else worth recognising can be added by
+whoever has the code in front of them to check it against — inventing
+signatures that cannot be verified would be worse than having none.
+
 **A guess is marked with `@` and never overwrites a person.** Guesses are kept
 in the same notes file as everything else, written as `@label ; @comment`. A
 later guess replaces an earlier one — by then the program may have unpacked

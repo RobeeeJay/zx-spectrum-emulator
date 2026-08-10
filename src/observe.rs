@@ -148,6 +148,9 @@ pub struct Observer {
     executed: Vec<u64>,
     /// Addresses that have been read but not executed: candidate data.
     read: Vec<u64>,
+    /// Which routine read each 256-byte page, and how often. Per page rather
+    /// than per byte: a table of 65,536 counters would cost more than it says.
+    readers: BTreeMap<(u8, u16), u32>,
 }
 
 impl Observer {
@@ -236,9 +239,66 @@ impl Observer {
 
     /// A byte was read from here without being executed: candidate data.
     pub fn on_read(&mut self, addr: u16) {
-        if self.enabled {
-            set(&mut self.read, addr);
+        if !self.enabled {
+            return;
         }
+        set(&mut self.read, addr);
+        if let Some(entry) = self.stack.last().map(|f| f.entry) {
+            let page = (addr >> 8) as u8;
+            if self.readers.len() < 4096 {
+                *self.readers.entry((page, entry)).or_insert(0) += 1;
+            }
+        }
+    }
+
+    /// Who read a page, most often first.
+    pub fn readers_of(&self, page: u8) -> Vec<u16> {
+        let mut who: Vec<(u16, u32)> = self
+            .readers
+            .iter()
+            .filter(|((p, _), _)| *p == page)
+            .map(|((_, entry), count)| (*entry, *count))
+            .collect();
+        who.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        who.into_iter().map(|(entry, _)| entry).collect()
+    }
+
+    /// The blocks of data found, longest first, each with a guess at what it
+    /// is taken from what the routines that read it went on to do.
+    pub fn blocks(&self, min_length: u16) -> Vec<Block> {
+        self.data_blocks(min_length)
+            .into_iter()
+            .map(|(at, length)| {
+                let readers = self.readers_of((at >> 8) as u8);
+                let kind = self.classify(&readers, length);
+                Block {
+                    at,
+                    length,
+                    kind,
+                    readers,
+                }
+            })
+            .collect()
+    }
+
+    fn classify(&self, readers: &[u16], length: u16) -> DataKind {
+        let reader_stats: Vec<&Observed> = readers
+            .iter()
+            .filter_map(|e| self.routines.get(e))
+            .collect();
+        if reader_stats.iter().any(|r| r.writes.screen > 32) {
+            return DataKind::Graphics;
+        }
+        if reader_stats.iter().any(|r| r.writes.attrs > 32) || length == 768 {
+            return DataKind::Colours;
+        }
+        if reader_stats
+            .iter()
+            .any(|r| r.writes.other > 256 && r.longest_loop() > 8)
+        {
+            return DataKind::Packed;
+        }
+        DataKind::Unknown
     }
 
     /// A byte was written here by whatever routine is running.
@@ -372,6 +432,41 @@ impl Observer {
             }
         }
     }
+}
+
+/// What a block of data appears to be, judged by who read it and what they
+/// did with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataKind {
+    /// Read by something that then wrote to the display file.
+    Graphics,
+    /// The size of an attribute map, or read by something colouring.
+    Colours,
+    /// Read by something that shifts bits about: packed.
+    Packed,
+    /// Read, but nothing about how gives it away.
+    Unknown,
+}
+
+impl DataKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            DataKind::Graphics => "graphics",
+            DataKind::Colours => "colours",
+            DataKind::Packed => "packed",
+            DataKind::Unknown => "data",
+        }
+    }
+}
+
+/// A run of bytes that was read but never executed.
+#[derive(Clone, Debug)]
+pub struct Block {
+    pub at: u16,
+    pub length: u16,
+    pub kind: DataKind,
+    /// The routines that read it, most first.
+    pub readers: Vec<u16>,
 }
 
 /// The registers on the way into a routine: what it was handed.

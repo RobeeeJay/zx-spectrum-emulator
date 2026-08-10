@@ -92,6 +92,80 @@ pub const ROM_ROUTINES: &[(u16, &str, &str)] = &[
     (0x3D00, "rom_char_set", "ROM: the character set"),
 ];
 
+/// Recognising a routine by its bytes rather than by what it looks like it
+/// does.
+///
+/// The signatures are not a table written here: they are taken from the ROM
+/// the machine is running, which is the one body of Spectrum code that is
+/// known for certain. Games copy ROM routines into RAM all the time — the
+/// print routine, the keyboard scan — and a copy has the same bytes wherever
+/// it ends up. Anything else worth recognising can be added to the table by
+/// whoever has the code in front of them to check it against.
+pub struct Signatures {
+    /// Fingerprint of the first bytes of each known routine, to its name.
+    by_hash: BTreeMap<u64, (u16, &'static str, &'static str)>,
+}
+
+/// How many bytes of a routine are hashed. Enough to be distinctive, short
+/// enough that a routine which has been relocated still matches: absolute
+/// addresses inside it would differ, and this stays in front of most of them.
+const SIGNATURE_LEN: u16 = 12;
+
+impl Signatures {
+    /// Build the table from a ROM image, if there is one to read.
+    pub fn from_rom(rom: &[u8]) -> Signatures {
+        let mut by_hash = BTreeMap::new();
+        for (addr, label, comment) in ROM_ROUTINES {
+            let at = *addr as usize;
+            if at + SIGNATURE_LEN as usize > rom.len() {
+                continue;
+            }
+            let hash = fingerprint(|i| rom[at + i as usize]);
+            by_hash.insert(hash, (*addr, *label, *comment));
+        }
+        Signatures { by_hash }
+    }
+
+    pub fn empty() -> Signatures {
+        Signatures {
+            by_hash: BTreeMap::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_hash.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_hash.is_empty()
+    }
+
+    /// What the code at this address is, if it is something known.
+    pub fn identify<F: Fn(u16) -> u8>(&self, peek: &F, at: u16) -> Option<(&'static str, String)> {
+        let hash = fingerprint(|i| peek(at.wrapping_add(i)));
+        let (from, label, comment) = self.by_hash.get(&hash)?;
+        if at == *from {
+            return Some((label, (*comment).to_string()));
+        }
+        Some((
+            label,
+            format!("{comment} — the same code as ${from:04X}, copied here"),
+        ))
+    }
+}
+
+/// A hash of the first bytes of a routine. Any stable hash would do; this one
+/// is written out so the numbers do not change when the standard library's
+/// hasher does, which would silently invalidate anything saved.
+fn fingerprint(byte: impl Fn(u16) -> u8) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for i in 0..SIGNATURE_LEN {
+        hash ^= byte(i) as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 /// What the analysis produced: a name for a routine, and a note on the line.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Doc {
@@ -144,6 +218,11 @@ pub struct Features {
     /// The routine reads the refresh register, or the ROM's own bytes.
     pub reads_r: bool,
     pub reads_rom: bool,
+    /// Works out where on the screen to write, in one of the two ways the
+    /// display file's layout forces on anybody who tries.
+    pub next_scanline: bool,
+    pub third_crossing: bool,
+    pub attribute_address: bool,
 }
 
 impl Features {
@@ -172,6 +251,11 @@ impl Features {
 /// naming it would put a label on something that is not an entry point. Only
 /// the addresses something calls or jumps to are named.
 pub fn analyse<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> Doc {
+    analyse_with(peek, entries, &Signatures::empty())
+}
+
+/// The same, with a table of known code to check against first.
+pub fn analyse_with<F: Fn(u16) -> u8>(peek: &F, entries: &[u16], known: &Signatures) -> Doc {
     let mut doc = Doc::default();
     let routines = walk(peek, entries);
 
@@ -180,6 +264,13 @@ pub fn analyse<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> Doc {
         if let Some((_, label, comment)) = ROM_ROUTINES.iter().find(|(a, _, _)| a == entry) {
             doc.labels.insert(*entry, (*label).to_string());
             doc.comments.insert(*entry, (*comment).to_string());
+            continue;
+        }
+        // Code that matches something known is named from that, which beats
+        // any amount of reading: it is the same bytes.
+        if let Some((label, comment)) = known.identify(peek, *entry) {
+            doc.labels.insert(*entry, format!("{label}_{entry:04X}"));
+            doc.comments.insert(*entry, comment);
             continue;
         }
         let features = read_routine(peek, *entry);
@@ -300,6 +391,29 @@ pub fn read_routine<F: Fn(u16) -> u8>(peek: &F, entry: u16) -> Features {
             f.masked_writes += 1;
         }
 
+        // The display file's layout is peculiar enough that the arithmetic for
+        // getting about it is unmistakable, and is the firmest evidence there
+        // is that a routine draws.
+        //
+        // Down one pixel row is INC H, because the low three bits of H are the
+        // row within the character. That overflows every eight rows, and the
+        // fix-up — ADD A,$20 on L, and the H correction — is the second half
+        // of the idiom. The attribute address for the same place is worked out
+        // by folding H down and adding $58.
+        if text == "INC H" || text == "DEC H" {
+            f.next_scanline = true;
+        }
+        if text.starts_with("AND $07")
+            || text.starts_with("AND $18")
+            || text == "ADD A,$20"
+            || text == "SUB $20"
+        {
+            f.third_crossing = true;
+        }
+        if text.contains("$58") && (text.starts_with("ADD") || text.starts_with("OR ")) {
+            f.attribute_address = true;
+        }
+
         f.text.push(text.clone());
 
         if (text.starts_with("RET") && !text.contains(',')) || text.starts_with("JP $") {
@@ -410,6 +524,33 @@ pub fn describe(f: &Features) -> (String, String) {
         return (
             "draw_sprite".into(),
             "Merges bytes into memory with XOR or OR, as a sprite routine does".into(),
+        );
+    }
+
+    // Screen-address arithmetic: a routine that walks the display file the way
+    // the display file has to be walked is drawing on it, whatever else it
+    // does, and this holds even when the addresses are worked out rather than
+    // loaded as constants — which is most of the time.
+    if f.next_scanline && f.third_crossing && f.indirect_writes > 0 {
+        return (
+            "draw_to_screen".into(),
+            "Steps down the display file a pixel row at a time, with the fix-up \
+             for crossing a character boundary: drawing"
+                .into(),
+        );
+    }
+    if f.attribute_address && f.indirect_writes > 0 {
+        return (
+            "set_colours".into(),
+            "Works out an attribute address from a screen one: colouring what \
+             something has drawn"
+                .into(),
+        );
+    }
+    if f.next_scanline && f.indirect_writes > 0 && f.touches(&SCREEN) {
+        return (
+            "draw_to_screen".into(),
+            "Walks down the display file a pixel row at a time".into(),
         );
     }
 

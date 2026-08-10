@@ -472,3 +472,39 @@ fn clicking_a_label_takes_the_listing_to_it() {
         "and it should stay there rather than snapping back to PC"
     );
 }
+
+/// Throwing away every label and comment is destructive — it takes the file
+/// with it — so one click asks rather than does.
+#[test]
+fn clearing_the_notes_asks_first() {
+    let mut app = app();
+    app.notes.set_label(0x8000, "mine");
+    app.notes.set_comment(0x9000, "my own words");
+
+    let mut h = harness(app);
+    h.get_by_label("Clear all…").click();
+    h.run_steps(2);
+
+    assert_eq!(
+        h.state().notes.len(),
+        2,
+        "the notes went without being asked about"
+    );
+
+    // Saying no keeps them.
+    h.get_by_label("Keep").click();
+    h.run_steps(2);
+    assert_eq!(h.state().notes.len(), 2, "answering Keep threw them away");
+
+    // Saying yes takes the lot.
+    h.get_by_label("Clear all…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(2);
+    assert_eq!(h.state().notes.len(), 0, "answering Delete kept them");
+    assert!(
+        h.state().status.contains("Deleted 2"),
+        "{}",
+        h.state().status
+    );
+}

@@ -239,3 +239,20 @@ fn nothing_in_the_debugger_falls_off_the_right_hand_edge() {
         debugger::WINDOW_W
     );
 }
+
+/// The panels above the listing have to fit across the window between them.
+///
+/// The guard above cannot see this: the harness has no screen texture, so the
+/// picture beside the registers draws nothing and takes no room. Adding a
+/// panel is exactly when the row overflows, and exactly when nobody notices.
+#[test]
+fn the_row_of_panels_fits_across_the_window() {
+    use zx_rustrum::ui::debugger;
+
+    let row = debugger::top_row_width();
+    assert!(
+        row <= debugger::WINDOW_W,
+        "the panels add up to {row} across a window {} wide",
+        debugger::WINDOW_W
+    );
+}

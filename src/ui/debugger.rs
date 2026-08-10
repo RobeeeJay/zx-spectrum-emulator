@@ -30,19 +30,21 @@ const DUMP_W: f32 = 330.0;
 
 /// How wide the register panel is allowed to be, so what sits beside it has
 /// somewhere to be.
-const REGISTERS_W: f32 = 420.0;
+const REGISTERS_W: f32 = 350.0;
 
 /// How many words of the stack are shown, and how wide that column is.
 const STACK_DEPTH: u16 = 12;
-const STACK_W: f32 = 130.0;
+const STACK_W: f32 = 124.0;
 
 /// The list of names, and how far it runs before it scrolls.
-const LABELS_W: f32 = 150.0;
+const LABELS_W: f32 = 132.0;
+/// The list of data blocks found.
+const DATA_W: f32 = 132.0;
 const LABELS_H: f32 = 150.0;
 
 /// The picture beside the registers: wide enough to make out what is being
 /// drawn, with a margin of case around it.
-const VIDEO_W: f32 = 176.0;
+const VIDEO_W: f32 = 150.0;
 const VIDEO_BORDER: f32 = 5.0;
 
 /// One register, and the address it would take the dump to.
@@ -53,6 +55,20 @@ fn pair(name: &str, value: u16) -> (String, Option<u16>) {
 /// How much of the window the listing takes; the registers, breakpoints and
 /// memory dump have the rest.
 const LISTING_SHARE: f32 = 0.62;
+
+/// How wide the row of panels above the listing comes out: the panels
+/// themselves, the frame around each, and the gaps between them.
+///
+/// The window is a fixed width with no horizontal scrolling, so a row that
+/// adds up to more than it simply loses its right-hand end — which is how the
+/// stack and the memory dump disappeared once before.
+pub fn top_row_width() -> f32 {
+    const PANELS: f32 = REGISTERS_W + STACK_W + LABELS_W + DATA_W + VIDEO_W;
+    /// Each panel sits in a frame with a margin either side, and there is a
+    /// gap between one panel and the next.
+    const FURNITURE: f32 = 5.0 * 14.0 + 4.0 * 8.0;
+    PANELS + FURNITURE
+}
 
 /// One row of either pane. Both are laid out to the same height, so the
 /// listing and the memory dump read as one instrument rather than two.
@@ -70,6 +86,8 @@ pub struct DebuggerState {
     pub doc: crate::autodoc::Doc,
     /// What the guess was made from, so it is not made again every frame.
     doc_from: Option<(u16, u16)>,
+    /// Whether the "clear everything" button is waiting to be confirmed.
+    pub confirm_clear: bool,
     pub view_addr: u16,
     pub lines: usize,
     pub goto_text: String,
@@ -86,6 +104,7 @@ impl Default for DebuggerState {
             autodoc: false,
             doc: crate::autodoc::Doc::default(),
             doc_from: None,
+            confirm_clear: false,
             view_addr: 0,
             lines: 24,
             goto_text: String::new(),
@@ -328,6 +347,7 @@ fn registers(app: &mut App, ui: &mut egui::Ui) {
         });
         stack(app, ui);
         labels(app, ui);
+        data_blocks(app, ui);
         video(app, ui);
     });
     // The clock and the memory map are lines rather than columns, and putting
@@ -438,8 +458,143 @@ fn labels(app: &mut App, ui: &mut egui::Ui) {
                 app.dbg.view_addr = addr;
                 app.dbg.follow_pc = false;
             }
+
+            // Throwing the lot away takes the file with it, so it is asked
+            // about rather than done on one click.
+            ui.separator();
+            let kept = app.notes.len();
+            if app.dbg.confirm_clear {
+                ui.label(
+                    RichText::new(format!("Delete all {kept}?"))
+                        .small()
+                        .color(theme::RED),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        app.notes.clear();
+                        app.dbg.doc = crate::autodoc::Doc::default();
+                        app.dbg.doc_from = None;
+                        app.dbg.confirm_clear = false;
+                        if let Err(e) = app.notes.save_if_dirty() {
+                            app.set_status(format!("Could not save notes: {e}"), true);
+                        } else {
+                            app.set_status(format!("Deleted {kept} labels and comments"), false);
+                        }
+                    }
+                    if ui.button("Keep").clicked() {
+                        app.dbg.confirm_clear = false;
+                    }
+                });
+            } else if ui
+                .add_enabled(kept > 0, egui::Button::new("Clear all…"))
+                .on_hover_text(
+                    "Delete every label and comment, the ones you wrote as \
+                     well as AutoDoc's, and the file they are kept in.",
+                )
+                .clicked()
+            {
+                app.dbg.confirm_clear = true;
+            }
         });
     });
+}
+
+/// The blocks of memory that were read but never run: data, with a guess at
+/// what kind and — for the graphics — a picture of it.
+///
+/// A picture settles it. A block that draws as recognisable sprites is sprite
+/// data whatever any rule says, and one that draws as noise is not.
+fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
+    let blocks = app.spec.bus.observer.blocks(64);
+    theme::lcd().show(ui, |ui| {
+        ui.vertical(|ui| {
+            ui.set_min_width(DATA_W);
+            ui.set_max_width(DATA_W);
+            ui.label(RichText::new("Data").small().color(theme::DIM));
+            if blocks.is_empty() {
+                ui.label(
+                    RichText::new(if app.dbg.autodoc {
+                        "nothing read yet"
+                    } else {
+                        "AutoDoc is off"
+                    })
+                    .monospace()
+                    .color(theme::DIM),
+                );
+                return;
+            }
+            let mut go_to = None;
+            egui::ScrollArea::vertical()
+                .id_salt("datablocks")
+                .max_height(LABELS_H)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for block in blocks.iter().take(24) {
+                        let text =
+                            format!("{:04X} {:5} {}", block.at, block.length, block.kind.label());
+                        let row = ui.add(
+                            egui::Label::new(RichText::new(text).monospace().color(theme::LCD_FG))
+                                .wrap_mode(egui::TextWrapMode::Truncate)
+                                .sense(egui::Sense::click()),
+                        );
+                        if row.clicked() {
+                            go_to = Some(block.at);
+                        }
+                        let read_by = match block.readers.first() {
+                            Some(entry) => format!("Read by the routine at ${entry:04X}"),
+                            None => "Nothing has read it".to_string(),
+                        };
+                        row.on_hover_ui(|ui| {
+                            ui.label(read_by);
+                            if block.kind == crate::observe::DataKind::Graphics {
+                                sprites(app, ui, block.at, block.length);
+                            }
+                        });
+                    }
+                });
+            if let Some(addr) = go_to {
+                show_in_dump(app, addr);
+            }
+        });
+    });
+}
+
+/// Draw a block of memory as the Spectrum would if it were graphics: eight
+/// bytes to a character cell, most significant bit on the left.
+fn sprites(app: &App, ui: &mut egui::Ui, at: u16, length: u16) {
+    const CELL: usize = 8;
+    const ACROSS: usize = 16;
+    let cells = (length as usize / CELL).min(ACROSS * 8);
+    if cells == 0 {
+        return;
+    }
+    let rows = cells.div_ceil(ACROSS);
+    let scale = 2.0;
+    let size = egui::vec2(
+        ACROSS as f32 * CELL as f32 * scale,
+        rows as f32 * CELL as f32 * scale,
+    );
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, Color32::BLACK);
+    for cell in 0..cells {
+        let (cx, cy) = (cell % ACROSS, cell / ACROSS);
+        for row in 0..CELL {
+            let byte = app.peek(at.wrapping_add((cell * CELL + row) as u16));
+            for bit in 0..8 {
+                if byte & (0x80 >> bit) == 0 {
+                    continue;
+                }
+                let x = rect.left() + (cx * CELL + bit) as f32 * scale;
+                let y = rect.top() + (cy * CELL + row) as f32 * scale;
+                painter.rect_filled(
+                    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(scale, scale)),
+                    0.0,
+                    Color32::WHITE,
+                );
+            }
+        }
+    }
 }
 
 /// A small picture of what the machine is putting out, so it is clear what the
@@ -871,8 +1026,14 @@ fn refresh_autodoc(app: &mut App) {
     if let Some(rzx) = &app.rzx {
         entries.extend(rzx.visited.iter().copied());
     }
+    // Built from whatever ROM the machine is running: a game that has copied
+    // the print routine into RAM is then recognised wherever it put it.
+    let known = match app.roms.for_model(app.spec.bus.model) {
+        Some(rom) => crate::autodoc::Signatures::from_rom(rom),
+        None => crate::autodoc::Signatures::empty(),
+    };
     let peek = |a: u16| app.peek(a);
-    let doc = crate::autodoc::analyse(&peek, &entries);
+    let doc = crate::autodoc::analyse_with(&peek, &entries, &known);
 
     // What was measured outranks what was read: a routine that wrote 6144
     // bytes into the display file did that, whatever its instructions look

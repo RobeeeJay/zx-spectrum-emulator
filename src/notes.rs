@@ -152,6 +152,21 @@ impl Notes {
         });
     }
 
+    /// How many addresses have anything written against them.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Throw the lot away. The file goes with them when the notes are next
+    /// written, which is what makes this worth a confirmation.
+    pub fn clear(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        self.entries.clear();
+        self.dirty = true;
+    }
+
     fn edit(&mut self, addr: u16, change: impl FnOnce(&mut Note)) {
         let note = self.entries.entry(addr).or_default();
         let before = note.clone();

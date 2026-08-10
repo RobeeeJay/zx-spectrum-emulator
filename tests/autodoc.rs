@@ -267,3 +267,102 @@ fn reading_nonsense_terminates() {
     let doc = analyse(&peek, &[0x8000]);
     assert!(!doc.is_empty(), "it should still have said something");
 }
+
+/// The display file's layout forces a particular piece of arithmetic on
+/// anybody walking it, and that arithmetic is the firmest static evidence
+/// there is that a routine draws — firmer than any constant, because the
+/// addresses are usually worked out rather than loaded.
+#[test]
+fn screen_address_arithmetic_is_recognised() {
+    let (label, comment) = routine(&[
+        0x7E, // LD A,(HL)
+        0x77, // LD (HL),A     — writes through HL
+        0x24, // INC H         — down one pixel row
+        0x7C, // LD A,H
+        0xE6, 0x07, // AND $07 — has it crossed a character boundary?
+        0x20, 0xF7, // JR NZ,-9
+        0x7D, // LD A,L
+        0xC6, 0x20, // ADD A,$20 — the fix-up
+        0x6F, // LD L,A
+        0xC9,
+    ]);
+    assert_eq!(label, "draw_to_screen", "said {comment:?}");
+    assert!(
+        comment.contains("character boundary"),
+        "the comment should say what the evidence was: {comment:?}"
+    );
+}
+
+/// And the attribute address worked out from a screen one is colouring.
+#[test]
+fn attribute_address_arithmetic_is_recognised() {
+    let (label, _) = routine(&[
+        0x7C, // LD A,H
+        0x1F, // RRA
+        0x1F, // RRA
+        0x1F, // RRA
+        0xE6, 0x03, // AND $03
+        0xF6, 0x58, // OR $58 — the attribute file
+        0x67, // LD H,A
+        0x77, // LD (HL),A
+        0xC9,
+    ]);
+    assert_eq!(label, "set_colours");
+}
+
+/// Code is recognised by its bytes wherever it is, which is how a ROM routine
+/// copied into RAM gets named.
+#[test]
+fn code_copied_out_of_the_rom_is_recognised_where_it_ends_up() {
+    // A stand-in ROM with something distinctive at $0D6B, which the table
+    // calls CLS.
+    let mut rom = vec![0u8; 0x4000];
+    let cls = [
+        0x21, 0x00, 0x40, 0x11, 0x01, 0x40, 0x01, 0xFF, 0x17, 0x36, 0x00, 0xED,
+    ];
+    rom[0x0D6B..0x0D6B + cls.len()].copy_from_slice(&cls);
+
+    let signatures = zx_rustrum::autodoc::Signatures::from_rom(&rom);
+    assert!(!signatures.is_empty(), "no signatures were taken");
+
+    // The same code, sitting in RAM at $9000, reached by a call.
+    let mut memory = vec![0u8; 0x10000];
+    memory[..rom.len()].copy_from_slice(&rom);
+    memory[0x8000..0x8004].copy_from_slice(&[0xCD, 0x00, 0x90, 0xC9]);
+    memory[0x9000..0x9000 + cls.len()].copy_from_slice(&cls);
+    memory[0x9000 + cls.len()] = 0xC9;
+
+    let peek = |a: u16| memory[a as usize];
+    let doc = zx_rustrum::autodoc::analyse_with(&peek, &[0x8000], &signatures);
+
+    assert_eq!(
+        doc.label(0x9000),
+        "rom_cls_9000",
+        "the copy was not recognised: {:?}",
+        doc.label(0x9000)
+    );
+    assert!(
+        doc.comment(0x9000).contains("copied here"),
+        "and it should say it is a copy: {:?}",
+        doc.comment(0x9000)
+    );
+}
+
+/// Something that is not a copy is not claimed to be one.
+#[test]
+fn code_that_matches_nothing_is_not_claimed_to() {
+    let rom = vec![0u8; 0x4000];
+    let signatures = zx_rustrum::autodoc::Signatures::from_rom(&rom);
+
+    let mut memory = vec![0u8; 0x10000];
+    memory[0x8000..0x8004].copy_from_slice(&[0xCD, 0x00, 0x90, 0xC9]);
+    memory[0x9000..0x9006].copy_from_slice(&[0x3E, 0x01, 0x86, 0x27, 0x77, 0xC9]);
+    let peek = |a: u16| memory[a as usize];
+    let doc = zx_rustrum::autodoc::analyse_with(&peek, &[0x8000], &signatures);
+
+    assert_eq!(
+        doc.label(0x9000),
+        "update_score_9000",
+        "it should have fallen through to the rules, not matched a signature"
+    );
+}
