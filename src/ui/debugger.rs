@@ -847,6 +847,9 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
 /// sixty times a second for no reason: it is redone when the listing moves or
 /// the machine stops somewhere new.
 fn refresh_autodoc(app: &mut App) {
+    // Watching costs something on every memory access, so it is only done
+    // while there is something reading the results.
+    app.spec.bus.observer.enabled = app.dbg.autodoc;
     if !app.dbg.autodoc {
         if !app.dbg.doc.is_empty() {
             app.dbg.doc = crate::autodoc::Doc::default();
@@ -870,6 +873,19 @@ fn refresh_autodoc(app: &mut App) {
     }
     let peek = |a: u16| app.peek(a);
     let doc = crate::autodoc::analyse(&peek, &entries);
+
+    // What was measured outranks what was read: a routine that wrote 6144
+    // bytes into the display file did that, whatever its instructions look
+    // like. Only routines the machine has actually been through have
+    // measurements, so the rest keep their static guess.
+    let mut doc = doc;
+    let frames = app.spec.bus.observer.frames as u32;
+    for (entry, seen) in &app.spec.bus.observer.routines {
+        if let Some((label, comment)) = crate::autodoc::describe_measured(seen, frames) {
+            doc.labels.insert(*entry, format!("{label}_{entry:04X}"));
+            doc.comments.insert(*entry, comment);
+        }
+    }
 
     // Into the notes, where they are kept with the rest. A guess replaces an
     // earlier guess but never a line the user wrote.

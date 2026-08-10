@@ -285,29 +285,21 @@ impl Profiler {
         }
         self.last_t = now;
 
-        // A call pushes the address of the next instruction. Interrupts do the
-        // same thing, so they are profiled as calls to their handler.
-        if sp_after == sp_before.wrapping_sub(2) {
-            let pushed = peek(sp_after);
-            let plausible_return = pushed > pc_before && pushed.wrapping_sub(pc_before) <= 4;
-            if plausible_return && pc_after != pushed {
+        // Calls and returns are spotted from what the CPU did; the observer
+        // works the same way, so the two share one classifier.
+        match crate::flow::classify(pc_before, sp_before, pc_after, sp_after, peek) {
+            crate::flow::Flow::Call { entry, sp } => {
                 if self.stack.len() < self.max_depth {
                     self.stack.push(Frame {
-                        entry: pc_after,
-                        sp: sp_after,
+                        entry,
+                        sp,
                         start_t: now,
                         child_t: 0,
                     });
-                    self.stats(pc_after).calls += 1;
+                    self.stats(entry).calls += 1;
                 }
-                return;
             }
-        }
-
-        // A return pops the address it jumps to.
-        if sp_after == sp_before.wrapping_add(2) {
-            let popped = peek(sp_before);
-            if popped == pc_after {
+            crate::flow::Flow::Return { sp_before, .. } => {
                 // Unwind any frames the program abandoned (a routine that
                 // dropped its own return address, say) so the stack stays in
                 // step with the machine's.
@@ -324,6 +316,7 @@ impl Profiler {
                     }
                 }
             }
+            crate::flow::Flow::Straight => {}
         }
     }
 }

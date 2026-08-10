@@ -86,6 +86,17 @@ hedges in the wording when the evidence is thin ("possibly a protection
 check"), and a rule that always has an answer would be worse than none, so code
 with no tell is left unnamed.
 
+**What a routine did beats what its code looks like.** `src/observe.rs`
+attributes every write, port access, instruction and loop iteration to the
+routine on top of the call stack, which `src/flow.rs` works out from what the
+CPU did rather than by decoding opcodes (the profiler uses the same
+classifier). AutoDoc prefers those measurements to its static rules and quotes
+the numbers — "writes 6144 bytes into the display file per call, every frame" —
+so the user can check the claim. Port $FE is the border, the beeper and the MIC
+socket at once, so it proves nothing on its own: the beeper is told apart by
+hammering the port while writing almost nothing to memory. Watching costs a
+branch on every access, so it only runs while AutoDoc is on.
+
 **A guess is marked with `@` and never overwrites a person.** Guesses are kept
 in the same notes file as everything else, written as `@label ; @comment`. A
 later guess replaces an earlier one — by then the program may have unpacked

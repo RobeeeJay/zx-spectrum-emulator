@@ -459,6 +459,128 @@ pub fn describe(f: &Features) -> (String, String) {
     ("routine".into(), String::new())
 }
 
+/// What a routine was measured doing, which beats anything read off its
+/// instructions. Returns nothing when the measurements say nothing much, so
+/// the static rules still get their turn.
+///
+/// The numbers are quoted in the comment rather than summarised away: "writes
+/// 6144 bytes to the display file, once a frame" is a fact the user can check,
+/// where "screen blit" is only a claim.
+pub fn describe_measured(seen: &crate::observe::Observed, frames: u32) -> Option<(String, String)> {
+    let calls = seen.calls.max(1);
+    let per_call = |n: u32| n / calls;
+    let often = seen.every_frame(frames);
+    let rhythm = if often {
+        ", every frame"
+    } else if seen.calls > 1 {
+        ""
+    } else {
+        ", once"
+    };
+
+    // Input and sound are named by the ports they touched, which is not a
+    // guess at all.
+    if seen.ports_in.contains(&0x1F) {
+        return Some((
+            "read_joystick".into(),
+            format!("Reads the Kempston joystick on port $1F{rhythm}"),
+        ));
+    }
+    if seen.ports_in.iter().any(|p| p & 0x00FF == 0xFE) {
+        return Some((
+            "read_keys".into(),
+            format!("Reads the keyboard on port $FE{rhythm}"),
+        ));
+    }
+    if seen.ports_out.iter().any(|p| *p == 0xFFFD || *p == 0xBFFD) {
+        return Some((
+            "play_sound".into(),
+            format!("Writes to the AY sound chip{rhythm}"),
+        ));
+    }
+    // The screen, by how much of it was written and where.
+    let screen = per_call(seen.writes.screen);
+    let attrs = per_call(seen.writes.attrs);
+
+    // Port $FE is the border, the beeper and the MIC socket at once, so the
+    // port alone proves nothing. A beeper routine hammers it and writes almost
+    // nothing to memory; a routine that sets the border while colouring the
+    // screen does the opposite.
+    let hammers_fe = seen.ports_out.iter().any(|p| p & 0x00FF == 0xFE)
+        && per_call(seen.port_writes) > 30
+        && per_call(seen.writes.total()) < 16;
+    if hammers_fe {
+        return Some((
+            "play_sound".into(),
+            format!(
+                "Writes to port $FE {} times a call and barely touches memory: the beeper{rhythm}",
+                per_call(seen.port_writes)
+            ),
+        ));
+    }
+    if screen >= 6000 {
+        return Some((
+            "blit_screen".into(),
+            format!("Writes {screen} bytes into the display file per call{rhythm}: a whole screen"),
+        ));
+    }
+    if attrs >= 700 {
+        return Some((
+            "colour_screen".into(),
+            format!("Writes {attrs} bytes into the attribute file per call{rhythm}"),
+        ));
+    }
+    if screen > 0 && attrs > 0 {
+        return Some((
+            "draw_with_colour".into(),
+            format!("Writes {screen} bytes of pixels and {attrs} of attributes per call{rhythm}"),
+        ));
+    }
+    if screen > 0 {
+        let rows = seen.longest_loop();
+        let shape = match rows {
+            7..=9 => " — eight rows, so a character or an eight-pixel sprite",
+            15..=17 => " — sixteen rows",
+            21..=24 => " — a character row across the screen",
+            30..=33 => " — thirty-two across, a full row of cells",
+            190..=193 => " — one pass down every pixel row of the screen",
+            _ => "",
+        };
+        return Some((
+            "draw_to_screen".into(),
+            format!("Writes {screen} bytes into the display file per call{rhythm}{shape}"),
+        ));
+    }
+    if attrs > 0 {
+        return Some((
+            "set_colours".into(),
+            format!("Writes {attrs} attribute bytes per call{rhythm}"),
+        ));
+    }
+
+    // Something that only ever pokes a byte or two in the same place is a
+    // variable being kept, which is worth saying even without knowing which.
+    if let Some((low, high)) = seen.wrote_between {
+        if high.wrapping_sub(low) <= 3 && seen.writes.other > 0 && often {
+            return Some((
+                "update_variable".into(),
+                format!("Writes only to ${low:04X}..${high:04X}{rhythm}: keeping a value"),
+            ));
+        }
+    }
+
+    if often && seen.writes.other > 200 {
+        return Some((
+            "game_state".into(),
+            format!(
+                "Writes {} bytes a call outside the screen{rhythm}",
+                per_call(seen.writes.other)
+            ),
+        ));
+    }
+    None
+}
+
 /// Notes against particular lines, where a single instruction says something
 /// on its own.
 fn annotate_lines<F: Fn(u16) -> u8>(peek: &F, entry: u16, doc: &mut Doc) {

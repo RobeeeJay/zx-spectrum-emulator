@@ -1,0 +1,392 @@
+//! What each routine actually did, measured while it ran.
+//!
+//! Reading the code can only say what a routine might do. This watches what it
+//! does: which parts of memory it writes to and how much, which ports it
+//! touches, how often it is called and by whom, what its registers held on the
+//! way in, and how many times its loops went round. A routine that writes 6144
+//! bytes into the display file once a frame is a screen blit whatever its
+//! instructions look like.
+//!
+//! Everything here is attributed to the innermost routine on the call stack,
+//! which is worked out from what the CPU did — see [`crate::flow`].
+
+use std::collections::BTreeMap;
+
+use crate::flow::{classify, Flow};
+
+/// Where a write landed. The Spectrum's memory map makes these worth counting
+/// separately: they are the difference between drawing, colouring and thinking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Writes {
+    /// The display file, $4000-$57FF.
+    pub screen: u32,
+    /// The attribute file, $5800-$5AFF.
+    pub attrs: u32,
+    /// Anywhere else in RAM.
+    pub other: u32,
+}
+
+impl Writes {
+    pub fn total(&self) -> u32 {
+        self.screen + self.attrs + self.other
+    }
+
+    fn add(&mut self, addr: u16) {
+        match addr {
+            0x4000..=0x57FF => self.screen += 1,
+            0x5800..=0x5AFF => self.attrs += 1,
+            _ => self.other += 1,
+        }
+    }
+}
+
+/// The range a register was seen to hold on the way into a routine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Seen {
+    pub low: u16,
+    pub high: u16,
+}
+
+impl Seen {
+    fn note(&mut self, value: u16) {
+        self.low = self.low.min(value);
+        self.high = self.high.max(value);
+    }
+
+    /// Whether it was the same every time, which makes it a constant rather
+    /// than an argument.
+    pub fn constant(&self) -> bool {
+        self.low == self.high
+    }
+}
+
+impl Default for Seen {
+    fn default() -> Self {
+        Seen {
+            low: u16::MAX,
+            high: 0,
+        }
+    }
+}
+
+/// What one routine was seen to do.
+#[derive(Clone, Debug, Default)]
+pub struct Observed {
+    pub entry: u16,
+    pub calls: u32,
+    /// Instructions run inside it, its callees excluded.
+    pub instructions: u64,
+    pub writes: Writes,
+    /// The lowest and highest address it wrote to.
+    pub wrote_between: Option<(u16, u16)>,
+    pub ports_in: Vec<u16>,
+    pub ports_out: Vec<u16>,
+    /// How many times, which is what tells a beeper routine hammering port
+    /// $FE from a routine setting the border once.
+    pub port_reads: u32,
+    pub port_writes: u32,
+    /// What its registers held on the way in.
+    pub entry_af: Seen,
+    pub entry_bc: Seen,
+    pub entry_de: Seen,
+    pub entry_hl: Seen,
+    /// The most times round any one loop in it, by the address jumped back to.
+    pub loops: BTreeMap<u16, u32>,
+    /// Deepest it was seen nested, which spots recursion.
+    pub max_depth: u32,
+    /// Frames in which it ran at least once.
+    pub frames: u32,
+    /// The last frame it was seen in, so `frames` counts frames not calls.
+    last_frame: u64,
+}
+
+impl Observed {
+    /// The most times round its longest loop. On this machine the number is
+    /// diagnostic: 192 is the pixel rows of the screen, 24 or 32 the
+    /// characters across or down, 8 the rows of one character.
+    pub fn longest_loop(&self) -> u32 {
+        self.loops.values().copied().max().unwrap_or(0)
+    }
+
+    /// Whether it runs about once per frame, which is what the work of a game
+    /// looks like as against its setting up.
+    pub fn every_frame(&self, frames_seen: u32) -> bool {
+        frames_seen > 4 && self.frames * 4 >= frames_seen * 3
+    }
+}
+
+/// One entry in the call graph.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Edge {
+    pub calls: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Frame {
+    entry: u16,
+    sp: u16,
+    /// Instructions run in this frame, its callees excluded.
+    instructions: u64,
+}
+
+/// The observer itself.
+#[derive(Clone, Debug, Default)]
+pub struct Observer {
+    pub enabled: bool,
+    stack: Vec<Frame>,
+    pub routines: BTreeMap<u16, Observed>,
+    /// Who called whom, and how often.
+    pub edges: BTreeMap<(u16, u16), Edge>,
+    /// Frames watched, so "runs every frame" means something.
+    pub frames: u64,
+    /// The back-jump being counted at the moment, and how far round it is.
+    loop_at: Option<(u16, u32)>,
+    /// How deep to follow before giving up on a runaway stack.
+    max_depth: usize,
+    /// Addresses that have been executed: what is code, as against what is
+    /// only read. One bit each, so the whole address space costs 8K.
+    executed: Vec<u64>,
+    /// Addresses that have been read but not executed: candidate data.
+    read: Vec<u64>,
+}
+
+impl Observer {
+    pub fn new() -> Observer {
+        Observer {
+            max_depth: 64,
+            executed: vec![0; 1024],
+            read: vec![0; 1024],
+            ..Default::default()
+        }
+    }
+
+    pub fn clear(&mut self) {
+        let enabled = self.enabled;
+        *self = Observer::new();
+        self.enabled = enabled;
+    }
+
+    /// The routine the machine is in at the moment, if any.
+    pub fn innermost(&self) -> Option<u16> {
+        self.stack.last().map(|f| f.entry)
+    }
+
+    pub fn depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    /// Note the end of a frame, so what runs every frame can be told from what
+    /// ran once.
+    pub fn end_frame(&mut self) {
+        if self.enabled {
+            self.frames += 1;
+        }
+    }
+
+    pub fn was_executed(&self, addr: u16) -> bool {
+        bit(&self.executed, addr)
+    }
+
+    /// Addresses read but never executed: data, as far as anything can tell.
+    pub fn is_data(&self, addr: u16) -> bool {
+        bit(&self.read, addr) && !bit(&self.executed, addr)
+    }
+
+    /// Runs of data, longest first, for whatever wants to look at them.
+    pub fn data_blocks(&self, min_length: u16) -> Vec<(u16, u16)> {
+        let mut blocks = Vec::new();
+        let mut start: Option<u16> = None;
+        for addr in 0..=u16::MAX {
+            if self.is_data(addr) {
+                start.get_or_insert(addr);
+            } else if let Some(from) = start.take() {
+                if addr - from >= min_length {
+                    blocks.push((from, addr - from));
+                }
+            }
+        }
+        if let Some(from) = start {
+            let length = u16::MAX - from;
+            if length >= min_length {
+                blocks.push((from, length));
+            }
+        }
+        blocks.sort_by_key(|(_, length)| std::cmp::Reverse(*length));
+        blocks
+    }
+
+    /// What the routine at the top of the stack should be credited with.
+    fn current(&mut self) -> Option<u16> {
+        self.stack.last().map(|f| f.entry)
+    }
+
+    fn stats(&mut self, entry: u16) -> &mut Observed {
+        self.routines.entry(entry).or_insert(Observed {
+            entry,
+            ..Default::default()
+        })
+    }
+
+    /// An opcode was fetched here: that address is code.
+    pub fn on_fetch(&mut self, addr: u16) {
+        if self.enabled {
+            set(&mut self.executed, addr);
+        }
+    }
+
+    /// A byte was read from here without being executed: candidate data.
+    pub fn on_read(&mut self, addr: u16) {
+        if self.enabled {
+            set(&mut self.read, addr);
+        }
+    }
+
+    /// A byte was written here by whatever routine is running.
+    pub fn on_write(&mut self, addr: u16) {
+        if !self.enabled {
+            return;
+        }
+        let Some(entry) = self.current() else { return };
+        let stats = self.stats(entry);
+        stats.writes.add(addr);
+        stats.wrote_between = Some(match stats.wrote_between {
+            Some((low, high)) => (low.min(addr), high.max(addr)),
+            None => (addr, addr),
+        });
+    }
+
+    /// A port was read or written by whatever routine is running.
+    pub fn on_port(&mut self, port: u16, write: bool) {
+        if !self.enabled {
+            return;
+        }
+        let Some(entry) = self.current() else { return };
+        let stats = self.stats(entry);
+        if write {
+            stats.port_writes += 1;
+        } else {
+            stats.port_reads += 1;
+        }
+        let ports = if write {
+            &mut stats.ports_out
+        } else {
+            &mut stats.ports_in
+        };
+        // A handful of ports each; a set would cost more than it saved.
+        if ports.len() < 8 && !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+
+    /// Offer one executed instruction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn on_instruction(
+        &mut self,
+        pc_before: u16,
+        sp_before: u16,
+        pc_after: u16,
+        sp_after: u16,
+        registers: Registers,
+        peek: impl Fn(u16) -> u16,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        if let Some(frame) = self.stack.last_mut() {
+            frame.instructions += 1;
+        }
+
+        // A jump backwards is a loop going round again. Only another
+        // back-jump interrupts the count: the instructions of the loop body
+        // are forward motion and would otherwise reset it every time round.
+        if pc_after < pc_before && pc_before.wrapping_sub(pc_after) < 256 {
+            let round = match self.loop_at {
+                Some((at, count)) if at == pc_after => count + 1,
+                _ => 1,
+            };
+            self.loop_at = Some((pc_after, round));
+            if let Some(entry) = self.current() {
+                let stats = self.stats(entry);
+                if stats.loops.len() < 32 {
+                    let seen = stats.loops.entry(pc_after).or_insert(0);
+                    *seen = (*seen).max(round);
+                }
+            }
+        }
+
+        match classify(pc_before, sp_before, pc_after, sp_after, peek) {
+            Flow::Call { entry, sp } => self.enter(entry, sp, registers),
+            Flow::Return { sp_before, .. } => self.leave(sp_before),
+            Flow::Straight => {}
+        }
+    }
+
+    /// Entered directly, which is what an interrupt does.
+    pub fn on_interrupt(&mut self, entry: u16, sp: u16, registers: Registers) {
+        if self.enabled {
+            self.enter(entry, sp, registers);
+        }
+    }
+
+    fn enter(&mut self, entry: u16, sp: u16, registers: Registers) {
+        if self.stack.len() >= self.max_depth {
+            return;
+        }
+        // Whatever loop was going round belongs to the caller.
+        self.loop_at = None;
+        let caller = self.current();
+        let depth = self.stack.len() as u32 + 1;
+        let frame = self.frames;
+        {
+            let stats = self.stats(entry);
+            stats.calls += 1;
+            stats.max_depth = stats.max_depth.max(depth);
+            stats.entry_af.note(registers.af);
+            stats.entry_bc.note(registers.bc);
+            stats.entry_de.note(registers.de);
+            stats.entry_hl.note(registers.hl);
+            if stats.frames == 0 || stats.last_frame != frame {
+                stats.frames += 1;
+                stats.last_frame = frame;
+            }
+        }
+        if let Some(caller) = caller {
+            self.edges.entry((caller, entry)).or_default().calls += 1;
+        }
+        self.stack.push(Frame {
+            entry,
+            sp,
+            instructions: 0,
+        });
+    }
+
+    fn leave(&mut self, sp_before: u16) {
+        while let Some(frame) = self.stack.last().copied() {
+            if frame.sp > sp_before {
+                break;
+            }
+            self.stack.pop();
+            self.stats(frame.entry).instructions += frame.instructions;
+            if frame.sp == sp_before {
+                break;
+            }
+        }
+    }
+}
+
+/// The registers on the way into a routine: what it was handed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Registers {
+    pub af: u16,
+    pub bc: u16,
+    pub de: u16,
+    pub hl: u16,
+}
+
+fn bit(bits: &[u64], addr: u16) -> bool {
+    bits[addr as usize >> 6] & (1 << (addr & 63)) != 0
+}
+
+fn set(bits: &mut [u64], addr: u16) {
+    bits[addr as usize >> 6] |= 1 << (addr & 63);
+}

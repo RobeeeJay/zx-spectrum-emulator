@@ -222,6 +222,8 @@ pub struct SpectrumBus {
     /// Opcode fetches since the machine started, which is how a recording
     /// measures the length of a frame.
     pub fetches: u32,
+    /// What each routine is seen to do, while it is switched on.
+    pub observer: crate::observe::Observer,
     /// What the debugger is watching for, and what it caught. The bus is
     /// where all four things happen, so it is the bus that notices them.
     pub breaks: Breaks,
@@ -272,6 +274,7 @@ impl SpectrumBus {
             screen_writes: 0,
             playback: None,
             fetches: 0,
+            observer: crate::observe::Observer::new(),
             breaks: Breaks::default(),
             break_hit: None,
             screen_writes_acc: 0,
@@ -789,6 +792,7 @@ impl SpectrumBus {
         self.border_start = self.border;
         self.border_events.clear();
         self.audio_sync();
+        self.observer.end_frame();
     }
 
     pub fn frame_visuals(&mut self) {
@@ -822,6 +826,7 @@ impl Bus for SpectrumBus {
         // a prefixed instruction is two or more of them, so counting whole
         // instructions instead runs past the end of every frame.
         self.fetches = self.fetches.wrapping_add(1);
+        self.observer.on_fetch(addr);
         self.access(addr, 4);
         let phys = self.phys_index(addr);
         self.tracker.on_exec(phys, addr);
@@ -832,6 +837,7 @@ impl Bus for SpectrumBus {
         self.access(addr, 3);
         let phys = self.phys_index(addr);
         self.tracker.on_read(phys, addr);
+        self.observer.on_read(addr);
         self.mem(addr)
     }
 
@@ -839,6 +845,7 @@ impl Bus for SpectrumBus {
         self.access(addr, 3);
         let phys = self.phys_index(addr);
         self.tracker.on_write(phys, addr);
+        self.observer.on_write(addr);
         if (SCREEN_START..SCREEN_END).contains(&addr) {
             self.screen_writes_acc += 1;
             if self.breaks.screen {
@@ -864,6 +871,7 @@ impl Bus for SpectrumBus {
 
     fn io_read(&mut self, port: u16) -> u8 {
         let sampled = self.contend_io(port);
+        self.observer.on_port(port, false);
         // A recording replaces the hardware, not just the keyboard: the
         // floating bus, the tape and the sound chip all read back what they
         // read back on the day.
@@ -891,6 +899,7 @@ impl Bus for SpectrumBus {
 
     fn io_write(&mut self, port: u16, value: u8) {
         let sampled = self.contend_io(port);
+        self.observer.on_port(port, true);
 
         if port & 1 == 0 {
             let new = value & 7;
@@ -1060,6 +1069,11 @@ impl Default for Spectrum {
     }
 }
 
+/// Read a byte without disturbing anything, for looking at the stack.
+fn raw_peek(bus: &SpectrumBus, addr: u16) -> u8 {
+    bus.peek_raw(addr)
+}
+
 impl Spectrum {
     pub fn new() -> Self {
         Spectrum::with_model(Model::Spectrum48)
@@ -1139,6 +1153,16 @@ impl Spectrum {
                 if self.bus.breaks.interrupt {
                     self.bus.break_hit.get_or_insert(Event::Interrupt);
                 }
+                if self.bus.observer.enabled {
+                    let registers = crate::observe::Registers {
+                        af: self.cpu.af(),
+                        bc: self.cpu.bc(),
+                        de: self.cpu.de(),
+                        hl: self.cpu.hl(),
+                    };
+                    let (pc, sp) = (self.cpu.pc, self.cpu.sp);
+                    self.bus.observer.on_interrupt(pc, sp, registers);
+                }
                 // The handler is profiled like any other call.
                 if self.profiler.running {
                     let now = self.bus.total_t();
@@ -1152,8 +1176,8 @@ impl Spectrum {
     pub fn step_instruction(&mut self) {
         self.check_interrupt();
 
-        let profiling = self.profiler.running;
-        let (pc0, sp0, t0) = if profiling {
+        let watching = self.profiler.running || self.bus.observer.enabled;
+        let (pc0, sp0, t0) = if watching {
             (self.cpu.pc, self.cpu.sp, self.bus.total_t())
         } else {
             (0, 0, 0)
@@ -1165,15 +1189,45 @@ impl Spectrum {
             self.frames_completed += 1;
         }
 
-        if profiling {
+        if watching {
             let now = self.bus.total_t();
             let elapsed = now.saturating_sub(t0);
             let (pc1, sp1) = (self.cpu.pc, self.cpu.sp);
-            let bus = &self.bus;
-            self.profiler
-                .on_instruction(pc0, sp0, pc1, sp1, now, elapsed, |a| {
-                    u16::from_le_bytes([bus.peek_raw(a), bus.peek_raw(a.wrapping_add(1))])
-                });
+            if self.profiler.running {
+                let bus = &self.bus;
+                self.profiler
+                    .on_instruction(pc0, sp0, pc1, sp1, now, elapsed, |a| {
+                        u16::from_le_bytes([bus.peek_raw(a), bus.peek_raw(a.wrapping_add(1))])
+                    });
+            }
+            if self.bus.observer.enabled {
+                let registers = crate::observe::Registers {
+                    af: self.cpu.af(),
+                    bc: self.cpu.bc(),
+                    de: self.cpu.de(),
+                    hl: self.cpu.hl(),
+                };
+                // The observer lives on the bus, which is also what has to be
+                // read to see what was pushed, so the memory is copied out
+                // first rather than borrowing both at once.
+                let stack_word = |a: u16| {
+                    u16::from_le_bytes([
+                        raw_peek(&self.bus, a),
+                        raw_peek(&self.bus, a.wrapping_add(1)),
+                    ])
+                };
+                let pushed = stack_word(sp1);
+                let popped = stack_word(sp0);
+                self.bus
+                    .observer
+                    .on_instruction(pc0, sp0, pc1, sp1, registers, |a| {
+                        if a == sp1 {
+                            pushed
+                        } else {
+                            popped
+                        }
+                    });
+            }
         }
     }
 
