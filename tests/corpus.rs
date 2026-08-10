@@ -53,3 +53,47 @@ fn the_corpus_reads_what_the_converters_write() {
     assert_eq!(symbols[0].1, "draw_willy");
     assert_eq!(symbols[0].2, "Draw Willy at his current position");
 }
+
+/// Every label the rules can produce is scored against something.
+///
+/// A new rule whose label the scoring harness does not know about would be
+/// counted as its own category and always disagree, or silently vanish from
+/// the score — either way the number would move for a reason nobody meant.
+#[test]
+fn the_scoring_harness_knows_every_label_the_rules_produce() {
+    let rules = include_str!("../src/autodoc.rs");
+    let harness = include_str!("../tools/score-autodoc.py");
+
+    // The labels are the first half of what describe() and describe_measured()
+    // return: `"draw_sprite".into(),`.
+    let mut labels: Vec<&str> = rules
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix('"')?;
+            let name = rest.split('"').next()?;
+            // A label is a lower-case identifier, not a sentence.
+            let looks_like_label = line.contains(".into(),")
+                && !name.contains(' ')
+                && name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                && !name.is_empty();
+            looks_like_label.then_some(name)
+        })
+        .collect();
+    labels.sort_unstable();
+    labels.dedup();
+    assert!(
+        labels.len() > 8,
+        "found only {labels:?} — has describe() changed?"
+    );
+
+    let missing: Vec<&str> = labels
+        .into_iter()
+        .filter(|label| !harness.contains(&format!("\"{label}\":")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "tools/score-autodoc.py does not know what these mean, so they would \
+         not be scored: {missing:?}"
+    );
+}
