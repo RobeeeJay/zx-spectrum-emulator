@@ -644,12 +644,67 @@ fn video(app: &mut App, ui: &mut egui::Ui) {
     let scale = VIDEO_W / size.x;
     ui.vertical(|ui| {
         ui.label(RichText::new("Screen").small().color(theme::DIM));
-        egui::Frame::new()
+        let picture = egui::Frame::new()
             .fill(theme::CASE_DARK)
             .inner_margin(egui::Margin::same(VIDEO_BORDER as i8))
             .show(ui, |ui| {
-                ui.add(egui::Image::new(&texture).fit_to_exact_size(size * scale));
+                ui.add(
+                    egui::Image::new(&texture)
+                        .fit_to_exact_size(size * scale)
+                        .sense(egui::Sense::click()),
+                )
             });
+
+        // Pointing at something on the picture and being told what drew it.
+        // The bus watched it happen, so this is not a guess: it is the routine
+        // that last wrote those bytes.
+        let response = picture.inner;
+        let Some(at) = response.hover_pos() else {
+            return;
+        };
+        let rect = response.rect;
+        let (column, row) = (
+            ((at.x - rect.left()) / rect.width() * 32.0) as usize,
+            ((at.y - rect.top()) / rect.height() * 24.0) as usize,
+        );
+        if column >= 32 || row >= 24 {
+            return;
+        }
+        let drew = app.spec.bus.observer.drew_cell(column, row);
+        let mut go_to = None;
+        let clicked = response.clicked();
+        response.on_hover_ui(|ui| {
+            ui.label(format!("Character cell {column},{row}"));
+            if drew.is_empty() {
+                ui.label(
+                    RichText::new(if app.dbg.autodoc {
+                        "nothing has written here since AutoDoc was switched on"
+                    } else {
+                        "AutoDoc is off, so nothing is being watched"
+                    })
+                    .color(theme::DIM),
+                );
+                return;
+            }
+            for (entry, bytes) in drew.iter().take(4) {
+                let name = app.notes.label(*entry);
+                let named = if name.is_empty() {
+                    format!("${entry:04X}")
+                } else {
+                    format!("{name} (${entry:04X})")
+                };
+                ui.label(format!("{bytes} of its bytes written by {named}"));
+            }
+        });
+        if clicked {
+            if let Some((entry, _)) = drew.first() {
+                go_to = Some(*entry);
+            }
+        }
+        if let Some(entry) = go_to {
+            app.dbg.view_addr = entry;
+            app.dbg.follow_pc = false;
+        }
     });
 }
 

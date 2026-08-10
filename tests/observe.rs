@@ -249,3 +249,45 @@ fn the_addresses_a_routine_keeps_are_remembered() {
         "and that is what writes to $C000"
     );
 }
+
+/// Which routine drew a given part of the screen is watched, not inferred:
+/// the bus sees the write and remembers who was running.
+#[test]
+fn what_drew_each_part_of_the_screen_is_remembered() {
+    let program = vec![
+        (0x8000, 0xCD),
+        (0x8001, 0x00),
+        (0x8002, 0x90), // CALL $9000
+        (0x8003, 0x76), // HALT
+        // $9000: LD HL,$4000 : LD (HL),$FF : RET
+        (0x9000, 0x21),
+        (0x9001, 0x00),
+        (0x9002, 0x40),
+        (0x9003, 0x36),
+        (0x9004, 0xFF),
+        (0x9005, 0xC9),
+    ];
+    let spec = watch(&program, 0x8000, 1);
+    let observer = &spec.bus.observer;
+
+    assert_eq!(
+        observer.drew(0x4000),
+        Some(0x9000),
+        "the routine that wrote the top-left byte should be the one named"
+    );
+    assert_eq!(
+        observer.drew(0x4001),
+        None,
+        "and nothing should be claimed about a byte nobody wrote"
+    );
+    assert_eq!(
+        observer.drew(0x9000),
+        None,
+        "an address outside the screen is not part of the picture"
+    );
+
+    // The cell at the top left, which is what somebody pointing at the screen
+    // would be asking about.
+    let cell = observer.drew_cell(0, 0);
+    assert_eq!(cell.first().map(|(entry, _)| *entry), Some(0x9000));
+}

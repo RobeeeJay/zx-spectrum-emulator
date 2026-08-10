@@ -162,6 +162,16 @@ pub struct Observer {
     /// Which routine read each 256-byte page, and how often. Per page rather
     /// than per byte: a table of 65,536 counters would cost more than it says.
     readers: BTreeMap<(u8, u16), u32>,
+    /// Which routine last wrote each byte of the display and attribute files.
+    ///
+    /// Per byte, unlike the readers, because this is the one place where being
+    /// able to point at a thing on screen and say what put it there is worth
+    /// 14K of memory. It is the difference between inferring that a routine
+    /// draws and watching it draw a particular sprite.
+    drew: Vec<u16>,
+    /// Whether anything has been written there at all, since routine $0000 is
+    /// a real address.
+    drew_any: Vec<u64>,
 }
 
 impl Observer {
@@ -170,6 +180,8 @@ impl Observer {
             max_depth: 64,
             executed: vec![0; 1024],
             read: vec![0; 1024],
+            drew: vec![0; SCREEN_BYTES],
+            drew_any: vec![0; SCREEN_BYTES.div_ceil(64)],
             ..Default::default()
         }
     }
@@ -262,6 +274,39 @@ impl Observer {
         }
     }
 
+    /// Which routine last wrote this byte of the screen, if anything has.
+    ///
+    /// This is the whole of the evidence for what drew something: the bus
+    /// watched it happen, so pointing at a sprite and being told which routine
+    /// put it there is not a guess at all.
+    pub fn drew(&self, addr: u16) -> Option<u16> {
+        let offset = screen_offset(addr)?;
+        let written = self.drew_any[offset >> 6] & (1 << (offset & 63)) != 0;
+        written.then(|| self.drew[offset])
+    }
+
+    /// Everything that drew any part of a character cell, commonest first: the
+    /// eight pixel rows of a cell are rarely all one routine's work.
+    pub fn drew_cell(&self, column: usize, row: usize) -> Vec<(u16, u32)> {
+        let mut who: BTreeMap<u16, u32> = BTreeMap::new();
+        for line in 0..8 {
+            // The display file's thirds and rows, which is why this is not
+            // simply row * 32.
+            let third = row / 8;
+            let y = (row % 8) * 8 + line;
+            let addr = 0x4000 + (third << 11) + (y << 5) + column;
+            if let Some(entry) = self.drew(addr as u16) {
+                *who.entry(entry).or_insert(0) += 1;
+            }
+        }
+        if let Some(entry) = self.drew(0x5800 + (row * 32 + column) as u16) {
+            *who.entry(entry).or_insert(0) += 1;
+        }
+        let mut who: Vec<(u16, u32)> = who.into_iter().collect();
+        who.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        who
+    }
+
     /// Who read a page, most often first.
     pub fn readers_of(&self, page: u8) -> Vec<u16> {
         let mut who: Vec<(u16, u32)> = self
@@ -318,6 +363,10 @@ impl Observer {
             return;
         }
         let Some(entry) = self.current() else { return };
+        if let Some(offset) = screen_offset(addr) {
+            self.drew[offset] = entry;
+            self.drew_any[offset >> 6] |= 1 << (offset & 63);
+        }
         let stats = self.stats(entry);
         stats.writes.add(addr);
         // Only worth keeping while there are few of them: a routine writing
@@ -515,6 +564,16 @@ pub struct Registers {
     pub bc: u16,
     pub de: u16,
     pub hl: u16,
+}
+
+/// The display and attribute files, as one run of bytes.
+const SCREEN_BYTES: usize = 0x1B00;
+
+/// Where an address sits in that run, if it is in it at all.
+fn screen_offset(addr: u16) -> Option<usize> {
+    (0x4000..0x5B00)
+        .contains(&addr)
+        .then(|| addr as usize - 0x4000)
 }
 
 fn bit(bits: &[u64], addr: u16) -> bool {
