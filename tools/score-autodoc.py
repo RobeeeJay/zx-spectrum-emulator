@@ -84,6 +84,7 @@ RULE_TO_CATEGORY = {
     "game_logic": "logic",
     "game_turn": "logic",
     # Not a claim.
+    "reads_port_fe": None,
     "routine": None,
 }
 

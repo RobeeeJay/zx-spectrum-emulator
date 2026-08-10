@@ -338,6 +338,17 @@ pub struct Features {
     /// The routine reads the refresh register, or the ROM's own bytes.
     pub reads_r: bool,
     pub reads_rom: bool,
+    /// Which of port $FE's four jobs the code appears to be doing. The port
+    /// is the border, the beeper, the MIC socket and the keyboard at once, so
+    /// the port number says nothing on its own — what the code does with the
+    /// byte is the whole of the evidence.
+    ///
+    /// Bit 6 is the EAR line, which only the tape uses; bit 4 is the speaker
+    /// and bit 3 the MIC; the bottom five bits are the keyboard, read with a
+    /// half-row mask in the high byte of the address.
+    pub ear_bit: bool,
+    pub speaker_bit: bool,
+    pub key_rows: bool,
     /// Works out where on the screen to write, in one of the two ways the
     /// display file's layout forces on anybody who tries.
     pub next_scanline: bool,
@@ -511,6 +522,26 @@ pub fn read_routine<F: Fn(u16) -> u8>(peek: &F, entry: u16) -> Features {
             f.masked_writes += 1;
         }
 
+        // Which of port $FE's jobs this is. Testing bit 6 is the tape and
+        // nothing else: the border, the beeper and the keyboard have no use
+        // for the EAR line.
+        if text.contains("$40") && (text.starts_with("AND") || text.starts_with("XOR"))
+            || text.starts_with("BIT 6,")
+        {
+            f.ear_bit = true;
+        }
+        if text.contains("$10") && (text.starts_with("XOR") || text.starts_with("OR ")) {
+            f.speaker_bit = true;
+        }
+        // A keyboard read puts a half-row mask in the high byte of the port
+        // address: one bit low out of the top eight.
+        if let Some(value) = loaded_constant(&text) {
+            let (high, low) = ((value >> 8) as u8, value as u8);
+            if low == 0xFE && matches!(high.count_zeros(), 1) {
+                f.key_rows = true;
+            }
+        }
+
         // The display file's layout is peculiar enough that the arithmetic for
         // getting about it is unmistakable, and is the firmest evidence there
         // is that a routine draws.
@@ -560,6 +591,28 @@ pub fn describe(f: &Features) -> (String, String) {
     if f.calls_rom(0x04C2) {
         return ("save_to_tape".into(), "Saves to tape".into());
     }
+    // Port $FE, four ways. Bit 6 is the tape and only the tape.
+    if f.ear_bit && (f.ports_in.contains(&0xFE) || f.ports_out.contains(&0xFE)) {
+        return (
+            "load_from_tape".into(),
+            "Reads the EAR line on port $FE: listening to the tape".into(),
+        );
+    }
+    if f.key_rows && f.ports_in.contains(&0xFE) {
+        return (
+            "read_keys".into(),
+            "Reads port $FE with a half-row mask: the keyboard, or a joystick \
+             wired to one of its rows"
+                .into(),
+        );
+    }
+    if f.speaker_bit && f.ports_out.contains(&0xFE) {
+        return (
+            "play_sound".into(),
+            "Toggles bit 4 of port $FE: the beeper".into(),
+        );
+    }
+
     if f.ports_in.contains(&0x1F) {
         return (
             "read_joystick".into(),
@@ -569,21 +622,24 @@ pub fn describe(f: &Features) -> (String, String) {
     if f.ports_out.iter().any(|p| *p == 0xFFFD || *p == 0xBFFD) {
         return ("play_sound".into(), "Writes to the AY sound chip".into());
     }
-    if f.ports_out.contains(&0xFE) && f.text.iter().any(|t| t.contains("DJNZ")) {
-        return (
-            "play_sound".into(),
-            "Toggles the beeper in a timed loop".into(),
-        );
-    }
+
     if f.calls_rom(0x03B5) || f.calls_rom(0x03F8) {
         return ("play_sound".into(), "Sounds a note through the ROM".into());
     }
-    if f.ports_in.contains(&0xFE) || f.calls_rom(0x028E) || f.calls_rom(0x02BF) {
-        // A joystick wired to the keyboard reads the same port; the rows tell
-        // them apart, and only sometimes, so both are offered.
+    if f.calls_rom(0x028E) || f.calls_rom(0x02BF) {
         return (
             "read_keys".into(),
-            "Reads the keyboard (or a joystick wired to it) on port $FE".into(),
+            "Reads the keyboard through the ROM".into(),
+        );
+    }
+    if f.ports_in.contains(&0xFE) {
+        // Nothing about what was done with the byte, so nothing about which of
+        // the port's four jobs this was.
+        return (
+            "reads_port_fe".into(),
+            "Reads port $FE — the keyboard, the tape or a joystick wired to \
+             one of them; there is nothing here to say which"
+                .into(),
         );
     }
 

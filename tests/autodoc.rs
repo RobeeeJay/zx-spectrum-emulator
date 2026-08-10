@@ -548,3 +548,58 @@ fn each_rom_of_a_paged_machine_has_its_own_symbols() {
         "a 48K has no ROM to choose between: {names:?}"
     );
 }
+
+/// Port $FE is the border, the beeper, the MIC socket and the keyboard at
+/// once. What the code does with the byte is the whole of the evidence: bit 6
+/// is the EAR line and only the tape has any use for it.
+#[test]
+fn the_tape_is_told_from_the_keyboard_by_the_bit_it_tests() {
+    let (label, comment) = routine(&[
+        0xDB, 0xFE, // IN A,($FE)
+        0xE6, 0x40, // AND $40 — the EAR line
+        0x28, 0xFA, // JR Z,-6
+        0xC9,
+    ]);
+    assert_eq!(label, "load_from_tape", "said {comment:?}");
+    assert!(comment.contains("EAR"), "{comment:?}");
+}
+
+/// A keyboard read puts a half-row mask in the high byte of the port address.
+#[test]
+fn the_keyboard_is_told_by_its_half_row_mask() {
+    let (label, comment) = routine(&[
+        0x01, 0xFE, 0x7F, // LD BC,$7FFE — one row
+        0xDB, 0xFE, // IN A,($FE)
+        0xC9,
+    ]);
+    assert_eq!(label, "read_keys", "said {comment:?}");
+    assert!(comment.contains("half-row"), "{comment:?}");
+}
+
+/// And the beeper by the bit it toggles.
+#[test]
+fn the_beeper_is_told_by_the_bit_it_toggles() {
+    let (label, _) = routine(&[
+        0xEE, 0x10, // XOR $10 — the speaker
+        0xD3, 0xFE, // OUT ($FE),A
+        0x10, 0xFA, // DJNZ -6
+        0xC9,
+    ]);
+    assert_eq!(label, "play_sound");
+}
+
+/// With nothing to say which of the four it is, nothing is claimed. Guessing
+/// here is what had the ROM's tape loader filed under the keyboard.
+#[test]
+fn port_fe_with_no_other_evidence_claims_nothing() {
+    let (label, comment) = routine(&[
+        0xDB, 0xFE, // IN A,($FE)
+        0x4F, // LD C,A
+        0xC9,
+    ]);
+    assert_eq!(label, "reads_port_fe");
+    assert!(
+        comment.contains("nothing here to say which"),
+        "it should admit what it does not know: {comment:?}"
+    );
+}
