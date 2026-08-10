@@ -1,0 +1,226 @@
+//! Play a recording and write down what each routine was seen to do.
+//!
+//! Static analysis can only say what code might do. A recording says what it
+//! did: which routines ran, how often, what they wrote, and — because the bus
+//! remembers who wrote each byte of the screen — what they actually drew. This
+//! writes one JSON object per routine, which is the shape a model can be asked
+//! about and a person can read.
+//!
+//! ```text
+//! trace recordings/manic.rzx --frames 3000 > manic.jsonl
+//! ```
+//!
+//! A recording that has come adrift from the machine is refused rather than
+//! described: everything below depends on the machine having followed the same
+//! path it followed when somebody played it, and once that stops being true
+//! the attribution is fiction.
+
+use zx_rustrum::autodoc;
+use zx_rustrum::disasm;
+use zx_rustrum::machine::Spectrum;
+use zx_rustrum::ui::{App, Roms};
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut recording = None;
+    let mut frames = 3000u32;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--frames" => frames = iter.next().and_then(|v| v.parse().ok()).unwrap_or(frames),
+            other => recording = Some(other.to_string()),
+        }
+    }
+    let Some(recording) = recording else {
+        eprintln!("usage: trace <recording.rzx> [--frames N]");
+        std::process::exit(2);
+    };
+
+    let roms = Roms {
+        rom48: std::fs::read("roms/48.rom").ok(),
+        rom128: std::fs::read("roms/128.rom").ok(),
+        rom_plus3: std::fs::read("roms/plus3.rom").ok(),
+        rom_zx81: None,
+    };
+    let mut app = App::with_roms(Spectrum::new(), String::new(), roms, None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.load_path(std::path::Path::new(&recording));
+    if app.rzx.is_none() {
+        eprintln!("{recording}: {}", app.status);
+        std::process::exit(1);
+    }
+
+    app.spec.bus.observer.enabled = true;
+    if let Some(rzx) = &mut app.rzx {
+        rzx.max_speed = true;
+    }
+    for _ in 0..frames {
+        app.advance(1.0 / 50.0);
+        if app.rzx.is_none() {
+            break;
+        }
+    }
+
+    let adrift = app.spec.bus.playback.as_ref().map_or(0, |p| p.short);
+    let played = app.rzx.as_ref().map_or(0, |rzx| rzx.frame);
+    if adrift > 0 {
+        eprintln!(
+            "{recording}: came adrift after {played} frames — {adrift} reads the \
+             recording had no answer for. Nothing written: what the machine did \
+             after that is not what was recorded."
+        );
+        std::process::exit(1);
+    }
+
+    let observer = &app.spec.bus.observer;
+    let watched = observer.frames as u32;
+    let mut written = 0;
+    for (entry, seen) in &observer.routines {
+        // Only routines that did something worth describing.
+        if seen.calls == 0 {
+            continue;
+        }
+        println!("{}", episode(&app, *entry, seen, watched));
+        written += 1;
+    }
+    eprintln!("{written} routines over {played} frames of {recording}");
+}
+
+/// One routine, as a JSON object.
+fn episode(app: &App, entry: u16, seen: &zx_rustrum::observe::Observed, frames: u32) -> String {
+    let observer = &app.spec.bus.observer;
+    let peek = |a: u16| app.peek(a);
+    let features = autodoc::read_routine(&peek, entry);
+    let (rule_label, rule_comment) = autodoc::describe(&features);
+    let measured = autodoc::describe_measured(seen, frames);
+
+    let listing: Vec<String> = {
+        let mut at = entry;
+        let mut lines = Vec::new();
+        for _ in 0..24 {
+            let insn = disasm::disasm(&peek, at);
+            lines.push(format!("{at:04X}  {}", insn.text));
+            if insn.text.starts_with("RET") && !insn.text.contains(',') {
+                break;
+            }
+            at = at.wrapping_add(insn.len.max(1) as u16);
+        }
+        lines
+    };
+
+    let callers: Vec<String> = observer
+        .edges
+        .keys()
+        .filter(|(_, to)| *to == entry)
+        .map(|(from, _)| format!("{from:04X}"))
+        .collect();
+    let callees: Vec<String> = observer
+        .edges
+        .keys()
+        .filter(|(from, _)| *from == entry)
+        .map(|(_, to)| format!("{to:04X}"))
+        .collect();
+
+    let name = app.notes.label(entry);
+    let art = drawn_cell(app, entry);
+
+    let mut fields = vec![
+        format!("\"address\":\"{entry:04X}\""),
+        format!("\"name\":{}", json(name)),
+        format!("\"calls\":{}", seen.calls),
+        format!("\"frames_seen\":{}", seen.frames),
+        format!("\"of_frames\":{frames}"),
+        format!(
+            "\"writes\":{{\"screen\":{},\"attrs\":{},\"other\":{}}}",
+            seen.writes.screen, seen.writes.attrs, seen.writes.other
+        ),
+        format!("\"longest_loop\":{}", seen.longest_loop()),
+        format!(
+            "\"entry_hl\":[\"{:04X}\",\"{:04X}\"]",
+            seen.entry_hl.low, seen.entry_hl.high
+        ),
+        format!("\"ports_in\":{}", ports(&seen.ports_in)),
+        format!("\"ports_out\":{}", ports(&seen.ports_out)),
+        format!("\"rule_says\":{}", json(&rule_label)),
+        format!("\"rule_comment\":{}", json(&rule_comment)),
+        format!(
+            "\"measured\":{}",
+            measured
+                .map(|(_, comment)| json(&comment))
+                .unwrap_or_else(|| "null".into())
+        ),
+        format!("\"callers\":{}", strings(&callers)),
+        format!("\"callees\":{}", strings(&callees)),
+        format!("\"listing\":{}", strings(&listing)),
+    ];
+    if let Some(art) = art {
+        // A sprite is thirty-two bytes; drawn as characters a model can read
+        // it without anything having to understand a picture.
+        fields.push(format!("\"drew\":{}", strings(&art)));
+    }
+    format!("{{{}}}", fields.join(","))
+}
+
+/// A character cell this routine drew, as eight rows of text.
+fn drawn_cell(app: &App, entry: u16) -> Option<Vec<String>> {
+    let observer = &app.spec.bus.observer;
+    // The cell it wrote most of: the one where its work is clearest.
+    let mut best: Option<(usize, usize, u32)> = None;
+    for row in 0..24 {
+        for column in 0..32 {
+            let mine = observer
+                .drew_cell(column, row)
+                .into_iter()
+                .find(|(who, _)| *who == entry)
+                .map(|(_, bytes)| bytes)
+                .unwrap_or(0);
+            if mine > best.map_or(0, |(_, _, n)| n) {
+                best = Some((column, row, mine));
+            }
+        }
+    }
+    let (column, row, bytes) = best?;
+    if bytes < 4 {
+        return None;
+    }
+    let third = row / 8;
+    Some(
+        (0..8)
+            .map(|line| {
+                let y = (row % 8) * 8 + line;
+                let addr = 0x4000 + (third << 11) + (y << 5) + column;
+                let byte = app.peek(addr as u16);
+                (0..8)
+                    .map(|bit| if byte & (0x80 >> bit) != 0 { '#' } else { '.' })
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+fn ports(ports: &[u16]) -> String {
+    let list: Vec<String> = ports.iter().map(|p| format!("\"{p:04X}\"")).collect();
+    format!("[{}]", list.join(","))
+}
+
+fn strings(items: &[String]) -> String {
+    let list: Vec<String> = items.iter().map(|s| json(s)).collect();
+    format!("[{}]", list.join(","))
+}
+
+fn json(text: &str) -> String {
+    let escaped: String = text
+        .chars()
+        .flat_map(|c| match c {
+            '"' => vec!['\\', '"'],
+            '\\' => vec!['\\', '\\'],
+            '\n' => vec!['\\', 'n'],
+            c if (c as u32) < 0x20 => vec![' '],
+            c => vec![c],
+        })
+        .collect();
+    format!("\"{escaped}\"")
+}

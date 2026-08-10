@@ -850,15 +850,22 @@ pub fn describe_measured(seen: &crate::observe::Observed, frames: u32) -> Option
         ", once"
     };
 
+    // What it mostly does comes first. A routine that touched a port and also
+    // wrote a hundred thousand bytes into the display file is drawing; the
+    // port rules below are for routines whose work *is* the port. Manic
+    // Miner's main loop reads the keys and draws the whole screen, and was
+    // being called a keyboard routine on the strength of two IN instructions.
+    let mostly_draws = per_call(seen.writes.screen + seen.writes.attrs) > 64;
+
     // Input and sound are named by the ports they touched, which is not a
     // guess at all.
-    if seen.ports_in.contains(&0x1F) {
+    if !mostly_draws && seen.ports_in.contains(&0x1F) {
         return Some((
             "read_joystick".into(),
             format!("Reads the Kempston joystick on port $1F{rhythm}"),
         ));
     }
-    if seen.ports_in.iter().any(|p| p & 0x00FF == 0xFE) {
+    if !mostly_draws && seen.ports_in.iter().any(|p| p & 0x00FF == 0xFE) {
         return Some((
             "read_keys".into(),
             format!("Reads the keyboard on port $FE{rhythm}"),

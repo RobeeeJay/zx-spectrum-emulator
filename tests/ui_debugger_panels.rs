@@ -568,3 +568,35 @@ fn the_rom_watch_does_nothing_until_it_is_switched_on() {
         "it stopped without being asked to"
     );
 }
+
+/// A routine that touches a port and also draws most of the screen is drawing.
+/// Manic Miner's main loop reads the keys and paints the picture, and was
+/// described as a keyboard routine on the strength of two IN instructions.
+#[test]
+fn a_routine_that_mostly_draws_is_not_called_a_keyboard_routine() {
+    use zx_rustrum::observe::Observed;
+
+    let mut seen = Observed::default();
+    seen.calls = 10;
+    seen.frames = 10;
+    seen.writes.screen = 60_000;
+    seen.ports_in.push(0x00FE);
+    seen.port_reads = 20;
+
+    let (label, comment) = zx_rustrum::autodoc::describe_measured(&seen, 10)
+        .expect("it writes most of the screen, so there is plenty to say");
+    assert!(
+        label.contains("screen") || label.contains("draw") || label.contains("blit"),
+        "called it {label}: {comment}"
+    );
+
+    // A routine whose work really is the port is still named for it.
+    let mut reader = Observed::default();
+    reader.calls = 10;
+    reader.frames = 10;
+    reader.writes.other = 20;
+    reader.ports_in.push(0x7FFE);
+    let (label, _) = zx_rustrum::autodoc::describe_measured(&reader, 10)
+        .expect("reading a port is worth saying");
+    assert_eq!(label, "read_keys");
+}
