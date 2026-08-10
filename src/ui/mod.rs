@@ -226,6 +226,10 @@ pub struct RzxPlayback {
     /// Addresses the recording has actually reached: what AutoDoc reads on
     /// top of what it can work out from the code alone.
     pub visited: std::collections::BTreeSet<u16>,
+    /// Run it as fast as the host will go, rather than at the speed it was
+    /// played. A recording is often twenty minutes long and the interesting
+    /// part is rarely at the start.
+    pub max_speed: bool,
 }
 
 impl RzxPlayback {
@@ -730,6 +734,7 @@ impl App {
             remaining: 0,
             owed: 0.0,
             visited: Default::default(),
+            max_speed: false,
         });
         self.spec.bus.playback = Some(crate::machine::Playback::default());
         self.running = true;
@@ -763,13 +768,19 @@ impl App {
         }
 
         // A recording is a frame at a time, so the speed control counts frames
-        // rather than T-states.
-        let rate = crate::machine::CPU_HZ as f32 / self.spec.bus.model.frame_t() as f32;
-        let owed = rzx.owed + dt * rate * self.speed * boost;
-        let mut due = owed.min(MAX_RECORDED_FRAMES) as u32;
-        if let Some(rzx) = &mut self.rzx {
-            rzx.owed = owed - due as f32;
-        }
+        // rather than T-states. At maximum speed it runs as many as the cap
+        // allows every host frame instead of counting at all.
+        let mut due = if rzx.max_speed {
+            MAX_RECORDED_FRAMES as u32
+        } else {
+            let rate = crate::machine::CPU_HZ as f32 / self.spec.bus.model.frame_t() as f32;
+            let owed = rzx.owed + dt * rate * self.speed * boost;
+            let due = owed.min(MAX_RECORDED_FRAMES) as u32;
+            if let Some(rzx) = &mut self.rzx {
+                rzx.owed = owed - due as f32;
+            }
+            due
+        };
 
         while due > 0 {
             let Some(rzx) = &mut self.rzx else { return };
@@ -1324,9 +1335,9 @@ impl App {
         // A recording is measured in frames of instructions rather than in
         // T-states, so it does its own running.
         if self.rzx.is_some() {
-            let boost = if self.tape_boost() { 4.0 } else { 1.0 };
-            self.spec.bus.audio.speed_ok = (0.85..=1.2).contains(&(self.speed * boost));
-            self.advance_recording(dt, boost);
+            let flat_out = self.rzx.as_ref().is_some_and(|rzx| rzx.max_speed);
+            self.spec.bus.audio.speed_ok = !flat_out && (0.85..=1.2).contains(&self.speed);
+            self.advance_recording(dt, 1.0);
             self.spec.bus.audio_sync();
             self.spec.bus.audio.flush();
             return;
@@ -1584,33 +1595,60 @@ impl App {
             ui.separator();
             if let Some(rzx) = &self.rzx {
                 let (frame, total) = (rzx.frame, rzx.recording.len());
+                let mut max_speed = rzx.max_speed;
                 let short = self.spec.bus.playback.as_ref().map_or(0, |p| p.short);
-                theme::group_label(ui, "Recording");
+                let percent = if total == 0 {
+                    0.0
+                } else {
+                    frame as f32 * 100.0 / total as f32
+                };
+
+                // Said plainly: the machine is not taking orders from the
+                // keyboard at the moment, and it should be obvious why.
                 ui.label(
-                    egui::RichText::new(format!("{frame}/{total}"))
+                    egui::RichText::new("⏵ REPLAY")
+                        .strong()
+                        .color(theme::AMBER),
+                )
+                .on_hover_text("Playing back a recording. The keyboard is the recording's.");
+                ui.label(
+                    egui::RichText::new(format!("{frame}/{total}  {percent:.0}%"))
                         .monospace()
                         .color(theme::LCD_FG),
                 );
+
+                if ui
+                    .toggle_value(&mut max_speed, "Max speed")
+                    .on_hover_text(
+                        "Run the recording as fast as this machine can rather \
+                         than at the speed it was played. Twenty minutes of \
+                         play is a long wait for the part you want to see.",
+                    )
+                    .changed()
+                {
+                    if let Some(rzx) = &mut self.rzx {
+                        rzx.max_speed = max_speed;
+                        rzx.owed = 0.0;
+                    }
+                }
+
                 // A recording that asks for more input than was recorded has
                 // come adrift from the machine: what is on screen after that
                 // is the emulator's guess, not what was played, and saying so
                 // is better than letting it look authentic.
                 if short > 0 {
-                    ui.label(
-                        egui::RichText::new(format!("out of step ({short})"))
-                            .color(theme::RED),
-                    )
-                    .on_hover_text(
-                        "The program has read more from the ports than the \
-                         recording holds, so it is no longer following the \
-                         path it was recorded taking.",
-                    );
+                    ui.label(egui::RichText::new(format!("out of step ({short})")).color(theme::RED))
+                        .on_hover_text(
+                            "The program has read more from the ports than the \
+                             recording holds, so it is no longer following the \
+                             path it was recorded taking.",
+                        );
                 }
                 if ui.button("Stop").clicked() {
                     self.stop_recording();
                     self.set_status("Stopped the recording".into(), false);
                 }
-                ui.separator();
+                theme::divider(ui);
             }
             if self.tape_ref().is_some() {
                 let playing = self.tape_is_playing();

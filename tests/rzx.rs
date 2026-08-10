@@ -236,3 +236,92 @@ fn opening_something_that_is_not_a_recording_says_so() {
         app.status
     );
 }
+
+/// The main window says a recording is playing, how far through it is, and
+/// offers the choice between the speed it was played at and as fast as this
+/// machine will go.
+#[test]
+fn the_main_window_says_a_recording_is_playing() {
+    use egui_kittest::kittest::Queryable;
+
+    let Some(path) = recording("manic") else {
+        return;
+    };
+    let mut app = app();
+    app.load_path(&path);
+
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size([1600.0, 900.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    harness.run_steps(3);
+
+    let text = every_string(&harness);
+    assert!(
+        text.iter().any(|t| t.contains("REPLAY")),
+        "nothing says a recording is playing: {text:?}"
+    );
+    assert!(
+        text.iter().any(|t| t.contains('%')),
+        "and nothing says how far through it is"
+    );
+
+    // The toggle is off to start with: a recording plays at the speed it was
+    // played at unless asked otherwise.
+    assert!(!harness.state().rzx.as_ref().unwrap().max_speed);
+    harness.get_by_label("Max speed").click();
+    harness.run_steps(2);
+    assert!(
+        harness.state().rzx.as_ref().unwrap().max_speed,
+        "the toggle did nothing"
+    );
+}
+
+/// And at maximum speed it really does get through more of the recording.
+#[test]
+fn maximum_speed_plays_more_of_the_recording() {
+    let Some(path) = recording("manic") else {
+        return;
+    };
+
+    let mut realtime = app();
+    realtime.load_path(&path);
+    for _ in 0..40 {
+        realtime.advance(1.0 / 50.08);
+    }
+    let played_realtime = realtime.rzx.as_ref().unwrap().frame;
+
+    let mut flat_out = app();
+    flat_out.load_path(&path);
+    flat_out.rzx.as_mut().unwrap().max_speed = true;
+    for _ in 0..40 {
+        flat_out.advance(1.0 / 50.08);
+    }
+    let played_fast = flat_out.rzx.as_ref().unwrap().frame;
+
+    assert!(
+        played_fast > played_realtime * 4,
+        "maximum speed managed {played_fast} frames against {played_realtime} \
+         at the speed it was recorded"
+    );
+    // And it is still following the recording, not just running.
+    let short = flat_out.spec.bus.playback.as_ref().unwrap().short;
+    assert_eq!(short, 0, "it came adrift when hurried along");
+}
+
+fn every_string(h: &egui_kittest::Harness<'_, App>) -> Vec<String> {
+    use egui_kittest::kittest::NodeT;
+    fn walk(node: &egui_kittest::Node<'_>, out: &mut Vec<String>) {
+        for text in [node.accesskit_node().label(), node.accesskit_node().value()]
+            .into_iter()
+            .flatten()
+        {
+            out.push(text.to_string());
+        }
+        for child in node.children() {
+            walk(&child, out);
+        }
+    }
+    let mut found = Vec::new();
+    walk(&h.root(), &mut found);
+    found
+}
