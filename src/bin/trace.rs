@@ -24,10 +24,12 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut recording = None;
     let mut frames = 3000u32;
+    let mut tree = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--frames" => frames = iter.next().and_then(|v| v.parse().ok()).unwrap_or(frames),
+            "--tree" => tree = true,
             other => recording = Some(other.to_string()),
         }
     }
@@ -77,6 +79,11 @@ fn main() {
 
     let observer = &app.spec.bus.observer;
     let watched = observer.frames as u32;
+
+    if tree {
+        call_tree(&app, observer);
+        return;
+    }
     let mut written = 0;
     for (entry, seen) in &observer.routines {
         // Only routines that did something worth describing.
@@ -87,6 +94,56 @@ fn main() {
         written += 1;
     }
     eprintln!("{written} routines over {played} frames of {recording}");
+}
+
+/// One frame's calls, in the order they happened and nested as they nest.
+///
+/// A game repeats itself fifty times a second, so one whole frame is the unit
+/// worth looking at: it is the program's turn, from the interrupt to the wait
+/// for the next one. The T-state each call was entered at is where the beam
+/// was at that moment, which is the thing a Spectrum programmer is arranging
+/// their work around.
+fn call_tree(app: &App, observer: &zx_rustrum::observe::Observer) {
+    let Some(frame) = observer.last_whole_frame() else {
+        eprintln!("nothing was watched for a whole frame");
+        return;
+    };
+    let steps = observer.frame_steps(frame);
+    if steps.is_empty() {
+        eprintln!("frame {frame} has nothing in it");
+        return;
+    }
+
+    let picture = app.spec.bus.first_pixel_t();
+    println!("Frame {frame}: {} calls and returns", steps.len());
+    println!("(the beam reaches the picture at T={picture})\n");
+
+    for step in &steps {
+        if !step.enter {
+            continue;
+        }
+        let name = app.notes.label(step.entry);
+        let named = if name.is_empty() {
+            format!("${:04X}", step.entry)
+        } else {
+            format!("{name} (${:04X})", step.entry)
+        };
+        // Where the beam was: the one piece of context that turns a call
+        // order into an explanation of how the picture is made.
+        let where_beam = if step.t < picture {
+            "above the picture"
+        } else if step.t < picture + 192 * 224 {
+            "on the picture"
+        } else {
+            "below the picture"
+        };
+        println!(
+            "{:indent$}{named:<32} T={:<6} {where_beam}",
+            "",
+            step.t,
+            indent = step.depth as usize * 2,
+        );
+    }
 }
 
 /// One routine, as a JSON object.

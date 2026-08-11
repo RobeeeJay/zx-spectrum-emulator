@@ -291,3 +291,72 @@ fn what_drew_each_part_of_the_screen_is_remembered() {
     let cell = observer.drew_cell(0, 0);
     assert_eq!(cell.first().map(|(entry, _)| *entry), Some(0x9000));
 }
+
+/// Totals say what a routine does; only a sequence says in what order. The
+/// order is what somebody reading a game's main loop is asking about.
+#[test]
+fn the_order_of_calls_within_a_frame_is_recorded() {
+    let program = vec![
+        // $8000: CALL $9000 : CALL $9100 : JR $8000
+        (0x8000, 0xCD),
+        (0x8001, 0x00),
+        (0x8002, 0x90),
+        (0x8003, 0xCD),
+        (0x8004, 0x00),
+        (0x8005, 0x91),
+        (0x8006, 0x18),
+        (0x8007, 0xF8),
+        // $9000: CALL $9200 : RET
+        (0x9000, 0xCD),
+        (0x9001, 0x00),
+        (0x9002, 0x92),
+        (0x9003, 0xC9),
+        (0x9100, 0xC9),
+        (0x9200, 0xC9),
+    ];
+    let spec = watch(&program, 0x8000, 2);
+    let observer = &spec.bus.observer;
+
+    let frame = observer
+        .last_whole_frame()
+        .expect("a frame should have been watched from beginning to end");
+    let steps: Vec<_> = observer
+        .frame_steps(frame)
+        .into_iter()
+        .filter(|step| step.enter)
+        .collect();
+    assert!(steps.len() > 3, "only {} calls recorded", steps.len());
+
+    // $9200 is called from inside $9000, and $9100 after both. Which of them
+    // the frame happens to open with is not fixed: the interrupt falls where
+    // it falls, part-way round the loop.
+    let outer = steps
+        .iter()
+        .position(|step| step.entry == 0x9000)
+        .expect("$9000 was not recorded");
+    let inner = steps[outer..]
+        .iter()
+        .find(|step| step.entry == 0x9200)
+        .expect("the call inside $9000 was not recorded");
+    assert!(
+        inner.depth > steps[outer].depth,
+        "the call inside $9000 should be deeper than it: {} against {}",
+        inner.depth,
+        steps[outer].depth
+    );
+    let next = steps[outer..]
+        .iter()
+        .find(|step| step.entry == 0x9100)
+        .expect("the call after $9000 was not recorded");
+    assert!(
+        next.t >= inner.t,
+        "and it comes after the one nested inside the first"
+    );
+
+    // Time runs forwards within a frame.
+    let times: Vec<u32> = observer.frame_steps(frame).iter().map(|s| s.t).collect();
+    assert!(
+        times.windows(2).all(|pair| pair[1] >= pair[0]),
+        "the steps are not in order: {times:?}"
+    );
+}

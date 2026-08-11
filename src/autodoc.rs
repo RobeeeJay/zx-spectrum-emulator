@@ -567,7 +567,7 @@ pub fn read_routine<F: Fn(u16) -> u8>(peek: &F, entry: u16) -> Features {
 
         f.text.push(text.clone());
 
-        if ends_routine(text) || text.starts_with("JP $") {
+        if ends_routine(&text) || text.starts_with("JP $") {
             break;
         }
         addr = addr.wrapping_add(insn.len.max(1) as u16);

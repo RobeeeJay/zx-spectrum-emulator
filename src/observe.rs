@@ -152,6 +152,10 @@ pub struct Observer {
     loop_at: Option<(u16, u32)>,
     /// Where in the frame the machine is, in T-states, as last told.
     frame_t: u32,
+    /// The last few frames' worth of entering and leaving, oldest first. A
+    /// ring rather than a log: a game makes a few hundred calls a frame and
+    /// nobody wants the whole of a twenty-minute recording.
+    steps: std::collections::VecDeque<Step>,
     /// How deep to follow before giving up on a runaway stack.
     max_depth: usize,
     /// Addresses that have been executed: what is code, as against what is
@@ -199,6 +203,45 @@ impl Observer {
 
     pub fn depth(&self) -> usize {
         self.stack.len()
+    }
+
+    /// Everything that happened in one frame, in order.
+    pub fn frame_steps(&self, frame: u32) -> Vec<Step> {
+        self.steps
+            .iter()
+            .copied()
+            .filter(|s| s.frame == frame)
+            .collect()
+    }
+
+    /// The most recent frame that was recorded from beginning to end. The one
+    /// in progress is half a frame and would read as a program that stops
+    /// half way through its work.
+    pub fn last_whole_frame(&self) -> Option<u32> {
+        // The newest frame is the one in progress, and the frame before it may
+        // have been pushed out of the ring: what is wanted is the newest frame
+        // that still has all of itself in here, which is the newest one that
+        // is neither the first nor the last present.
+        let newest = self.steps.back()?.frame;
+        let oldest = self.steps.front()?.frame;
+        self.steps
+            .iter()
+            .rev()
+            .map(|step| step.frame)
+            .find(|frame| *frame < newest && *frame > oldest)
+    }
+
+    fn remember(&mut self, entry: u16, depth: u8, enter: bool) {
+        if self.steps.len() >= MAX_STEPS {
+            self.steps.pop_front();
+        }
+        self.steps.push_back(Step {
+            frame: self.frames as u32,
+            t: self.frame_t,
+            entry,
+            depth,
+            enter,
+        });
     }
 
     /// Note the end of a frame, so what runs every frame can be told from what
@@ -501,6 +544,7 @@ impl Observer {
         if let Some(caller) = caller {
             self.edges.entry((caller, entry)).or_default().calls += 1;
         }
+        self.remember(entry, depth as u8, true);
         self.stack.push(Frame {
             entry,
             sp,
@@ -514,6 +558,8 @@ impl Observer {
                 break;
             }
             self.stack.pop();
+            let depth = self.stack.len() as u8 + 1;
+            self.remember(frame.entry, depth, false);
             self.stats(frame.entry).instructions += frame.instructions;
             if frame.sp == sp_before {
                 break;
@@ -557,6 +603,24 @@ pub struct Block {
     pub readers: Vec<u16>,
 }
 
+/// One routine being entered or left, and when in the frame.
+///
+/// Totals say what a routine does; only a sequence says in what order, which
+/// is the question somebody reading a game's main loop is actually asking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Step {
+    /// Which frame it happened in, counted from when watching started.
+    pub frame: u32,
+    /// Where in the frame, in T-states: the x-axis of everything drawn from
+    /// this, and on this machine an absolute position rather than a relative
+    /// one, because the beam is somewhere definite at that moment.
+    pub t: u32,
+    pub entry: u16,
+    pub depth: u8,
+    /// Going in, as against coming back out.
+    pub enter: bool,
+}
+
 /// The registers on the way into a routine: what it was handed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Registers {
@@ -565,6 +629,10 @@ pub struct Registers {
     pub de: u16,
     pub hl: u16,
 }
+
+/// How many enterings and leavings to keep. A game makes a few hundred calls
+/// a frame, so this is several seconds of them.
+const MAX_STEPS: usize = 100_000;
 
 /// The display and attribute files, as one run of bytes.
 const SCREEN_BYTES: usize = 0x1B00;
