@@ -47,6 +47,32 @@ does is useful even when its purpose in the game is not clear.\
 """
 
 
+# Worked examples, in the shape the answer should take. The failure being
+# tested is one of format rather than comprehension: asked what a routine is
+# for, the model says what its first instructions do, and the fix for that may
+# be showing it the difference rather than reaching for a bigger model.
+SHOTS = """\
+Here are answers of the right kind, for routines from other games.
+
+Measured: called 50 times a frame; wrote 8 bytes to the display file each
+time; longest loop 8; HL held $4000..$57FF on entry.
+Answer: Draws one character cell of a sprite into the display file.
+
+Measured: called once a frame; wrote 768 bytes to the attributes; longest
+loop 767.
+Answer: Repaints the whole attribute file, colouring the screen.
+
+Measured: called 3 times a frame; read port $7FFE; wrote 2 bytes elsewhere.
+Answer: Reads a row of the keyboard and records which keys are down.
+
+Measured: called once a frame; wrote 1 byte to $80BD; longest loop 0.
+Answer: Keeps a single counter, probably a timer or a countdown.
+
+Notice what those say: what the routine is *for*, not which registers it
+loads. Now the real one.
+"""
+
+
 def prompt_for(episode, style):
     """What to show the model about one routine."""
     parts = [f"Routine at ${episode['address']}."]
@@ -123,6 +149,7 @@ def main():
     parser.add_argument("--prompt", default="full", choices=["full", "listing", "measured"])
     parser.add_argument("--limit", type=int, default=0, help="only this many routines")
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--shots", action="store_true", help="show worked examples first")
     parser.add_argument("--out", help="write the answers as JSONL")
     args = parser.parse_args()
 
@@ -132,7 +159,10 @@ def main():
 
     answers = []
     for n, episode in enumerate(episodes, 1):
-        said = ask(args.model, SYSTEM, prompt_for(episode, args.prompt), args.timeout)
+        prompt = prompt_for(episode, args.prompt)
+        if args.shots:
+            prompt = f"{SHOTS}\n\n{prompt}"
+        said = ask(args.model, SYSTEM, prompt, args.timeout)
         answers.append({"address": episode["address"], "said": said})
         print(f"[{n}/{len(episodes)}] ${episode['address']}  {said[:96]}", file=sys.stderr)
 
