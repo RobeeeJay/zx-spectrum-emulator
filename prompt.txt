@@ -1,0 +1,44 @@
+A ZX Spectrum game, watched while somebody played it. Nobody has annotated this game; everything below was measured by the emulator.
+
+The program goes round this loop every 4.36 frames. Note that is not once per frame — it takes four frames and a bit over each turn. Writes to $4000-$57FF are the screen, but this game writes mostly elsewhere, which on this machine usually means it is drawing into a buffer and copying it over later.
+
+One complete turn, in the order the calls happened, indented by call depth:
+
+8DAA  (99 bytes a call, writes $5C2F..$9CFB, longest loop 3)
+  8FF4  (32 bytes a call, writes $483D..$6FDE, longest loop 15)
+9105  (13 bytes a call, writes $7013..$7AAD, longest loop 5)
+8F63  (31 bytes a call, writes $5C01..$9CFB, longest loop 4)
+  92D5  (8 bytes a call, writes $6001..$6FBE, longest loop 7)
+  92D5  (8 bytes a call, writes $6001..$6FBE, longest loop 7)
+  92D5  (8 bytes a call, writes $6001..$6FBE, longest loop 7)
+  92D5  (8 bytes a call, writes $6001..$6FBE, longest loop 7)
+  92D5  (8 bytes a call, writes $6001..$6FBE, longest loop 7)
+8FC5  (49361 bytes a call, writes $4000..$9CFD, longest loop 686)
+92BA  (60 bytes a call, writes $9CFA..$9CFB, longest loop 5)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+92BA  (60 bytes a call, writes $9CFA..$9CFB, longest loop 5)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+  92CB  (8 bytes a call, writes $5000..$577F, longest loop 7)
+8A3C  (5 bytes a call, writes $5224..$80BD, longest loop 2)
+8FF4  (32 bytes a call, writes $483D..$6FDE, longest loop 15)
+8FF4  (32 bytes a call, writes $483D..$6FDE, longest loop 15)
+8D0F  (2 bytes a call, writes $80BF..$80D7, longest loop 3)
+8ABB  (5 bytes a call, writes $8068..$9CFB, longest loop 13)
+923A  (48 bytes a call, writes $6021..$9CFB, longest loop 15)
+  925F  (0 bytes a call, writes $5C01..$5DDE, longest loop 0)
+  925F  (0 bytes a call, writes $5C01..$5DDE, longest loop 0)
+  925F  (0 bytes a call, writes $5C01..$5DDE, longest loop 0)
+  925F  (0 bytes a call, writes $5C01..$5DDE, longest loop 0)
+  925F  (0 bytes a call, writes $5C01..$5DDE, longest loop 0)
+  925F  (0 bytes a call, writes $5C01..$5DDE, longest loop 0)
+
+Explain what this loop is doing, in four or five sentences: what the program appears to be doing each time round, in what order, and which routines look like they belong together. Where the evidence does not say, say so.
