@@ -205,6 +205,11 @@ impl Observer {
         self.stack.len()
     }
 
+    /// Everything recorded, oldest first.
+    pub fn steps(&self) -> impl Iterator<Item = &Step> {
+        self.steps.iter()
+    }
+
     /// Everything that happened in one frame, in order.
     pub fn frame_steps(&self, frame: u32) -> Vec<Step> {
         self.steps
@@ -630,9 +635,10 @@ pub struct Registers {
     pub hl: u16,
 }
 
-/// How many enterings and leavings to keep. A game makes a few hundred calls
-/// a frame, so this is several seconds of them.
-const MAX_STEPS: usize = 100_000;
+/// How many enterings and leavings to keep. Finding the loops in a program
+/// means watching it for minutes, not seconds: a game making a few hundred
+/// calls a frame fills this in about ten minutes, and it costs 32MB.
+const MAX_STEPS: usize = 4_000_000;
 
 /// The display and attribute files, as one run of bytes.
 const SCREEN_BYTES: usize = 0x1B00;

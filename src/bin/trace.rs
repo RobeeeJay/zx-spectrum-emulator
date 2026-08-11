@@ -25,11 +25,13 @@ fn main() {
     let mut recording = None;
     let mut frames = 3000u32;
     let mut tree = false;
+    let mut find_loops = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--frames" => frames = iter.next().and_then(|v| v.parse().ok()).unwrap_or(frames),
             "--tree" => tree = true,
+            "--loops" => find_loops = true,
             other => recording = Some(other.to_string()),
         }
     }
@@ -84,6 +86,10 @@ fn main() {
         call_tree(&app, observer);
         return;
     }
+    if find_loops {
+        show_loops(&app, observer);
+        return;
+    }
     let mut written = 0;
     for (entry, seen) in &observer.routines {
         // Only routines that did something worth describing.
@@ -94,6 +100,97 @@ fn main() {
         written += 1;
     }
     eprintln!("{written} routines over {played} frames of {recording}");
+}
+
+/// The loops the program was seen to go round, and one turn of each.
+///
+/// Nothing here counts frames. A game may take three frames over a turn, draw
+/// into a back buffer and show it when it is ready, or not be tied to the
+/// frame at all; the only evidence used is the order routines were entered in.
+fn show_loops(app: &App, observer: &zx_rustrum::observe::Observer) {
+    let frame_t = app.spec.bus.frame_t();
+    let steps: Vec<zx_rustrum::observe::Step> = observer.steps().copied().collect();
+    let phases = zx_rustrum::loops::phases(&steps, frame_t, 64);
+    if phases.is_empty() {
+        eprintln!("nothing repeated often enough to call a loop");
+        return;
+    }
+
+    println!("{} phases over {} calls\n", phases.len(), steps.len());
+    for (n, phase) in phases.iter().enumerate() {
+        let name = app.notes.label(phase.head);
+        let named = if name.is_empty() {
+            format!("${:04X}", phase.head)
+        } else {
+            format!("{name} (${:04X})", phase.head)
+        };
+        let turns = phase.frames_per_turn(frame_t);
+        println!(
+            "Phase {}: loops on {named}, {} turns, {:.2} frames a turn, {} routines",
+            n + 1,
+            phase.iterations,
+            turns,
+            phase.routines.len()
+        );
+        if let Some(turn) = zx_rustrum::loops::turn(&steps, phase, frame_t) {
+            // The whole turn as one object, which is the thing worth asking
+            // about: a routine on its own says little, and a turn of the loop
+            // is the program's unit of work whatever its relationship to the
+            // frame turns out to be.
+            if let Ok(path) = std::env::var("TURN_JSON") {
+                let calls: Vec<String> = turn
+                    .steps
+                    .iter()
+                    .filter(|s| s.enter)
+                    .map(|s| {
+                        let name = app.notes.label(s.entry);
+                        let named = if name.is_empty() {
+                            format!("${:04X}", s.entry)
+                        } else {
+                            format!("{name} (${:04X})", s.entry)
+                        };
+                        format!(
+                            "{{\"depth\":{},\"t\":{},\"routine\":\"{named}\"}}",
+                            s.depth, s.t
+                        )
+                    })
+                    .collect();
+                let json = format!(
+                    "{{\"head\":\"{:04X}\",\"frames_per_turn\":{:.2},\"t_states\":{},\"calls\":[{}]}}",
+                    phase.head,
+                    turns,
+                    turn.to - turn.from,
+                    calls.join(",")
+                );
+                let _ = std::fs::write(format!("{path}.{}.json", n + 1), json);
+            }
+            let calls = turn.steps.iter().filter(|s| s.enter).count();
+            println!(
+                "  one turn: {calls} calls over {} T-states",
+                turn.to - turn.from
+            );
+            let mut shown = 0;
+            for step in turn.steps.iter().filter(|s| s.enter) {
+                let name = app.notes.label(step.entry);
+                let named = if name.is_empty() {
+                    format!("${:04X}", step.entry)
+                } else {
+                    name.to_string()
+                };
+                println!(
+                    "  {:indent$}{named}",
+                    "",
+                    indent = (step.depth.saturating_sub(1)) as usize * 2
+                );
+                shown += 1;
+                if shown >= 40 {
+                    println!("  ... {} more", calls - shown);
+                    break;
+                }
+            }
+        }
+        println!();
+    }
 }
 
 /// One frame's calls, in the order they happened and nested as they nest.

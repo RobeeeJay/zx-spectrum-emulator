@@ -8,6 +8,7 @@ pub mod demo_rom;
 pub mod disasm;
 pub mod flow;
 pub mod logo;
+pub mod loops;
 pub mod machine;
 pub mod notes;
 pub mod observe;
