@@ -3,6 +3,13 @@
 
     python3 tools/skool-to-asm.py skoolkit/mm.skool > mm.asm
     python3 tools/skool-to-asm.py skoolkit/mm.skool --hex > mm.asm
+    python3 tools/skool-to-asm.py skoolkit/mm.skool --with-data > mm.asm
+
+Data is left out unless asked for. Most of a game is graphics, tables and
+messages, and a thousand lines of DEFB say nothing about what the program
+does; what is wanted is usually the code and what somebody wrote about it. The
+description above a block of data goes with it, since a heading over nothing
+is worse than neither.
 
 SkoolKit ships `skool2asm.py`, which produces a listing that assembles back
 into the original bytes and is the right tool if that is what you want. This
@@ -37,6 +44,11 @@ CONTINUED = re.compile(r"^\s+;\s?(.*)$")
 LABEL = re.compile(r"^@label=(\w+)")
 COMMENT = re.compile(r"^;\s?(.*)$")
 DIRECTIVE = re.compile(r"^@")
+# Which letter begins an entry says what it holds: c is code, and the rest is
+# data of one sort or another.
+CODE_BLOCK = "c"
+# DEFB, DEFW, DEFM, DEFS — data sitting inside a code block.
+DEFINITION = re.compile(r"^\s*DEF[BWMS]\b", re.I)
 
 # `#R36266` points at an address. Written to take decimal or an explicit $
 # hex, and not to swallow the E of `#REGa` as a hex digit, which it did.
@@ -45,6 +57,12 @@ MACRO_REG = re.compile(r"#REG([a-z']+)", re.I)
 MACRO_OTHER = re.compile(r"#[A-Z]+(\([^)]*\))?")
 # A number in an operand: what might be an address worth naming.
 OPERAND_NUMBER = re.compile(r"(?<![\w$])(\d{3,5})(?![\w])")
+
+
+def block_letter(line):
+    """The letter that begins an entry, if this line begins one."""
+    entry = ENTRY.match(line)
+    return entry.group(1) if entry else None
 
 
 def parts(line):
@@ -125,6 +143,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("skool")
     parser.add_argument("--hex", action="store_true", help="addresses as $XXXX")
+    parser.add_argument(
+        "--with-data",
+        action="store_true",
+        help="keep the DEFB/DEFW/DEFM blocks and their descriptions",
+    )
     args = parser.parse_args()
 
     lines = open(args.skool, encoding="utf-8", errors="replace").read().splitlines()
@@ -135,14 +158,26 @@ def main():
 
     block = []
     pending_label = None
+    # Whether the entry being read is code. Data blocks are skipped whole,
+    # description and all, unless they were asked for.
+    in_code = True
     for line in lines:
+        letter = block_letter(line)
+        if letter is not None:
+            in_code = letter == CODE_BLOCK
+        skipping = not args.with_data and not in_code
+
         comment = COMMENT.match(line)
         if comment:
+            # Held until it is known what it describes: a heading belongs to
+            # the entry under it, and goes with it when that is thrown away.
             block.append(tidy(comment.group(1), names, args.hex))
             continue
 
         # A comment carried on from the instruction above it.
         carried = CONTINUED.match(line)
+        if carried and not parts(line)[0] and skipping:
+            continue
         if carried and not parts(line)[0]:
             text = tidy(carried.group(1), names, args.hex)
             if text:
@@ -160,6 +195,17 @@ def main():
         if where is None:
             if not line.strip():
                 block = []
+            continue
+        if skipping:
+            block = []
+            pending_label = None
+            continue
+
+        code_text = rest.partition(";")[0]
+        if not args.with_data and DEFINITION.match(code_text):
+            # Data written inside a code block: a table of bytes between two
+            # routines is still data.
+            block = []
             continue
 
         if block:
