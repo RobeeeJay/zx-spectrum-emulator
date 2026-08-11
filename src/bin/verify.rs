@@ -30,7 +30,7 @@ fn main() {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--frames" => frames = iter.next().and_then(|v| v.parse().ok()).unwrap_or(frames),
-            other => positional.push(other.clone()),
+            other => positional.push(other.to_string()),
         }
     }
     let [recording, address] = positional.as_slice() else {
