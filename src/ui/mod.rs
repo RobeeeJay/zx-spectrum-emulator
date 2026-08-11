@@ -1,6 +1,7 @@
 //! egui front end: main window plus the detachable debug viewports.
 
 pub mod back_buffer;
+pub mod callflow;
 pub mod cassette;
 pub mod debugger;
 pub mod profiler;
@@ -267,6 +268,9 @@ pub struct App {
     pub show_ram_map: bool,
     pub show_debugger: bool,
     pub show_back_buffer: bool,
+    /// The program's loop, drawn.
+    pub show_callflow: bool,
+    pub callflow: callflow::CallFlowState,
     /// Memory read as graphics.
     pub show_sprites: bool,
     pub sprites: sprites::SpriteView,
@@ -350,6 +354,8 @@ impl App {
             show_ram_map: true,
             show_debugger: true,
             show_back_buffer: false,
+            show_callflow: false,
+            callflow: callflow::CallFlowState::default(),
             show_sprites: false,
             sprites: sprites::SpriteView::default(),
             show_tape: false,
@@ -587,6 +593,7 @@ impl App {
             ui.toggle_value(&mut self.show_tape, "Tape");
             ui.toggle_value(&mut self.show_back_buffer, "Back buffer");
             ui.toggle_value(&mut self.show_sprites, "Sprites");
+            ui.toggle_value(&mut self.show_callflow, "Call flow");
             ui.toggle_value(&mut self.show_profiler, "Profiler");
         });
     }
@@ -1103,6 +1110,7 @@ impl App {
             self.show_tape = is_open("tape");
             self.show_back_buffer = is_open("back_buffer");
             self.show_sprites = is_open("sprites");
+            self.show_callflow = is_open("callflow");
             self.show_profiler = is_open("profiler");
         }
     }
@@ -1116,6 +1124,7 @@ impl App {
             ("tape", self.show_tape),
             ("back_buffer", self.show_back_buffer),
             ("sprites", self.show_sprites),
+            ("callflow", self.show_callflow),
             ("profiler", self.show_profiler),
         ]
         .into_iter()
@@ -1926,6 +1935,7 @@ impl App {
             ("tape", self.show_tape),
             ("back_buffer", self.show_back_buffer),
             ("sprites", self.show_sprites),
+            ("callflow", self.show_callflow),
         ] {
             if !shown {
                 self.placed.remove(name);
@@ -2040,6 +2050,30 @@ impl App {
                 },
             );
             self.show_tape = open;
+        }
+
+        if self.show_callflow {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("callflow"),
+                self.restore_window(
+                    "callflow",
+                    ViewportBuilder::default().with_title("Call flow"),
+                    [360.0, 180.0],
+                    [520.0, 700.0],
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("callflow", &ctx, [360.0, 180.0], [520.0, 700.0]) {
+                        self.remember_window("callflow", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| callflow::ui(self, ui));
+                },
+            );
+            self.show_callflow = open;
         }
 
         if self.show_sprites {
