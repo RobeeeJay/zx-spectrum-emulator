@@ -360,3 +360,46 @@ fn the_order_of_calls_within_a_frame_is_recorded() {
         "the steps are not in order: {times:?}"
     );
 }
+
+/// What a routine causes to happen is as much a fact about it as what its own
+/// instructions do. A routine whose job is to call the drawing routine wrote
+/// nothing itself and looked, in the measurements, like one that thinks rather
+/// than draws.
+#[test]
+fn a_caller_is_credited_with_what_its_callees_wrote() {
+    let program = vec![
+        (0x8000, 0xCD),
+        (0x8001, 0x00),
+        (0x8002, 0x90), // CALL $9000
+        (0x8003, 0x76), // HALT
+        // $9000 calls $9100 and writes nothing itself.
+        (0x9000, 0xCD),
+        (0x9001, 0x00),
+        (0x9002, 0x91),
+        (0x9003, 0xC9),
+        // $9100: LD HL,$4000 : LD (HL),$FF : RET
+        (0x9100, 0x21),
+        (0x9101, 0x00),
+        (0x9102, 0x40),
+        (0x9103, 0x36),
+        (0x9104, 0xFF),
+        (0x9105, 0xC9),
+    ];
+    let spec = watch(&program, 0x8000, 1);
+    let routines = &spec.bus.observer.routines;
+
+    let caller = &routines[&0x9000];
+    assert_eq!(
+        caller.writes.screen, 0,
+        "it writes nothing itself, and that is still true"
+    );
+    assert!(
+        caller.inclusive.screen > 0,
+        "but everything it causes should be counted against it too"
+    );
+    let drawer = &routines[&0x9100];
+    assert_eq!(
+        drawer.writes.screen, drawer.inclusive.screen,
+        "a routine with no callees has the same figure either way"
+    );
+}

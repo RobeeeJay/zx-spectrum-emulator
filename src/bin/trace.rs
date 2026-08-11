@@ -294,7 +294,20 @@ fn episode(app: &App, entry: u16, seen: &zx_rustrum::observe::Observed, frames: 
             "\"writes\":{{\"screen\":{},\"attrs\":{},\"other\":{}}}",
             seen.writes.screen, seen.writes.attrs, seen.writes.other
         ),
+        format!(
+            "\"inclusive\":{{\"screen\":{},\"attrs\":{},\"other\":{}}}",
+            seen.inclusive.screen, seen.inclusive.attrs, seen.inclusive.other
+        ),
         format!("\"longest_loop\":{}", seen.longest_loop()),
+        // The span of addresses it wrote to. A game that draws into a buffer
+        // and copies it to the screen later writes nothing to the display
+        // file, and without this reads as a routine that thinks rather than
+        // draws — which is what happened to every drawing routine in Manic
+        // Miner, because that is exactly what it does.
+        match seen.wrote_between {
+            Some((low, high)) => format!("\"wrote_between\":[\"{low:04X}\",\"{high:04X}\"]"),
+            None => "\"wrote_between\":null".to_string(),
+        },
         format!(
             "\"entry_hl\":[\"{:04X}\",\"{:04X}\"]",
             seen.entry_hl.low, seen.entry_hl.high

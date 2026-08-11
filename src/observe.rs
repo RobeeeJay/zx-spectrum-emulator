@@ -77,6 +77,13 @@ pub struct Observed {
     /// Instructions run inside it, its callees excluded.
     pub instructions: u64,
     pub writes: Writes,
+    /// The same, counting what the routines it calls wrote as well.
+    ///
+    /// A routine whose whole job is to call the drawing routine writes nothing
+    /// itself, and looked in the measurements like a routine that thinks
+    /// rather than draws — which is exactly the wrong thing to tell anybody
+    /// about DRAWHG.
+    pub inclusive: Writes,
     /// The lowest and highest address it wrote to.
     pub wrote_between: Option<(u16, u16)>,
     pub ports_in: Vec<u16>,
@@ -414,6 +421,17 @@ impl Observer {
         if let Some(offset) = screen_offset(addr) {
             self.drew[offset] = entry;
             self.drew_any[offset >> 6] |= 1 << (offset & 63);
+        }
+        // Credited to the routine itself, and to everything that called it:
+        // what a routine causes to happen is as much a fact about it as what
+        // it does with its own instructions.
+        //
+        // Counted here rather than totted up when a routine returns, because a
+        // main loop does not return: the one routine whose inclusive figure
+        // matters most would have been the one left at zero.
+        let ancestors: Vec<u16> = self.stack.iter().map(|frame| frame.entry).collect();
+        for ancestor in ancestors {
+            self.stats(ancestor).inclusive.add(addr);
         }
         let stats = self.stats(entry);
         stats.writes.add(addr);
