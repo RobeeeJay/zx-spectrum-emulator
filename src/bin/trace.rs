@@ -106,7 +106,7 @@ fn episode(app: &App, entry: u16, seen: &zx_rustrum::observe::Observed, frames: 
         for _ in 0..200 {
             let insn = disasm::disasm(&peek, at);
             lines.push(format!("{at:04X}  {}", insn.text));
-            if insn.text.starts_with("RET") && !insn.text.contains(',') {
+            if autodoc::ends_routine(&insn.text) {
                 break;
             }
             at = at.wrapping_add(insn.len.max(1) as u16);

@@ -458,7 +458,7 @@ fn walk<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> BTreeSet<u16> {
                 }
             }
             // The end of a routine: a return, or a jump that never comes back.
-            if text.starts_with("RET") && !text.contains(',') {
+            if ends_routine(text) {
                 break;
             }
             if text.starts_with("JP $") || text.starts_with("JR $") {
@@ -567,7 +567,7 @@ pub fn read_routine<F: Fn(u16) -> u8>(peek: &F, entry: u16) -> Features {
 
         f.text.push(text.clone());
 
-        if (text.starts_with("RET") && !text.contains(',')) || text.starts_with("JP $") {
+        if ends_routine(text) || text.starts_with("JP $") {
             break;
         }
         addr = addr.wrapping_add(insn.len.max(1) as u16);
@@ -1004,11 +1004,22 @@ fn annotate_lines<F: Fn(u16) -> u8>(peek: &F, entry: u16, doc: &mut Doc) {
             doc.comments.entry(addr).or_insert(note);
         }
 
-        if (text.starts_with("RET") && !text.contains(',')) || text.starts_with("JP $") {
+        if ends_routine(text) || text.starts_with("JP $") {
             break;
         }
         addr = addr.wrapping_add(insn.len.max(1) as u16);
     }
+}
+
+/// Whether this instruction is the end of a routine.
+///
+/// Only an unconditional return is. `RET Z` is a guard clause — the routine
+/// carries on underneath it — and treating it as the end meant reading four
+/// instructions of anything that begins by checking something and giving up.
+/// The test used to be "starts with RET and has no comma in it", which is true
+/// of every conditional return there is.
+pub fn ends_routine(text: &str) -> bool {
+    matches!(text, "RET" | "RETI" | "RETN")
 }
 
 /// The address a CALL or RST goes to, if it is a fixed one.

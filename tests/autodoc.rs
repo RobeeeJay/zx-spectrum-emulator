@@ -603,3 +603,49 @@ fn port_fe_with_no_other_evidence_claims_nothing() {
         "it should admit what it does not know: {comment:?}"
     );
 }
+
+/// A conditional return is a guard clause, not the end of a routine.
+///
+/// The test used to be "starts with RET and has no comma in it", meant to tell
+/// `RET` from `RET cc` — but a conditional return is written `RET Z`, with no
+/// comma anywhere. Anything beginning with a guard was therefore read as four
+/// instructions, which is most of a game: DRAWHG in Manic Miner came out as
+/// four instructions instead of 109.
+#[test]
+fn a_conditional_return_does_not_end_a_routine() {
+    use zx_rustrum::autodoc::ends_routine;
+
+    for text in ["RET", "RETI", "RETN"] {
+        assert!(ends_routine(text), "{text} is the end of a routine");
+    }
+    for text in [
+        "RET Z", "RET NZ", "RET C", "RET NC", "RET PO", "RET PE", "RET P", "RET M",
+    ] {
+        assert!(!ends_routine(text), "{text} is a guard clause, not the end");
+    }
+
+    // And a routine that starts with one is read past it.
+    let features = read_routine(
+        &|a: u16| {
+            let code: [u8; 8] = [
+                0xFE, 0xFF, // CP $FF
+                0xC8, // RET Z      <- a guard, not the end
+                0x21, 0x00, 0x40, // LD HL,$4000
+                0x36, 0xC9, // LD (HL),$C9
+            ];
+            code.get(a.wrapping_sub(0x8000) as usize)
+                .copied()
+                .unwrap_or(0xC9)
+        },
+        0x8000,
+    );
+    assert!(
+        features.length > 3,
+        "stopped after {} instructions, so the guard is still ending it",
+        features.length
+    );
+    assert!(
+        features.constants.contains(&0x4000),
+        "the code after the guard was never read"
+    );
+}
