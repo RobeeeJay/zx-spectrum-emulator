@@ -7,6 +7,7 @@ pub mod autodoc;
 pub mod demo_rom;
 pub mod disasm;
 pub mod flow;
+pub mod listing;
 pub mod logo;
 pub mod loops;
 pub mod machine;

@@ -74,7 +74,18 @@ def ask(model, prompt, timeout=300):
 def described(episode):
     w, i = episode["writes"], episode["inclusive"]
     span = episode.get("wrote_between") or ["-", "-"]
-    return (f"Routine ${episode['address']}. "
+    parts = []
+    if episode.get("flow"):
+        parts.append("Its code, with the loops marked and how many times each went round per call:\n"
+                     + "\n".join(episode["flow"]))
+    if episode.get("call_sites"):
+        parts.append("How its callers set it up just before calling it:\n"
+                     + "\n".join(episode["call_sites"]))
+    if episode.get("examples"):
+        parts.append("Registers it was actually handed, on four occasions:\n  "
+                     + "\n  ".join(episode["examples"]))
+    context = ("\n\n".join(parts) + "\n\n") if parts else ""
+    return context + (f"Routine ${episode['address']}. "
             f"every address it wrote lay between ${span[0]} and ${span[1]}. "
             f"calls={episode['calls']}, "
             f"frames_seen={episode['frames_seen']}, longest_loop={episode['longest_loop']}, "

@@ -323,8 +323,44 @@ fn episode(app: &App, entry: u16, seen: &zx_rustrum::observe::Observed, frames: 
                 .unwrap_or_else(|| "null".into())
         ),
         format!("\"callers\":{}", strings(&callers)),
+        // How it is called, not merely by whom: the instructions a caller runs
+        // just before, which is where the arguments are put in place.
+        format!(
+            "\"call_sites\":{}",
+            strings(&call_sites(app, seen.entry, &callers))
+        ),
+        // And what it was actually handed, a few times over.
+        format!(
+            "\"examples\":{}",
+            strings(
+                &seen
+                    .examples
+                    .iter()
+                    .map(|r| format!(
+                        "AF={:04X} BC={:04X} DE={:04X} HL={:04X}",
+                        r.af, r.bc, r.de, r.hl
+                    ))
+                    .collect::<Vec<_>>()
+            )
+        ),
         format!("\"callees\":{}", strings(&callees)),
         format!("\"listing\":{}", strings(&listing)),
+        // The same instructions with the shape put back: loops marked with
+        // how many times they were measured going round, calls resolved, the
+        // ways out pointed at. A flat listing makes a model rebuild all of
+        // that from nothing, and it is all known here.
+        format!(
+            "\"flow\":{}",
+            strings(&zx_rustrum::listing::flow(
+                &peek,
+                entry,
+                &seen.loop_trips(),
+                &|target| {
+                    let name = app.notes.label(target);
+                    (!name.is_empty()).then(|| format!("{name} (${target:04X})"))
+                }
+            ))
+        ),
     ];
     if let Some(art) = art {
         // A sprite is thirty-two bytes; drawn as characters a model can read
@@ -332,6 +368,27 @@ fn episode(app: &App, entry: u16, seen: &zx_rustrum::observe::Observed, frames: 
         fields.push(format!("\"drew\":{}", strings(&art)));
     }
     format!("{{{}}}", fields.join(","))
+}
+
+/// The lines a caller runs just before calling this routine: where whatever
+/// it works on is put into the registers.
+fn call_sites(app: &App, entry: u16, callers: &[String]) -> Vec<String> {
+    let peek = |a: u16| app.peek(a);
+    let mut out = Vec::new();
+    for caller in callers.iter().take(3) {
+        let Ok(from) = u16::from_str_radix(caller, 16) else {
+            continue;
+        };
+        let lines = zx_rustrum::listing::flow(&peek, from, &Default::default(), &|_| None);
+        let wanted = format!("CALL ${entry:04X}");
+        if let Some(at) = lines.iter().position(|line| line.contains(&wanted)) {
+            out.push(format!("in ${caller}:"));
+            for line in &lines[at.saturating_sub(4)..=at] {
+                out.push(format!("  {}", line.trim()));
+            }
+        }
+    }
+    out
 }
 
 /// A character cell this routine drew, as eight rows of text.

@@ -92,12 +92,24 @@ pub struct Observed {
     /// $FE from a routine setting the border once.
     pub port_reads: u32,
     pub port_writes: u32,
+    /// A few of the register sets it was actually handed, rather than only
+    /// the range they spanned. What a routine is called *with* is half of
+    /// what it is for, and a range does not show a caller passing $5E00 one
+    /// time and $5F00 the next.
+    pub examples: Vec<Registers>,
     /// What its registers held on the way in.
     pub entry_af: Seen,
     pub entry_bc: Seen,
     pub entry_de: Seen,
     pub entry_hl: Seen,
-    /// The most times round any one loop in it, by the address jumped back to.
+    /// How many times each loop in it went round, by the address jumped back
+    /// to, totalled over every call.
+    ///
+    /// A total rather than the longest unbroken run: with one loop inside
+    /// another, the inner one interrupts the outer one's run every time it
+    /// goes round, and the outer loop reads as one iteration. Divided by the
+    /// number of calls, this gives what a reader wants — how many times round
+    /// per call.
     pub loops: BTreeMap<u16, u32>,
     /// Deepest it was seen nested, which spots recursion.
     pub max_depth: u32,
@@ -117,11 +129,19 @@ pub struct Observed {
 }
 
 impl Observed {
-    /// The most times round its longest loop. On this machine the number is
-    /// diagnostic: 192 is the pixel rows of the screen, 24 or 32 the
+    /// The most times round its longest loop, per call. On this machine the
+    /// number is diagnostic: 192 is the pixel rows of the screen, 24 or 32 the
     /// characters across or down, 8 the rows of one character.
     pub fn longest_loop(&self) -> u32 {
-        self.loops.values().copied().max().unwrap_or(0)
+        self.loops.values().copied().max().unwrap_or(0) / self.calls.max(1)
+    }
+
+    /// How many times a particular loop went round per call.
+    pub fn loop_trips(&self) -> BTreeMap<u16, u32> {
+        self.loops
+            .iter()
+            .map(|(at, total)| (*at, total / self.calls.max(1)))
+            .collect()
     }
 
     /// Whether it runs about once per frame, which is what the work of a game
@@ -155,8 +175,6 @@ pub struct Observer {
     pub edges: BTreeMap<(u16, u16), Edge>,
     /// Frames watched, so "runs every frame" means something.
     pub frames: u64,
-    /// The back-jump being counted at the moment, and how far round it is.
-    loop_at: Option<(u16, u32)>,
     /// Where in the frame the machine is, in T-states, as last told.
     frame_t: u32,
     /// The last few frames' worth of entering and leaving, oldest first. A
@@ -492,16 +510,10 @@ impl Observer {
         // back-jump interrupts the count: the instructions of the loop body
         // are forward motion and would otherwise reset it every time round.
         if pc_after < pc_before && pc_before.wrapping_sub(pc_after) < 256 {
-            let round = match self.loop_at {
-                Some((at, count)) if at == pc_after => count + 1,
-                _ => 1,
-            };
-            self.loop_at = Some((pc_after, round));
             if let Some(entry) = self.current() {
                 let stats = self.stats(entry);
                 if stats.loops.len() < 32 {
-                    let seen = stats.loops.entry(pc_after).or_insert(0);
-                    *seen = (*seen).max(round);
+                    *stats.loops.entry(pc_after).or_insert(0) += 1;
                 }
             }
         }
@@ -542,8 +554,6 @@ impl Observer {
         if self.stack.len() >= self.max_depth {
             return;
         }
-        // Whatever loop was going round belongs to the caller.
-        self.loop_at = None;
         let caller = self.current();
         let depth = self.stack.len() as u32 + 1;
         let frame = self.frames;
@@ -556,6 +566,11 @@ impl Observer {
             stats.entry_bc.note(registers.bc);
             stats.entry_de.note(registers.de);
             stats.entry_hl.note(registers.hl);
+            if stats.examples.len() < 4
+                && !stats.examples.iter().any(|seen| seen.hl == registers.hl)
+            {
+                stats.examples.push(registers);
+            }
             stats
                 .entered_at
                 .note(frame_t_now.min(u16::MAX as u32) as u16);
