@@ -1,5 +1,12 @@
-//! Racing the beam: hovering the picture shows the frame half-drawn, with the
-//! part the ULA has not reached yet still showing the frame before it, dimmed.
+//! Racing the beam: the picture is shown half-painted, and the two halves say
+//! different things.
+//!
+//! Behind the beam is what the ULA actually put on the screen — the colours as
+//! they were at each T-state, which is where a border or attribute effect
+//! lives. Ahead of it is what the display file holds now, drawn plainly with
+//! one border colour and each cell's attribute as it stands, and dimmed to
+//! show it has not been painted yet. So the screen shows the machine's
+//! execution on one side of the beam and the program's intention on the other.
 
 use zx_rustrum::machine::{Model, Spectrum, FRAME_T};
 use zx_rustrum::screen::{self, View};
@@ -58,17 +65,51 @@ fn the_beam_splits_the_picture_between_two_frames() {
     let above = colour_at(&buf, VIEW.border_x + 8, split_y - 4);
     assert_eq!(above, [0, 0, 0], "above the beam should be the new frame");
 
-    // Below it: the previous frame's white paper, a third darker.
+    // Below it: what the display file holds now, which is also black — the
+    // previous frame's white is gone, because the part of the screen the beam
+    // has not reached shows what is in memory rather than what was painted a
+    // frame ago.
     let below = colour_at(&buf, VIEW.border_x + 8, split_y + 4);
+    assert_eq!(
+        below,
+        [0, 0, 0],
+        "below the beam should be what memory holds now, not the old frame"
+    );
+}
+
+/// Ahead of the beam is the display file as it stands. A program that has
+/// rewritten the screen since the last frame sees its new picture there, which
+/// is the point: it is what the machine is about to paint.
+#[test]
+fn ahead_of_the_beam_is_what_memory_holds_now() {
+    let mut spec = two_frames();
+    // Memory now says white paper again, differing from both the last frame
+    // and the black above the beam.
+    for o in 0x1800..0x1b00u16 {
+        spec.bus.poke(0x4000 + o, 0x38);
+    }
+    let mut buf = vec![0u8; VIEW.buffer_len()];
+    let split_y = VIEW.border_top + screen::SCREEN_H / 2;
+    let beam = screen::t_at_pixel(
+        VIEW,
+        spec.bus.first_pixel_t(),
+        spec.bus.model.t_per_line(),
+        VIEW.border_x,
+        split_y,
+    ) as u32;
+    screen::render_racing(&spec.bus, VIEW, &mut buf, false, beam);
+
     let white = screen::PALETTE[7];
-    let expected = [
+    let dimmed = [
         (white[0] as f32 * screen::STALE_BRIGHTNESS) as u8,
         (white[1] as f32 * screen::STALE_BRIGHTNESS) as u8,
         (white[2] as f32 * screen::STALE_BRIGHTNESS) as u8,
     ];
+    let below = colour_at(&buf, VIEW.border_x + 8, split_y + 4);
     assert_eq!(
-        below, expected,
-        "below the beam should be the old frame, dimmed"
+        below, dimmed,
+        "ahead of the beam is memory as it stands, dimmed to say it is not \
+         painted yet"
     );
     assert!(
         (below[0] as f32 / white[0] as f32 - 2.0 / 3.0).abs() < 0.01,
@@ -93,21 +134,38 @@ fn the_split_happens_part_way_along_a_line() {
     ) as u32;
     screen::render_racing(&spec.bus, VIEW, &mut buf, false, beam);
 
+    // Both halves are drawn from memory now, so what marks the beam is the
+    // dimming rather than a difference of content.
     let before = colour_at(&buf, x - 16, y);
     let after = colour_at(&buf, x + 16, y);
-    assert_eq!(before, [0, 0, 0], "the left of the line is the new frame");
-    assert_ne!(after, [0, 0, 0], "the right of it is still the old one");
-    assert_ne!(before, after, "the beam should be visible on the line");
-
-    // The line below is entirely the old frame.
-    assert_eq!(colour_at(&buf, x - 16, y + 2), after);
+    assert_eq!(before, [0, 0, 0], "the left of the line is painted");
+    assert_eq!(
+        after,
+        [0, 0, 0],
+        "the right of it is memory, and also black"
+    );
 }
 
+/// A border effect is a colour change part-way down the frame. Behind the beam
+/// it is there, because that is what the ULA painted; ahead of it there is
+/// only the colour the program has set, because nothing has been painted with
+/// it yet. That contrast is the whole purpose of racing the beam.
 #[test]
-fn the_border_is_split_and_dimmed_too() {
-    let spec = two_frames();
+fn a_border_effect_shows_behind_the_beam_and_not_ahead_of_it() {
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = two_frames();
+    // Part-way down this frame, the program turns the border red.
+    while spec.bus.tstates < spec.bus.first_pixel_t() + 40 * 224 {
+        spec.step_instruction();
+    }
+    spec.bus.io_write(0x00FE, 2);
+    while spec.bus.tstates < spec.bus.first_pixel_t() + 120 * 224 {
+        spec.step_instruction();
+    }
+
     let mut buf = vec![0u8; VIEW.buffer_len()];
-    let split_y = VIEW.border_top + screen::SCREEN_H / 2;
+    let split_y = VIEW.border_top + 100;
     let beam = screen::t_at_pixel(
         VIEW,
         spec.bus.first_pixel_t(),
@@ -117,18 +175,22 @@ fn the_border_is_split_and_dimmed_too() {
     ) as u32;
     screen::render_racing(&spec.bus, VIEW, &mut buf, false, beam);
 
-    // The old frame's border was white, the new one's is black.
-    let old_border = colour_at(&buf, 4, split_y + 20);
-    let new_border = colour_at(&buf, 4, split_y - 20);
-    assert_eq!(new_border, [0, 0, 0]);
-    let white = screen::PALETTE[7];
+    let red = screen::PALETTE[2];
+    let above = colour_at(&buf, 4, VIEW.border_top + 60);
     assert_eq!(
-        old_border,
-        [
-            (white[0] as f32 * screen::STALE_BRIGHTNESS) as u8,
-            (white[1] as f32 * screen::STALE_BRIGHTNESS) as u8,
-            (white[2] as f32 * screen::STALE_BRIGHTNESS) as u8,
-        ]
+        above, red,
+        "the border the ULA painted red should be red behind the beam"
+    );
+
+    let ahead = colour_at(&buf, 4, split_y + 40);
+    let dimmed_red = [
+        (red[0] as f32 * screen::STALE_BRIGHTNESS) as u8,
+        (red[1] as f32 * screen::STALE_BRIGHTNESS) as u8,
+        (red[2] as f32 * screen::STALE_BRIGHTNESS) as u8,
+    ];
+    assert_eq!(
+        ahead, dimmed_red,
+        "ahead of the beam it is the one colour the border is set to now"
     );
 }
 
@@ -176,7 +238,14 @@ fn pixel_positions_and_t_states_agree() {
 fn racing_works_while_paused() {
     // Nothing about the split depends on the emulator running: the same frame
     // rendered with two different beam positions differs.
-    let spec = two_frames();
+    //
+    // The paper has to be something other than black for that to show. Ahead
+    // of the beam is the same memory as behind it, only dimmed, and a dimmed
+    // black is black.
+    let mut spec = two_frames();
+    for o in 0x1800..0x1b00u16 {
+        spec.bus.poke(0x4000 + o, 0x38); // black ink on white paper
+    }
     let mut early = vec![0u8; VIEW.buffer_len()];
     let mut late = vec![0u8; VIEW.buffer_len()];
     let t = |y: usize| {

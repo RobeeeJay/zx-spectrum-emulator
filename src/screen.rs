@@ -244,13 +244,14 @@ fn draw(
                 let cell = (x / 8) as u16;
                 if x % 8 == 0 || stale != cell_stale {
                     cell_stale = stale;
-                    let read = |o: u16| {
-                        if stale {
-                            bus.video_prev(o)
-                        } else {
-                            byte(o)
-                        }
-                    };
+                    // Ahead of the beam, what is shown is what the display
+                    // file holds now — the picture as the program has built
+                    // it, not the one the ULA painted a frame ago. Behind the
+                    // beam it is what the ULA actually put there, attribute
+                    // changes and all, which is what makes a raster effect
+                    // visible: the two halves of the screen are the program's
+                    // intention and the machine's execution of it.
+                    let read = |o: u16| byte(o);
                     cell_bits = read(row_off | cell);
                     let attr = read(attr_row + cell);
                     let bright = (attr & 0x40) >> 3;
@@ -271,11 +272,17 @@ fn draw(
                 continue;
             }
 
-            let colour = if borders {
-                // Two pixels per T-state.
-                raster[t.rem_euclid(frame_t) as usize]
-            } else {
+            let colour = if !borders {
                 bus.border
+            } else if stale {
+                // Ahead of the beam the border is simply the colour the
+                // program has set: nothing has been painted with it yet, so
+                // there is no history to show.
+                bus.border
+            } else {
+                // Behind it, the colour at each T-state, which is where a
+                // border effect lives.
+                raster[t.rem_euclid(frame_t) as usize]
             };
             let rgb = PALETTE[(colour & 7) as usize];
             put(out, width, px, py, if stale { dim(rgb) } else { rgb });

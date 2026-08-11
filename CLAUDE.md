@@ -57,6 +57,15 @@ watches the bus; an opcode fetched above `$8000` with bit 6 clear is fed to the
 CPU as a NOP while the ULA turns it into eight pixels. Emulating it at that
 level is what makes hi-res programs work without special cases.
 
+**Racing the beam shows two different things either side of it.** Behind the
+beam is what the ULA actually painted — the border and attributes as they were
+at each T-state, which is where a raster effect lives. Ahead of it is what the
+display file holds *now*, drawn plainly with one border colour, and dimmed to
+say it has not been painted yet. So the screen carries the machine's execution
+on one side and the program's intention on the other. It used to show the
+previous frame ahead of the beam, which is what a television does and tells you
+nothing about the program.
+
 **Sync is treated the way a television treats it.** A pulse held for at least a
 line is a vertical sync and pulls the picture back to the top; a shorter one is
 a line sync; one that arrives far too early is not a sync at all, so the beam
