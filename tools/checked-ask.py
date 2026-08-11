@@ -16,7 +16,7 @@ something real the routine is left unnamed. An unnamed routine costs a reader
 nothing; a confidently wrong one costs them the time to disprove it.
 """
 
-import argparse, json, sys, urllib.request
+import argparse, json, subprocess, sys, urllib.request
 
 VOCABULARY = [
     "draws", "moves something", "reads input", "makes a noise", "copies a block",
@@ -49,7 +49,19 @@ def field_of(episode, path):
     return at
 
 
-def ask(model, prompt, timeout=180):
+def ask(model, prompt, timeout=300):
+    """One question. `claude` goes to a frontier model through the CLI, and
+    anything else to a local one under Ollama; the prompt is identical either
+    way, which is the whole point of asking."""
+    if model == "claude":
+        done = subprocess.run(
+            ["claude", "-p"],
+            input=f"{SYSTEM}\n\n{prompt}",
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return done.stdout.strip()
     body = json.dumps({"model": model, "system": SYSTEM, "prompt": prompt, "stream": False,
                        "keep_alive": "10m",
                        "options": {"temperature": 0, "num_predict": 120}}).encode()
