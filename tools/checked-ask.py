@@ -30,6 +30,10 @@ Answer with one line of JSON and nothing else:
 
 "field" must be one of: calls, writes.screen, writes.attrs, writes.other,
 inclusive.screen, inclusive.attrs, inclusive.other, longest_loop, frames_seen.
+
+Note that many games draw into a buffer in ordinary RAM and copy it to the
+screen later, so a routine can be drawing without ever writing to $4000-$57FF.
+The span of addresses it wrote to says which.
 "value" must be exactly what that field holds in what you were given. It will
 be checked. If nothing in the measurements supports a guess, answer
 {{"does": "no evidence"}} — that is a useful answer, an invented one is not."""
@@ -57,7 +61,10 @@ def ask(model, prompt, timeout=180):
 
 def described(episode):
     w, i = episode["writes"], episode["inclusive"]
-    return (f"Routine ${episode['address']}. calls={episode['calls']}, "
+    span = episode.get("wrote_between") or ["-", "-"]
+    return (f"Routine ${episode['address']}. "
+            f"every address it wrote lay between ${span[0]} and ${span[1]}. "
+            f"calls={episode['calls']}, "
             f"frames_seen={episode['frames_seen']}, longest_loop={episode['longest_loop']}, "
             f"writes.screen={w['screen']}, writes.attrs={w['attrs']}, writes.other={w['other']}, "
             f"inclusive.screen={i['screen']}, inclusive.attrs={i['attrs']}, "
