@@ -32,7 +32,7 @@ def summarise(address, episode):
             f"writes ${span[0]}..${span[1]}, longest loop {episode.get('longest_loop', 0)}")
 
 
-def build(turn, episodes, listing_lines=60):
+def build(turn, episodes, listing_lines=200):
     # The call tree, with runs of the same routine collapsed: twelve identical
     # lines say no more than "12x" and crowd out the code.
     lines = []
