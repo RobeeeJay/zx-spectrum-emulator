@@ -100,7 +100,10 @@ fn episode(app: &App, entry: u16, seen: &zx_rustrum::observe::Observed, frames: 
     let listing: Vec<String> = {
         let mut at = entry;
         let mut lines = Vec::new();
-        for _ in 0..24 {
+        // The whole routine, not the top of it. Capped at 24, the model was
+        // being shown the opening condition check of MOVEWILLY and asked what
+        // the routine does, which is not a question anybody could answer.
+        for _ in 0..200 {
             let insn = disasm::disasm(&peek, at);
             lines.push(format!("{at:04X}  {}", insn.text));
             if insn.text.starts_with("RET") && !insn.text.contains(',') {
@@ -182,23 +185,32 @@ fn drawn_cell(app: &App, entry: u16) -> Option<Vec<String>> {
             }
         }
     }
-    let (column, row, bytes) = best?;
-    if bytes < 4 {
-        return None;
-    }
-    let third = row / 8;
-    Some(
-        (0..8)
-            .map(|line| {
-                let y = (row % 8) * 8 + line;
-                let addr = 0x4000 + (third << 11) + (y << 5) + column;
+    let (column, row, _) = best?;
+
+    // Two cells by two around the busiest one: a sprite is rarely one cell,
+    // and the thing that makes this evidence worth having is being able to see
+    // what was drawn. Requiring four bytes in a single cell left twenty-five
+    // episodes out of twenty-six with no picture at all.
+    let (first_column, last_column) = (column.saturating_sub(1), (column + 2).min(32));
+    let (first_row, last_row) = (row.saturating_sub(1), (row + 2).min(24));
+
+    let mut art = Vec::new();
+    for r in first_row..last_row {
+        let third = r / 8;
+        for line in 0..8 {
+            let y = (r % 8) * 8 + line;
+            let mut text = String::new();
+            for c in first_column..last_column {
+                let addr = 0x4000 + (third << 11) + (y << 5) + c;
                 let byte = app.peek(addr as u16);
-                (0..8)
-                    .map(|bit| if byte & (0x80 >> bit) != 0 { '#' } else { '.' })
-                    .collect()
-            })
-            .collect(),
-    )
+                for bit in 0..8 {
+                    text.push(if byte & (0x80 >> bit) != 0 { '#' } else { '.' });
+                }
+            }
+            art.push(text);
+        }
+    }
+    Some(art)
 }
 
 fn ports(ports: &[u16]) -> String {
