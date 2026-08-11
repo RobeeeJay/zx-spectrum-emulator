@@ -26,12 +26,14 @@ fn main() {
     let mut frames = 3000u32;
     let mut tree = false;
     let mut find_loops = false;
+    let mut mermaid = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--frames" => frames = iter.next().and_then(|v| v.parse().ok()).unwrap_or(frames),
             "--tree" => tree = true,
             "--loops" => find_loops = true,
+            "--mermaid" => mermaid = true,
             other => recording = Some(other.to_string()),
         }
     }
@@ -90,6 +92,10 @@ fn main() {
         show_loops(&app, observer);
         return;
     }
+    if mermaid {
+        draw_loop(&app, observer);
+        return;
+    }
     let mut written = 0;
     for (entry, seen) in &observer.routines {
         // Only routines that did something worth describing.
@@ -100,6 +106,114 @@ fn main() {
         written += 1;
     }
     eprintln!("{written} routines over {played} frames of {recording}");
+}
+
+/// One turn of the program's loop as a Mermaid flowchart.
+///
+/// Top to bottom is the order things happened in, which is the question
+/// somebody reading a game's main loop actually has. The count on an arrow is
+/// how many times that call is made in a turn, and each box says what the
+/// routine was measured doing rather than what its name suggests.
+fn draw_loop(app: &App, observer: &zx_rustrum::observe::Observer) {
+    let frame_t = app.spec.bus.frame_t();
+    let steps: Vec<zx_rustrum::observe::Step> = observer.steps().copied().collect();
+    let phases = zx_rustrum::loops::phases(&steps, frame_t, 64);
+    let Some(phase) = phases.first() else {
+        eprintln!("nothing repeated often enough to call a loop");
+        return;
+    };
+    let Some(turn) = zx_rustrum::loops::turn(&steps, phase, frame_t) else {
+        eprintln!("no whole turn of it was recorded");
+        return;
+    };
+
+    // Who called whom within this turn, and how often, in the order they were
+    // first entered.
+    let mut order: Vec<u16> = Vec::new();
+    let mut edges: std::collections::BTreeMap<(u16, u16), u32> = Default::default();
+    let mut stack: Vec<u16> = Vec::new();
+    for step in &turn.steps {
+        if !step.enter {
+            stack.pop();
+            continue;
+        }
+        if !order.contains(&step.entry) {
+            order.push(step.entry);
+        }
+        if let Some(caller) = stack.last() {
+            *edges.entry((*caller, step.entry)).or_insert(0) += 1;
+        }
+        stack.push(step.entry);
+    }
+
+    let id = |entry: u16| format!("r{entry:04X}");
+    let label = |entry: u16| {
+        let name = app.notes.label(entry);
+        let what = observer
+            .routines
+            .get(&entry)
+            .and_then(|seen| zx_rustrum::autodoc::describe_measured(seen, observer.frames as u32))
+            .map(|(label, _)| label)
+            // A rule that declines to name something still leaves the
+            // measurement, which says more than an empty box.
+            .unwrap_or_else(|| match observer.routines.get(&entry) {
+                Some(seen) => {
+                    let per_call = seen.inclusive.total() / seen.calls.max(1);
+                    format!("{per_call} bytes a call")
+                }
+                None => String::new(),
+            });
+        let named = if name.is_empty() {
+            format!("${entry:04X}")
+        } else {
+            name.to_string()
+        };
+        // Mermaid takes the quotes badly if anything inside is unescaped.
+        format!("{named}<br/>{what}").replace('"', "'")
+    };
+
+    println!("flowchart TD");
+    println!(
+        "  %% one turn of the loop at ${:04X}: {:.2} frames, {} calls",
+        phase.head,
+        phase.frames_per_turn(frame_t),
+        turn.steps.iter().filter(|s| s.enter).count()
+    );
+    for entry in &order {
+        let shape = if *entry == phase.head {
+            ("([", "])")
+        } else {
+            ("[\"", "\"]")
+        };
+        println!("  {}{}{}{}", id(*entry), shape.0, label(*entry), shape.1);
+    }
+    // The order things happen in, as a spine down the page.
+    let top: Vec<u16> = {
+        let mut seen = Vec::new();
+        let mut depth = 0i32;
+        for step in &turn.steps {
+            if step.enter {
+                if depth == 0 && !seen.contains(&step.entry) {
+                    seen.push(step.entry);
+                }
+                depth += 1;
+            } else {
+                depth -= 1;
+            }
+        }
+        seen
+    };
+    for pair in top.windows(2) {
+        println!("  {} -.->|then| {}", id(pair[0]), id(pair[1]));
+    }
+    for ((from, to), times) in &edges {
+        let times = if *times > 1 {
+            format!("|{times}x|")
+        } else {
+            String::new()
+        };
+        println!("  {} -->{} {}", id(*from), times, id(*to));
+    }
 }
 
 /// The loops the program was seen to go round, and one turn of each.
