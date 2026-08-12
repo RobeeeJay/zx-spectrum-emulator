@@ -85,6 +85,15 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 
 fn controls(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
+        // The same button as the main window and the debugger carry. Looking
+        // for something means watching the program run and then stopping it to
+        // read what was found, and reaching for another window to do that
+        // loses your place in this one.
+        if theme::run_pause_button(ui, app.running).clicked() {
+            app.running = !app.running;
+        }
+        theme::divider(ui);
+
         // Always clickable: pressing one is what starts the machine being
         // watched, so there is no switch to find first.
         for question in Question::all() {

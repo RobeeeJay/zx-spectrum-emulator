@@ -446,3 +446,35 @@ fn being_sent_to_the_debugger_asks_for_the_front() {
     assert!(app.dbg.raise, "and asking to be brought to the front");
     assert_eq!(app.dbg.marked, Some(0x8000), "with the row marked");
 }
+
+/// The call flow window carries the same Run/Pause button as the main window
+/// and the debugger. Watching a program and then stopping it to read what was
+/// found is the whole of the job, and reaching for another window to stop it
+/// loses your place in this one.
+#[test]
+fn the_call_flow_window_can_run_and_pause_the_machine() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app();
+    app.show_callflow = true;
+    app.show_debugger = false;
+    app.running = true;
+
+    let mut h = egui_kittest::Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+
+    // While it is running the button offers to pause, as it does elsewhere.
+    // The last one on the page: the main window carries the same button, and
+    // this test is about the call flow window's own.
+    let pause = h.get_all_by_label("⏸ Pause").count();
+    assert_eq!(pause, 2, "the main window's button and this window's");
+    h.get_all_by_label("⏸ Pause").last().unwrap().click();
+    h.run_steps(2);
+    assert!(!h.state().running, "pressing Pause should stop the machine");
+
+    h.get_all_by_label("▶ Run").last().unwrap().click();
+    h.run_steps(2);
+    assert!(h.state().running, "and Run should start it again");
+}
