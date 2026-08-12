@@ -39,6 +39,10 @@ const STACK_W: f32 = 124.0;
 /// How tall the listing is, and so how much of memory is on show.
 pub const LISTING_H: f32 = 460.0;
 
+/// Instructions moved for each row of wheel travel. Three is about what a
+/// document scrolls by, and an instruction is shorter than a line of prose.
+const LINES_PER_ROW: f32 = 3.0;
+
 /// How far above the address on show the listing starts, so there is
 /// something to scroll back through. Bytes rather than lines, since how many
 /// instructions that is depends on what they are — and not so far that the
@@ -101,6 +105,10 @@ pub struct DebuggerState {
     /// Whether the debugger has asked for the program to be watched so it can
     /// work out where the routines and the data are.
     pub watching_blocks: bool,
+    /// Wheel travel that has not yet added up to a whole instruction. A
+    /// trackpad delivers a few points at a time, and rounding each of those to
+    /// the nearest line throws every one of them away.
+    pub scroll_debt: f32,
     pub lines: usize,
     pub goto_text: String,
     pub bp_text: String,
@@ -117,6 +125,7 @@ impl Default for DebuggerState {
             view_addr: 0,
             marked: None,
             watching_blocks: false,
+            scroll_debt: 0.0,
             lines: 96,
             goto_text: String::new(),
             bp_text: String::new(),
@@ -1223,8 +1232,14 @@ fn scroll_through_memory(app: &mut App, ui: &mut egui::Ui, top: f32) {
     if wheel == 0.0 {
         return;
     }
-    // A notch of the wheel is about one line, whichever way it goes.
-    let lines = (wheel / row_height(ui)).round() as i32;
+    // How far a roll of the wheel carries. A row of the listing is a point of
+    // wheel travel apiece, which moved the listing at a crawl next to every
+    // other window on the desktop, so it goes several lines to the row — and
+    // the part that does not add up to a whole line is kept rather than
+    // rounded away, which is the whole of a trackpad's output.
+    app.dbg.scroll_debt += wheel * LINES_PER_ROW / row_height(ui);
+    let lines = app.dbg.scroll_debt.trunc() as i32;
+    app.dbg.scroll_debt -= lines as f32;
     if lines == 0 {
         return;
     }

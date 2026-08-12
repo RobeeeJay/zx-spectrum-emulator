@@ -264,6 +264,61 @@ fn rolling_the_wheel_travels_through_memory_without_end() {
     );
 }
 
+/// The listing keeps up with the wheel.
+///
+/// A row of the listing per point of wheel travel moved it at a crawl beside
+/// every other window on the desktop, and a trackpad — which delivers a few
+/// points at a time — moved it not at all, since each of those rounded to no
+/// lines and was thrown away.
+#[test]
+fn the_listing_keeps_up_with_the_wheel() {
+    let mut app = app();
+    app.dbg.view_addr = 0x8000;
+    app.dbg.follow_pc = false;
+    let mut h = harness(app);
+    h.run_steps(3);
+
+    let over = h
+        .get_all_by_label("Instruction")
+        .next()
+        .and_then(|node| node.accesskit_node().bounding_box())
+        .map(|box_| egui::pos2(box_.x0 as f32 + 20.0, box_.y1 as f32 + 60.0))
+        .expect("the listing has a heading over it");
+    let roll = |h: &mut Harness<'_, App>, amount: f32| {
+        h.input_mut().events.push(egui::Event::PointerMoved(over));
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, amount),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.run_steps(2);
+    };
+
+    // A roll of a screenful should move by more than a screenful of lines: the
+    // listing is a window on memory, and travelling it a line at a time is how
+    // an afternoon is spent.
+    let start = h.state().dbg.view_addr;
+    roll(&mut h, -zx_rustrum::ui::debugger::LISTING_H);
+    let moved = h.state().dbg.view_addr.wrapping_sub(start);
+    assert!(
+        moved > zx_rustrum::ui::debugger::LISTING_H as u16 / 8,
+        "rolling a listing's height moved only {moved} bytes"
+    );
+
+    // And a trackpad's dribble of a few points at a time adds up instead of
+    // being rounded to nothing each frame.
+    let start = h.state().dbg.view_addr;
+    for _ in 0..12 {
+        roll(&mut h, -4.0);
+    }
+    assert_ne!(
+        h.state().dbg.view_addr,
+        start,
+        "forty-eight points of wheel in small pieces should still move it"
+    );
+}
+
 /// Every row drawn is a row that can be seen. Rows past the bottom of the
 /// listing are the ones that put a scrollbar on it.
 #[test]
