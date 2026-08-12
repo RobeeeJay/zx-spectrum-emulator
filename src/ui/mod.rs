@@ -188,6 +188,11 @@ const MAX_RECORDED_FRAMES: f32 = 24.0;
 /// document a program, not enough to grow without limit over a long recording.
 const VISITED_CAP: usize = 4096;
 
+/// How many hand-stepped instructions can be stepped back over. Enough to see
+/// how the machine got where it is, which is what stepping back is for; a
+/// hundred would be a recording, and there is one of those already.
+pub const REWIND: usize = 20;
+
 pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("1%", 0.01),
     ("5%", 0.05),
@@ -295,6 +300,10 @@ pub struct App {
     pub profiler: profiler::ProfilerWindowState,
 
     pub last_stop: Option<Stop>,
+    /// The last few instructions stepped by hand, newest last, so they can be
+    /// stepped back over. What each one holds is what it changed rather than a
+    /// copy of the machine.
+    pub rewind: std::collections::VecDeque<crate::machine::Undo>,
     /// Emulated T-states left over from the previous host frame.
     leftover: f32,
 
@@ -372,6 +381,7 @@ impl App {
             tape: tape::TapeWindowState::default(),
             profiler: profiler::ProfilerWindowState::default(),
             last_stop: None,
+            rewind: std::collections::VecDeque::new(),
             leftover: 0.0,
             status_is_error: false,
             title_shown: String::new(),
@@ -1316,8 +1326,56 @@ impl App {
     pub fn step_machine(&mut self) {
         match &mut self.zx81 {
             Some(zx) => zx.step_instruction(),
-            None => self.spec.step_instruction(),
+            None => {
+                // Kept so it can be stepped back over. Only while stepping by
+                // hand: a running machine writes millions of bytes a second
+                // and none of them is going to be walked back through.
+                let undo = self.spec.step_recording();
+                if self.rewind.len() == REWIND {
+                    self.rewind.pop_front();
+                }
+                self.rewind.push_back(undo);
+            }
         }
+    }
+
+    /// How many instructions can be stepped back over.
+    ///
+    /// Enough to see how the machine got where it is, which is what stepping
+    /// back is for; a hundred would be a recording, and there is one of those
+    /// already.
+    pub fn can_step_back(&self) -> bool {
+        !self.rewind.is_empty()
+    }
+
+    /// Let the machine run, and throw away what could have been stepped back
+    /// over.
+    ///
+    /// Running writes what an undo cannot put back: a step over a CALL is
+    /// thousands of instructions, and the entries kept from before it describe
+    /// a machine that no longer exists. Stepping back into that would put the
+    /// registers somewhere plausible and leave the memory wrong, which is
+    /// worse than not offering it.
+    pub fn forget_rewind(&mut self) {
+        self.rewind.clear();
+    }
+
+    /// Put the last instruction back the way it was.
+    pub fn step_back(&mut self) {
+        let Some(undo) = self.rewind.pop_back() else {
+            self.set_status("Nothing to step back to".to_string(), false);
+            return;
+        };
+        self.running = false;
+        self.spec.undo_step(&undo);
+        self.dbg.follow_pc = true;
+        self.dbg.centre = true;
+        self.last_stop = Some(crate::machine::Stop::Stepped);
+        self.status = format!(
+            "Stepped back to ${:04X}, {} left",
+            self.cpu().pc,
+            self.rewind.len()
+        );
     }
 
     /// The mixer of the machine that is running.
@@ -1483,6 +1541,7 @@ impl App {
 
         // Cap the work per host frame so "Max" speed cannot lock up the UI.
         let budget = budget.min(self.spec.bus.frame_t() * 24);
+        self.rewind.clear();
         let stop = self.spec.run(budget);
         self.last_stop = Some(stop);
         self.handle_stop(stop);

@@ -175,6 +175,12 @@ pub struct SpectrumBus {
 
     pub tracker: Tracker,
 
+    /// What to put back to undo the instruction being executed: the address
+    /// and the byte that was there before each write. Only collected while
+    /// somebody is stepping by hand, since a running machine writes millions
+    /// of bytes a second and none of them is going to be stepped back over.
+    pub undo: Option<Vec<(u16, u8)>>,
+
     /// T-states elapsed in the current frame.
     pub tstates: u32,
     pub frame: u64,
@@ -253,6 +259,7 @@ impl SpectrumBus {
             late_timing: false,
             slots: [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)],
             tracker: Tracker::new(),
+            undo: None,
             tstates: 0,
             frame: 0,
             irq_pending: false,
@@ -325,7 +332,7 @@ impl SpectrumBus {
         [[0, 1, 2, 3], [4, 5, 6, 7], [4, 5, 6, 3], [4, 7, 6, 3]];
 
     /// Recompute the four 16K slots from the paging registers.
-    fn apply_paging(&mut self) {
+    pub(crate) fn apply_paging(&mut self) {
         if !self.model.has_paging() {
             self.slots = [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)];
             return;
@@ -868,6 +875,16 @@ impl Bus for SpectrumBus {
         let phys = self.phys_index(addr);
         self.tracker.on_write(phys, addr);
         self.observer.on_write(addr, value);
+        if self.undo.is_some() {
+            // What was there before, so it can be put back. Read before the
+            // write rather than worked out afterwards, because afterwards it
+            // is gone. A write into ROM changes nothing and undoes to the same
+            // nothing, so it needs no special case.
+            let was = self.mem(addr);
+            if let Some(undo) = self.undo.as_mut() {
+                undo.push((addr, was));
+            }
+        }
         if (SCREEN_START..SCREEN_END).contains(&addr) {
             self.screen_writes_acc += 1;
             if self.breaks.screen {
@@ -1102,6 +1119,29 @@ impl Event {
     }
 }
 
+/// Everything needed to put the machine back the way it was before one
+/// instruction.
+///
+/// Not a copy of the machine: that would be sixty-four kilobytes of RAM a
+/// step, plus the tape, the audio and everything the observer has watched. An
+/// instruction writes a byte or two, so what it changed is small even when the
+/// machine is not.
+///
+/// What is not put back: the sound already played, where the tape has reached,
+/// and anything the ULA has already painted. Those are outside the machine's
+/// memory and cannot be recalled; the picture catches up on the next frame.
+#[derive(Clone)]
+pub struct Undo {
+    pub cpu: Z80,
+    /// Each address written, and the byte that was there before.
+    pub writes: Vec<(u16, u8)>,
+    pub tstates: u32,
+    pub border: u8,
+    pub page_reg: u8,
+    pub page_reg_1ffd: u8,
+    pub frames_completed: u32,
+}
+
 pub struct Spectrum {
     pub cpu: Z80,
     pub bus: SpectrumBus,
@@ -1227,6 +1267,43 @@ impl Spectrum {
     }
 
     /// Execute exactly one instruction (after any pending interrupt).
+    /// One instruction, with what it took to get there kept so it can be
+    /// undone. Only used while somebody is stepping by hand.
+    pub fn step_recording(&mut self) -> Undo {
+        let before = Undo {
+            cpu: self.cpu.clone(),
+            writes: Vec::new(),
+            tstates: self.bus.tstates,
+            border: self.bus.border,
+            page_reg: self.bus.page_reg,
+            page_reg_1ffd: self.bus.page_reg_1ffd,
+            frames_completed: self.frames_completed,
+        };
+        self.bus.undo = Some(Vec::new());
+        self.step_instruction();
+        let writes = self.bus.undo.take().unwrap_or_default();
+        Undo { writes, ..before }
+    }
+
+    /// Put the machine back as it was before that instruction.
+    ///
+    /// The paging registers go back first, so the addresses that were written
+    /// mean the same thing again before anything is written to them.
+    pub fn undo_step(&mut self, undo: &Undo) {
+        self.bus.page_reg = undo.page_reg;
+        self.bus.page_reg_1ffd = undo.page_reg_1ffd;
+        if self.bus.model.has_paging() {
+            self.bus.apply_paging();
+        }
+        for (addr, was) in undo.writes.iter().rev() {
+            self.bus.poke(*addr, *was);
+        }
+        self.cpu = undo.cpu.clone();
+        self.bus.tstates = undo.tstates;
+        self.bus.border = undo.border;
+        self.frames_completed = undo.frames_completed;
+    }
+
     pub fn step_instruction(&mut self) {
         self.check_interrupt();
 

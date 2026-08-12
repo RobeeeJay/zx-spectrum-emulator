@@ -166,6 +166,10 @@ impl App {
         }
         self.spec.temp_bp = Some(target);
 
+        // Everything kept for stepping back describes a machine from before
+        // the call, and the call is about to write over it.
+        self.forget_rewind();
+
         let was_slow = self.spec.bus.slow.enabled;
         self.spec.bus.slow.enabled = false;
         let mut spent = 0u32;
@@ -238,6 +242,10 @@ impl App {
             self.status = format!("Returned to ${:04X}", self.cpu().pc);
             return;
         }
+        // Running out of a subroutine writes over whatever the entries kept
+        // for stepping back describe.
+        self.forget_rewind();
+
         let was_slow = self.spec.bus.slow.enabled;
         self.spec.bus.slow.enabled = false;
         let mut guard = 0u32;
@@ -294,6 +302,30 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         if theme::run_pause_button(ui, app.running).clicked() {
             app.running = !app.running;
         }
+        // Back through what has been stepped, before the buttons that go
+        // forward: an instruction can be undone because what it changed was
+        // written down as it ran, not because the machine was copied.
+        let back = app.rewind.len();
+        if ui
+            .add_enabled(back > 0, egui::Button::new("⏮ Step back"))
+            .on_hover_text(if back > 0 {
+                format!(
+                    "Undo the last instruction. {back} of {} kept.\n\
+                     The sound already played and where the tape has reached \
+                     are not put back: those are outside the machine's memory.",
+                    crate::ui::REWIND
+                )
+            } else {
+                "Step first: an instruction can only be undone if it was \
+                 stepped by hand, since that is when what it changed is \
+                 written down."
+                    .to_string()
+            })
+            .clicked()
+        {
+            app.step_back();
+        }
+
         // The icons are picked from what the bundled fonts actually have: the
         // arrows that were here before were in no font at all and drew as
         // empty boxes. Down into the call, past it, back out of it.
