@@ -26,6 +26,15 @@ pub trait Bus {
     fn fetch_op(&mut self, addr: u16) -> u8;
     /// Normal memory read: 3 T-states, contended at `addr`.
     fn read(&mut self, addr: u16) -> u8;
+    /// A byte of the instruction itself rather than of the data it works on:
+    /// the `nn` of `LD HL,nn`, the displacement of `LD A,(IX+d)`. The Z80
+    /// reads these without an M1 cycle, so they are timed exactly like a
+    /// normal read and by default are one — but anything watching what is code
+    /// and what is data needs telling them apart, or every immediate operand
+    /// in the program reads back as a two-byte table.
+    fn read_operand(&mut self, addr: u16) -> u8 {
+        self.read(addr)
+    }
     /// Normal memory write: 3 T-states, contended at `addr`.
     fn write(&mut self, addr: u16, value: u8);
     /// Internal CPU cycles that still put `addr` on the address bus.
@@ -240,7 +249,7 @@ impl Z80 {
 
     #[inline]
     pub fn imm8(&mut self, bus: &mut impl Bus) -> u8 {
-        let v = bus.read(self.pc);
+        let v = bus.read_operand(self.pc);
         self.pc = self.pc.wrapping_add(1);
         v
     }

@@ -19,6 +19,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::blocks::Block;
+
 /// What is written against one address. Either half may be empty; an entry
 /// with both empty is dropped rather than written out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -42,6 +44,10 @@ impl Note {
 #[derive(Clone, Debug, Default)]
 pub struct Notes {
     entries: BTreeMap<u16, Note>,
+    /// Where the routines and the data are, when anything has worked it out.
+    /// Kept here rather than in a file of their own: it is one more thing
+    /// known about the same program, and two files would come apart.
+    blocks: Vec<Block>,
     /// Where these are written. None when nothing is loaded to write beside,
     /// in which case the notes are still usable, just not kept.
     path: Option<PathBuf>,
@@ -63,11 +69,10 @@ impl Notes {
     /// error: it is simply a listing nobody has annotated.
     pub fn for_file(source: &Path) -> Notes {
         let path = Self::sidecar(source);
-        let entries = std::fs::read_to_string(&path)
-            .map(|text| parse(&text))
-            .unwrap_or_default();
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
         Notes {
-            entries,
+            entries: parse(&text),
+            blocks: parse_blocks(&text),
             path: Some(path),
             dirty: false,
         }
@@ -152,6 +157,22 @@ impl Notes {
         });
     }
 
+    /// Where the routines and the data are.
+    pub fn blocks(&self) -> &[Block] {
+        &self.blocks
+    }
+
+    /// Replace what is known about the shape of the program. Nothing is
+    /// merged here: the caller decides whether this run adds to what was known
+    /// or replaces it, since only the caller knows which it meant.
+    pub fn set_blocks(&mut self, blocks: Vec<Block>) {
+        if blocks == self.blocks {
+            return;
+        }
+        self.blocks = blocks;
+        self.dirty = true;
+    }
+
     /// How many addresses have anything written against them.
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -160,10 +181,11 @@ impl Notes {
     /// Throw the lot away. The file goes with them when the notes are next
     /// written, which is what makes this worth a confirmation.
     pub fn clear(&mut self) {
-        if self.entries.is_empty() {
+        if self.entries.is_empty() && self.blocks.is_empty() {
             return;
         }
         self.entries.clear();
+        self.blocks.clear();
         self.dirty = true;
     }
 
@@ -197,7 +219,7 @@ impl Notes {
         };
         // An empty set of notes leaves no litter behind: the file is removed
         // rather than left as a header with nothing under it.
-        let result = if self.entries.is_empty() {
+        let result = if self.entries.is_empty() && self.blocks.is_empty() {
             match std::fs::remove_file(&path) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 other => other,
@@ -219,8 +241,14 @@ impl Notes {
     pub fn to_text(&self) -> String {
         let mut out = String::from(
             "# ZX-Rustrum notes. One line per address:\n\
-             #   ADDR [label] [; comment]\n",
+             #   ADDR [label] [; comment]\n\
+             # and where the routines and the data are:\n\
+             #   block CODE|DATA FROM-TO\n",
         );
+        for block in &self.blocks {
+            out.push_str(&crate::blocks::to_line(block));
+            out.push('\n');
+        }
         for (addr, note) in &self.entries {
             out.push_str(&format!("{addr:04X}"));
             if !note.label.is_empty() {
@@ -235,6 +263,13 @@ impl Notes {
         }
         out
     }
+}
+
+/// The block lines from a notes file, in address order.
+pub fn parse_blocks(text: &str) -> Vec<Block> {
+    let mut blocks: Vec<Block> = text.lines().filter_map(crate::blocks::from_line).collect();
+    blocks.sort();
+    blocks
 }
 
 /// Read the file back. Anything that cannot be understood is skipped rather

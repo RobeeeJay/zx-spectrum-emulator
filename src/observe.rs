@@ -86,6 +86,16 @@ pub struct Observed {
     pub inclusive: Writes,
     /// The lowest and highest address it wrote to.
     pub wrote_between: Option<(u16, u16)>,
+    /// The lowest and highest address executed while it was the innermost
+    /// routine: where the routine actually is, as against where it starts.
+    /// What is between them is not necessarily all its own — a routine that
+    /// jumps over a table of data reaches past the table — but it is where to
+    /// start looking.
+    pub spans: Option<(u16, u16)>,
+    /// The addresses it returned from, which is where a routine ends. A few
+    /// of them: a routine with several exits has several, and one with dozens
+    /// is not telling us anything more by the twentieth.
+    pub exits: Vec<u16>,
     pub ports_in: Vec<u16>,
     pub ports_out: Vec<u16>,
     /// How many times, which is what tells a beeper routine hammering port
@@ -163,6 +173,11 @@ struct Frame {
     sp: u16,
     /// Instructions run in this frame, its callees excluded.
     instructions: u64,
+    /// The lowest and highest address executed while this was the innermost
+    /// routine: how far the routine reaches. Kept on the frame rather than
+    /// looked up per instruction, which would cost a map lookup on every one.
+    low: u16,
+    high: u16,
 }
 
 /// The observer itself.
@@ -277,8 +292,25 @@ impl Observer {
     /// Note the end of a frame, so what runs every frame can be told from what
     /// ran once.
     pub fn end_frame(&mut self) {
-        if self.enabled {
-            self.frames += 1;
+        if !self.enabled {
+            return;
+        }
+        self.frames += 1;
+        // What the routines still on the stack have reached so far. A main
+        // loop never returns, so waiting for it to would leave the one routine
+        // whose extent matters most with none at all — the same trap the
+        // inclusive write counts fell into.
+        let reached: Vec<(u16, u16, u16)> = self
+            .stack
+            .iter()
+            .map(|frame| (frame.entry, frame.low, frame.high))
+            .collect();
+        for (entry, low, high) in reached {
+            let stats = self.stats(entry);
+            stats.spans = Some(match stats.spans {
+                Some((was_low, was_high)) => (was_low.min(low), was_high.max(high)),
+                None => (low, high),
+            });
         }
     }
 
@@ -504,6 +536,8 @@ impl Observer {
         }
         if let Some(frame) = self.stack.last_mut() {
             frame.instructions += 1;
+            frame.low = frame.low.min(pc_before);
+            frame.high = frame.high.max(pc_before);
         }
 
         // A jump backwards is a loop going round again. Only another
@@ -520,7 +554,18 @@ impl Observer {
 
         match classify(pc_before, sp_before, pc_after, sp_after, peek) {
             Flow::Call { entry, sp } => self.enter(entry, sp, registers),
-            Flow::Return { sp_before, .. } => self.leave(sp_before),
+            Flow::Return { sp_before, .. } => {
+                // Where a routine ends is where it returned from, which is a
+                // fact about the run rather than something to be worked out by
+                // decoding forwards and hoping to meet a RET.
+                if let Some(entry) = self.current() {
+                    let stats = self.stats(entry);
+                    if stats.exits.len() < 8 && !stats.exits.contains(&pc_before) {
+                        stats.exits.push(pc_before);
+                    }
+                }
+                self.leave(sp_before)
+            }
             Flow::Straight => {}
         }
     }
@@ -587,6 +632,8 @@ impl Observer {
             entry,
             sp,
             instructions: 0,
+            low: entry,
+            high: entry,
         });
     }
 
@@ -598,7 +645,12 @@ impl Observer {
             self.stack.pop();
             let depth = self.stack.len() as u8 + 1;
             self.remember(frame.entry, depth, false);
-            self.stats(frame.entry).instructions += frame.instructions;
+            let stats = self.stats(frame.entry);
+            stats.instructions += frame.instructions;
+            stats.spans = Some(match stats.spans {
+                Some((low, high)) => (low.min(frame.low), high.max(frame.high)),
+                None => (frame.low, frame.high),
+            });
             if frame.sp == sp_before {
                 break;
             }

@@ -29,6 +29,30 @@ pub const LCD_GRID: Color32 = Color32::from_rgb(0x18, 0x30, 0x20);
 /// instruction, which is a different question being answered.
 pub const MARK: Color32 = Color32::from_rgb(0x16, 0x3c, 0x52);
 
+/// The bands behind the listing, one per block, so a routine and the table
+/// next to it are told apart at a glance. Two shades per kind and taken in
+/// turn, so neighbours differ; dark enough that the text over them is still
+/// the text and not a colour scheme.
+pub const CODE_BANDS: [Color32; 2] = [
+    Color32::from_rgb(0x11, 0x22, 0x1a),
+    Color32::from_rgb(0x0e, 0x1c, 0x28),
+];
+pub const DATA_BANDS: [Color32; 2] = [
+    Color32::from_rgb(0x2a, 0x1e, 0x12),
+    Color32::from_rgb(0x24, 0x16, 0x22),
+];
+
+/// The band behind a row of the listing: which block it is in, and what that
+/// block holds. Taken in turn so that neighbours differ, and from a different
+/// pair for code and for data so the two are told apart as well.
+pub fn band(index: usize, kind: crate::blocks::Kind) -> Color32 {
+    let bands = match kind {
+        crate::blocks::Kind::Code => CODE_BANDS,
+        crate::blocks::Kind::Data => DATA_BANDS,
+    };
+    bands[index % bands.len()]
+}
+
 pub const AMBER: Color32 = Color32::from_rgb(0xff, 0xb2, 0x38);
 pub const RED: Color32 = Color32::from_rgb(0xe0, 0x43, 0x3c);
 pub const BLUE: Color32 = Color32::from_rgb(0x20, 0x62, 0xff);

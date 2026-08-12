@@ -853,6 +853,16 @@ impl Bus for SpectrumBus {
         self.mem(addr)
     }
 
+    fn read_operand(&mut self, addr: u16) -> u8 {
+        // Timed exactly as a read, because that is what the Z80 does; counted
+        // as code, because that is what it is.
+        self.access(addr, 3);
+        let phys = self.phys_index(addr);
+        self.tracker.on_read(phys, addr);
+        self.observer.on_fetch(addr);
+        self.mem(addr)
+    }
+
     fn write(&mut self, addr: u16, value: u8) {
         self.access(addr, 3);
         let phys = self.phys_index(addr);
@@ -884,6 +894,9 @@ impl Bus for SpectrumBus {
     fn io_read(&mut self, port: u16) -> u8 {
         let sampled = self.contend_io(port);
         self.observer.on_port(port, false);
+        if self.breaks.port_in {
+            self.break_hit.get_or_insert(Event::In(port));
+        }
         // A recording replaces the hardware, not just the keyboard: the
         // floating bus, the tape and the sound chip all read back what they
         // read back on the day.
@@ -912,6 +925,9 @@ impl Bus for SpectrumBus {
     fn io_write(&mut self, port: u16, value: u8) {
         let sampled = self.contend_io(port);
         self.observer.on_port(port, true);
+        if self.breaks.port_out {
+            self.break_hit.get_or_insert(Event::Out(port, value));
+        }
 
         if port & 1 == 0 {
             let new = value & 7;
@@ -1008,12 +1024,22 @@ pub struct Breaks {
     /// Moving about within the ROM is not entering it, so a ROM routine
     /// calling another one does not count.
     pub rom: bool,
+    /// Any IN at all: a program reading a port, whichever port it is.
+    pub port_in: bool,
+    /// Any OUT at all.
+    pub port_out: bool,
 }
 
 impl Breaks {
     /// Whether anything at all is being watched.
     pub fn any(&self) -> bool {
-        self.screen || self.beeper || self.ay || self.interrupt || self.rom
+        self.screen
+            || self.beeper
+            || self.ay
+            || self.interrupt
+            || self.rom
+            || self.port_in
+            || self.port_out
     }
 }
 
@@ -1055,6 +1081,10 @@ pub enum Event {
     Interrupt,
     /// Went into the ROM from this address.
     Rom(u16),
+    /// Read a port, and which.
+    In(u16),
+    /// Wrote to a port, and what.
+    Out(u16, u8),
 }
 
 impl Event {
@@ -1066,6 +1096,8 @@ impl Event {
             Event::Ay => "Used the sound chip".to_string(),
             Event::Interrupt => "Took the frame interrupt".to_string(),
             Event::Rom(from) => format!("Went into the ROM from ${from:04X}"),
+            Event::In(port) => format!("Read port ${port:04X}"),
+            Event::Out(port, value) => format!("Wrote ${value:02X} to port ${port:04X}"),
         }
     }
 }

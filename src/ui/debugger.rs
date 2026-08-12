@@ -92,6 +92,9 @@ pub struct DebuggerState {
     /// scrolled to, because a listing scrolled to an address leaves the reader
     /// counting rows to find which one was meant.
     pub marked: Option<u16>,
+    /// Whether the debugger has asked for the program to be watched so it can
+    /// work out where the routines and the data are.
+    pub watching_blocks: bool,
     pub lines: usize,
     pub goto_text: String,
     pub bp_text: String,
@@ -107,6 +110,7 @@ impl Default for DebuggerState {
             confirm_clear: false,
             view_addr: 0,
             marked: None,
+            watching_blocks: false,
             lines: 24,
             goto_text: String::new(),
             bp_text: String::new(),
@@ -308,6 +312,10 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             }
             theme::toggle(ui, &mut breaks.interrupt, "Interrupt")
                 .on_hover_text("Stop when the CPU accepts the frame interrupt");
+            theme::toggle(ui, &mut breaks.port_in, "In")
+                .on_hover_text("Stop on any IN: the program reading any port at all");
+            theme::toggle(ui, &mut breaks.port_out, "Out")
+                .on_hover_text("Stop on any OUT: the program writing to any port at all");
             theme::toggle(ui, &mut breaks.rom, "ROM").on_hover_text(
                 "Stop when the program goes into the ROM from outside it. \
                  Moving about within the ROM does not count, so a ROM routine \
@@ -425,33 +433,76 @@ fn labels(app: &mut App, ui: &mut egui::Ui) {
             ui.set_min_width(LABELS_W);
             ui.set_max_width(LABELS_W);
             ui.label(RichText::new("Labels").small().color(theme::DIM));
+            // The list is what is empty, not the panel: what follows it works
+            // out the shape of the program, and returning early here left a
+            // program with no labels yet — which is every program to begin
+            // with — without the button that starts the work.
+            let mut go_to = None;
             if entries.is_empty() {
                 ui.label(RichText::new("none yet").monospace().color(theme::DIM));
-                return;
-            }
-            let mut go_to = None;
-            egui::ScrollArea::vertical()
-                .id_salt("labels")
-                .max_height(LABELS_H)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for (addr, label, auto) in &entries {
-                        let colour = if *auto { theme::DIM } else { theme::LCD_FG };
-                        let text = format!("{addr:04X} {label}");
-                        let row = ui.add(
-                            egui::Label::new(RichText::new(text).monospace().color(colour))
-                                .wrap_mode(egui::TextWrapMode::Truncate)
-                                .sense(egui::Sense::click()),
-                        );
-                        if row.clicked() {
-                            go_to = Some(*addr);
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("labels")
+                    .max_height(LABELS_H)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (addr, label, auto) in &entries {
+                            let colour = if *auto { theme::DIM } else { theme::LCD_FG };
+                            let text = format!("{addr:04X} {label}");
+                            let row = ui.add(
+                                egui::Label::new(RichText::new(text).monospace().color(colour))
+                                    .wrap_mode(egui::TextWrapMode::Truncate)
+                                    .sense(egui::Sense::click()),
+                            );
+                            if row.clicked() {
+                                go_to = Some(*addr);
+                            }
+                            row.on_hover_text(format!("Show the listing at ${addr:04X}"));
                         }
-                        row.on_hover_text(format!("Show the listing at ${addr:04X}"));
-                    }
-                });
+                    });
+            }
             if let Some(addr) = go_to {
                 app.show_in_listing(addr);
             }
+
+            // Working out the shape of the program: what is a routine and
+            // what is a table. It has to watch the program to know, so the
+            // first press starts watching and the second reads off what was
+            // seen. Running a whole recording between the two is what fills
+            // in a game.
+            ui.separator();
+            let watching = app.spec.bus.observer.enabled;
+            let known = app.notes.blocks().len();
+            ui.horizontal(|ui| {
+                if ui
+                    .button(if watching {
+                        "Find blocks"
+                    } else {
+                        "Watch for blocks"
+                    })
+                    .on_hover_text(
+                        "Work out which runs of memory are routines and which \
+                         are data, from what the program has been seen doing, \
+                         and keep them in the notes file. Press it again after \
+                         running more of the program and what it finds is added \
+                         to what was known.",
+                    )
+                    .clicked()
+                {
+                    find_blocks(app);
+                }
+                ui.label(
+                    RichText::new(if known > 0 {
+                        format!("{known} blocks")
+                    } else if watching {
+                        "watching".to_string()
+                    } else {
+                        "none yet".to_string()
+                    })
+                    .small()
+                    .color(theme::DIM),
+                );
+            });
 
             // Throwing the lot away takes the file with it, so it is asked
             // about rather than done on one click.
@@ -489,6 +540,40 @@ fn labels(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+/// Work out where the routines and the data are, and keep it.
+///
+/// Nothing can be worked out until the program has been watched, so the first
+/// press turns the watching on and says so rather than reporting that it found
+/// nothing. What is found is added to what was known: one run of a game sees
+/// its title screen, and the next sees a level.
+fn find_blocks(app: &mut App) {
+    if !app.spec.bus.observer.enabled {
+        app.dbg.watching_blocks = true;
+        app.spec.bus.observer.enabled = true;
+        app.set_status(
+            "Watching. Run the program — a whole recording if you have one — \
+             then press Find blocks."
+                .to_string(),
+            false,
+        );
+        return;
+    }
+
+    let found = crate::blocks::work_out(&app.spec.bus.observer);
+    let merged = crate::blocks::merge(app.notes.blocks(), &found);
+    let was = app.notes.blocks().len();
+    let bytes: u32 = merged.iter().map(|block| block.length()).sum();
+    app.notes.set_blocks(merged);
+    let now = app.notes.blocks().len();
+    match app.notes.save_if_dirty() {
+        Err(e) => app.set_status(format!("Could not save notes: {e}"), true),
+        Ok(_) => app.set_status(
+            format!("{now} blocks over {bytes} bytes ({} known before)", was),
+            false,
+        ),
+    }
 }
 
 /// The blocks of memory that were read but never run: data, with a guess at
@@ -956,6 +1041,10 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     // The listing is a window onto the whole address space, not a list with
     // ends: rolling the wheel moves it through memory an instruction at a
     // time, so it can be followed as far as it goes in either direction.
+    // Taken once for the frame: the listing asks about every row, and the
+    // notes are borrowed mutably inside it.
+    let blocks: Vec<crate::blocks::Block> = app.notes.blocks().to_vec();
+
     let listing_top = ui.cursor().min.y;
     egui::ScrollArea::vertical()
         .id_salt("disasm")
@@ -995,73 +1084,84 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                     rich
                 };
 
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+                // Which block this row is in, and so which band it sits on.
+                // Neighbouring blocks take different shades, and code and data
+                // take different pairs, so the shape of the program reads off
+                // the listing without anything having to be labelled.
+                let band = crate::blocks::at(&blocks, addr)
+                    .map(|index| theme::band(index, blocks[index].kind));
 
-                    // The breakpoint marker sits in a gutter of its own, so a
-                    // dot appearing does not push the addresses sideways.
-                    cell(
-                        ui,
-                        RichText::new(if has_bp { "●" } else { " " })
-                            .monospace()
-                            .color(theme::RED),
-                        GUTTER_W,
-                    );
+                egui::Frame::NONE
+                    .fill(band.unwrap_or(Color32::TRANSPARENT))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = COLUMN_GAP;
 
-                    // What is written against this address. A guess is shown
-                    // in the dim colour, so it reads as a guess; typing over
-                    // one makes it the user's own and it goes to full ink.
-                    let mut label = app.notes.label(addr).to_string();
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut label)
-                            .id_salt(("note-label", addr))
-                            .desired_width(LABEL_W)
-                            .font(egui::TextStyle::Monospace)
-                            .text_color(if app.notes.label_is_auto(addr) {
-                                theme::DIM
-                            } else {
-                                theme::INK
-                            })
-                            .frame(egui::Frame::NONE),
-                    );
-                    if resp.changed() {
-                        app.notes.set_label(addr, &label);
-                    }
-                    finished_editing |= resp.lost_focus();
+                            // The breakpoint marker sits in a gutter of its own, so a
+                            // dot appearing does not push the addresses sideways.
+                            cell(
+                                ui,
+                                RichText::new(if has_bp { "●" } else { " " })
+                                    .monospace()
+                                    .color(theme::RED),
+                                GUTTER_W,
+                            );
 
-                    let mut listing = cell(ui, paint(format!("{addr:04X}")), ADDR_W);
-                    listing |= cell(ui, paint(bytes), VALUE_W);
-                    listing |= cell(ui, paint(insn.text.clone()), INSN_W);
-                    if listing.clicked() {
-                        clicked = Some(addr);
-                    }
+                            // What is written against this address. A guess is shown
+                            // in the dim colour, so it reads as a guess; typing over
+                            // one makes it the user's own and it goes to full ink.
+                            let mut label = app.notes.label(addr).to_string();
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(&mut label)
+                                    .id_salt(("note-label", addr))
+                                    .desired_width(LABEL_W)
+                                    .font(egui::TextStyle::Monospace)
+                                    .text_color(if app.notes.label_is_auto(addr) {
+                                        theme::DIM
+                                    } else {
+                                        theme::INK
+                                    })
+                                    .frame(egui::Frame::NONE),
+                            );
+                            if resp.changed() {
+                                app.notes.set_label(addr, &label);
+                            }
+                            finished_editing |= resp.lost_focus();
 
-                    // The semicolon is the listing's, not the file's: it marks
-                    // a comment where there is one and stays out of the way
-                    // where there is not.
-                    let mut comment = app.notes.comment(addr).to_string();
-                    // Multi-line, so a comment long enough to say something
-                    // useful can be read in full rather than trailing off the
-                    // end of a field. A row with nothing in it is still one
-                    // line tall, so the listing keeps its pitch.
-                    let resp = ui.add(
-                        egui::TextEdit::multiline(&mut comment)
-                            .id_salt(("note-comment", addr))
-                            .desired_width(COMMENT_W)
-                            .desired_rows(1)
-                            .font(egui::TextStyle::Monospace)
-                            .text_color(if app.notes.comment_is_auto(addr) {
-                                theme::DIM
-                            } else {
-                                theme::INK
-                            })
-                            .frame(egui::Frame::NONE),
-                    );
-                    if resp.changed() {
-                        app.notes.set_comment(addr, &comment);
-                    }
-                    finished_editing |= resp.lost_focus();
-                });
+                            let mut listing = cell(ui, paint(format!("{addr:04X}")), ADDR_W);
+                            listing |= cell(ui, paint(bytes), VALUE_W);
+                            listing |= cell(ui, paint(insn.text.clone()), INSN_W);
+                            if listing.clicked() {
+                                clicked = Some(addr);
+                            }
+
+                            // The semicolon is the listing's, not the file's: it marks
+                            // a comment where there is one and stays out of the way
+                            // where there is not.
+                            let mut comment = app.notes.comment(addr).to_string();
+                            // Multi-line, so a comment long enough to say something
+                            // useful can be read in full rather than trailing off the
+                            // end of a field. A row with nothing in it is still one
+                            // line tall, so the listing keeps its pitch.
+                            let resp = ui.add(
+                                egui::TextEdit::multiline(&mut comment)
+                                    .id_salt(("note-comment", addr))
+                                    .desired_width(COMMENT_W)
+                                    .desired_rows(1)
+                                    .font(egui::TextStyle::Monospace)
+                                    .text_color(if app.notes.comment_is_auto(addr) {
+                                        theme::DIM
+                                    } else {
+                                        theme::INK
+                                    })
+                                    .frame(egui::Frame::NONE),
+                            );
+                            if resp.changed() {
+                                app.notes.set_comment(addr, &comment);
+                            }
+                            finished_editing |= resp.lost_focus();
+                        });
+                    });
                 addr = addr.wrapping_add(insn.len.max(1) as u16);
             }
             if let Some(a) = clicked {

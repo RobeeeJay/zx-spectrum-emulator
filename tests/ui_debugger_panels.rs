@@ -494,3 +494,109 @@ fn a_routine_that_mostly_draws_is_not_called_a_keyboard_routine() {
         .expect("reading a port is worth saying");
     assert_eq!(label, "read_keys");
 }
+
+/// Any IN or any OUT stops the machine. A program that talks to hardware
+/// nobody has thought to watch — a printer interface, a mouse, a disk
+/// controller — is found by stopping on the port access itself rather than by
+/// guessing which port to look for.
+#[test]
+fn any_port_access_can_stop_the_machine() {
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    spec.bus.breaks.port_out = true;
+    spec.bus.io_write(0x7FFD, 0x10);
+    assert_eq!(
+        spec.bus.break_hit,
+        Some(Event::Out(0x7FFD, 0x10)),
+        "the write to $7FFD went unnoticed"
+    );
+
+    let mut spec = Spectrum::new();
+    spec.bus.breaks.port_in = true;
+    spec.bus.io_read(0x00FE);
+    assert_eq!(
+        spec.bus.break_hit,
+        Some(Event::In(0x00FE)),
+        "the read of $FE went unnoticed"
+    );
+
+    // And each says which port, since "it used a port" is not an answer.
+    assert_eq!(Event::Out(0x1F, 0xFF).describe(), "Wrote $FF to port $001F");
+    assert!(Event::In(0x7FFE).describe().contains("$7FFE"));
+}
+
+/// The two new watches are off by default like the rest: a watch that is off
+/// costs the machine nothing.
+#[test]
+fn the_port_watches_are_off_until_they_are_asked_for() {
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    assert!(!spec.bus.breaks.port_in && !spec.bus.breaks.port_out);
+    spec.bus.io_write(0x00FE, 0x07);
+    spec.bus.io_read(0x00FE);
+    assert_eq!(spec.bus.break_hit, None, "it stopped without being asked");
+    assert!(!spec.bus.breaks.any());
+}
+
+/// Working out the shape of the program takes two presses: nothing can be said
+/// about a program that has not been watched, so the first press starts the
+/// watching and says so rather than reporting that it found nothing.
+#[test]
+fn finding_blocks_watches_first_and_reads_off_second() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut spec = Spectrum::new();
+    // A caller and a routine it calls, so there is something with a beginning
+    // and an end to find.
+    for (at, bytes) in [
+        (0x8000u16, &[0xCD, 0x00, 0x90, 0x18, 0xFB][..]),
+        (0x9000, &[0x00, 0x00, 0x00, 0x00, 0xC9][..]),
+    ] {
+        for (offset, byte) in bytes.iter().enumerate() {
+            spec.bus.poke(at + offset as u16, *byte);
+        }
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+
+    let mut app = App::with_roms(spec, String::new(), Roms::default(), None);
+    app.show_debugger = true;
+    app.show_ram_map = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = false;
+    let mut h = harness(app);
+
+    assert!(
+        !h.state().spec.bus.observer.enabled,
+        "nothing is watched until it is asked for"
+    );
+    h.get_by_label("Watch for blocks").click();
+    h.run_steps(2);
+    assert!(
+        h.state().spec.bus.observer.enabled,
+        "the first press should start watching"
+    );
+    assert!(
+        h.state().notes.blocks().is_empty(),
+        "and write nothing, having seen nothing"
+    );
+
+    for _ in 0..400 {
+        h.state_mut().spec.step_instruction();
+    }
+    h.run_steps(2);
+
+    h.get_by_label("Find blocks").click();
+    h.run_steps(2);
+
+    let blocks = h.state().notes.blocks().to_vec();
+    assert!(
+        blocks
+            .iter()
+            .any(|block| block.contains(0x9000) && block.kind == zx_rustrum::blocks::Kind::Code),
+        "the routine that was called should be a code block: {blocks:?}"
+    );
+}

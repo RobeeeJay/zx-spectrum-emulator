@@ -1854,7 +1854,12 @@ impl App {
         // switched on from the window doing the looking rather than from a
         // toggle somewhere else. Set here because the window need not be open
         // for the machine to be running.
-        self.spec.bus.observer.enabled = self.callflow.looking;
+        // Two windows can want it: the call flow looking for something, and
+        // the debugger working out where the routines are. Either is enough,
+        // and neither switches the other off — this used to be a plain
+        // assignment from the call flow, which quietly undid the debugger's
+        // request on the next frame.
+        self.spec.bus.observer.enabled = self.callflow.looking || self.dbg.watching_blocks;
 
         self.save_window_state_if_settled();
         self.save_notes_if_due();
