@@ -180,8 +180,7 @@ fn a_recording_tells_autodoc_where_the_program_goes() {
         visited.len()
     );
 
-    app.dbg.autodoc = true;
-    app.dbg.follow_pc = true;
+    app.spec.bus.observer.enabled = true;
     let doc = {
         let entries: Vec<u16> = visited.iter().copied().collect();
         let peek = |a: u16| app.peek(a);

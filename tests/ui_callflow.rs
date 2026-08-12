@@ -49,6 +49,7 @@ fn it_finds_the_loop_in_a_recording() {
     if app.rzx.is_none() {
         return; // no ROMs on this machine
     }
+    app.callflow.looking = true;
     app.spec.bus.observer.enabled = true;
     if let Some(rzx) = app.rzx.as_mut() {
         rzx.max_speed = true;
@@ -97,19 +98,16 @@ fn it_finds_the_loop_in_a_recording() {
     );
 }
 
-/// AutoDoc can be switched on from the call flow window, and it watches even
-/// with the debugger shut.
-///
-/// Turning it on used to take effect in the debugger's own frame, so switching
-/// it on from here with the debugger closed set a flag and watched nothing.
+/// Pressing the button is what starts the machine being watched: there is no
+/// switch to find somewhere else first, and watching costs something so it
+/// does not run until somebody asks for it.
 #[test]
-fn autodoc_can_be_switched_on_from_the_call_flow_window() {
+fn the_button_starts_the_watching() {
     let mut app = app();
     app.show_callflow = true;
     app.show_debugger = false;
-    app.dbg.autodoc = false;
 
-    let mut h = Harness::builder()
+    let mut h = egui_kittest::Harness::builder()
         .with_size([1500.0, 1000.0])
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
     h.run_steps(3);
@@ -118,18 +116,81 @@ fn autodoc_can_be_switched_on_from_the_call_flow_window() {
         "nothing should be watched before it is asked for"
     );
 
-    h.get_by_label("AutoDoc").click();
+    h.get_by_label("Main game loop").click();
     h.run_steps(3);
-
-    assert!(h.state().dbg.autodoc, "the toggle did not take");
+    assert!(h.state().callflow.looking, "it should be looking now");
     assert!(
         h.state().spec.bus.observer.enabled,
-        "the switch is on but nothing is being watched, which is the bug this \
-         window used to have with the debugger closed"
+        "and the machine should actually be watched, with no other window open"
     );
 
-    // And off again.
-    h.get_by_label("AutoDoc").click();
+    h.get_by_label("Stop").click();
     h.run_steps(3);
-    assert!(!h.state().spec.bus.observer.enabled, "it should stop too");
+    assert!(!h.state().spec.bus.observer.enabled, "and stop when told");
+}
+
+/// A finding is offered, not applied. Nothing is written against an address
+/// until somebody says so — the emulator does not put its own guesses into
+/// a person's notes behind their back.
+#[test]
+fn nothing_is_written_down_until_it_is_confirmed() {
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+    app.show_callflow = true;
+    app.callflow.looking = true;
+    app.spec.bus.observer.enabled = true;
+
+    // The notes go somewhere of this test's own. The real ones beside the
+    // recording carry labels from earlier sessions, and a test that asserts
+    // "nothing was written" would be reading somebody else's work.
+    let scratch = std::env::temp_dir().join(format!("zxrs-callflow-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    if let Some(rzx) = app.rzx.as_mut() {
+        rzx.path = scratch.join("manic.rzx");
+    }
+    app.reload_notes();
+
+    if let Some(rzx) = app.rzx.as_mut() {
+        rzx.max_speed = true;
+    }
+    for _ in 0..300 {
+        app.advance(1.0 / 50.0);
+    }
+
+    let mut h = egui_kittest::Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+
+    let found = h
+        .state()
+        .callflow
+        .findings
+        .first()
+        .expect("the loop should have been found")
+        .address;
+    assert!(
+        h.state().notes.label(found).is_empty(),
+        "it wrote a label without being asked"
+    );
+
+    h.get_by_label("Label it").click();
+    h.run_steps(3);
+
+    assert_eq!(
+        h.state().notes.label(found),
+        "main_game_loop",
+        "and after confirming, it should be written down"
+    );
+    assert!(
+        h.state().notes.label_is_auto(found),
+        "as a guess, so a later one can replace it and nothing of the user's is lost"
+    );
 }

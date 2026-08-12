@@ -89,6 +89,13 @@ own format work through the same path. Each machine has its own deck, because a
 tape is timed in the T-states of the machine playing it and the two clocks
 differ.
 
+**Nothing is written against an address until somebody says so.** The Call
+flow window's detectors are asked to look — pressing *Main game loop* is what
+starts the machine being watched — and what they find is offered with a score
+and a reason. It goes into the notes only when *Label it* is pressed. The
+emulator used to guess at everything continuously and write its guesses in; it
+does not any more.
+
 **AutoDoc guesses, and says so.** `src/autodoc.rs` reads the code from where
 the machine is, names every routine that gets called, and applies ordered rules
 to what each one touches — ports, screen ranges, ROM calls, block moves. It

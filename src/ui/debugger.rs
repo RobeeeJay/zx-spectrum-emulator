@@ -84,11 +84,6 @@ pub struct DebuggerState {
     /// Set when the machine stops at a breakpoint. The window asks to be
     /// raised on the next frame it draws, and clears it.
     pub raise: bool,
-    /// Whether to guess at what the code is doing, and the last guess made.
-    pub autodoc: bool,
-    pub doc: crate::autodoc::Doc,
-    /// What the guess was made from, so it is not made again every frame.
-    doc_from: Option<(u16, u16)>,
     /// Whether the "clear everything" button is waiting to be confirmed.
     pub confirm_clear: bool,
     pub view_addr: u16,
@@ -104,9 +99,6 @@ impl Default for DebuggerState {
         DebuggerState {
             follow_pc: true,
             raise: false,
-            autodoc: false,
-            doc: crate::autodoc::Doc::default(),
-            doc_from: None,
             confirm_clear: false,
             view_addr: 0,
             lines: 24,
@@ -289,18 +281,6 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.separator();
         ui.toggle_value(&mut app.dbg.follow_pc, "Follow PC");
-        let was = app.dbg.autodoc;
-        ui.toggle_value(&mut app.dbg.autodoc, "AutoDoc")
-            .on_hover_text(
-                "Guess at what the routines being called are for, and note it \
-             against them. Guesses are shown in place of an empty label or \
-             comment and are never written to your notes file.",
-            );
-        if app.dbg.autodoc != was {
-            // Turned on or off: the guess is stale either way.
-            app.dbg.doc = crate::autodoc::Doc::default();
-            app.dbg.doc_from = None;
-        }
     });
 
     // Stopping on what a program does rather than on where it is: the things
@@ -481,8 +461,6 @@ fn labels(app: &mut App, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     if ui.button("Delete").clicked() {
                         app.notes.clear();
-                        app.dbg.doc = crate::autodoc::Doc::default();
-                        app.dbg.doc_from = None;
                         app.dbg.confirm_clear = false;
                         if let Err(e) = app.notes.save_if_dirty() {
                             app.set_status(format!("Could not save notes: {e}"), true);
@@ -522,10 +500,10 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
             ui.label(RichText::new("Data").small().color(theme::DIM));
             if blocks.is_empty() {
                 ui.label(
-                    RichText::new(if app.dbg.autodoc {
+                    RichText::new(if app.spec.bus.observer.enabled {
                         "nothing read yet"
                     } else {
-                        "AutoDoc is off"
+                        "nothing is being watched"
                     })
                     .monospace()
                     .color(theme::DIM),
@@ -677,10 +655,10 @@ fn video(app: &mut App, ui: &mut egui::Ui) {
             ui.label(format!("Character cell {column},{row}"));
             if drew.is_empty() {
                 ui.label(
-                    RichText::new(if app.dbg.autodoc {
-                        "nothing has written here since AutoDoc was switched on"
+                    RichText::new(if app.spec.bus.observer.enabled {
+                        "nothing has written here since watching began"
                     } else {
-                        "AutoDoc is off, so nothing is being watched"
+                        "nothing is being watched"
                     })
                     .color(theme::DIM),
                 );
@@ -919,7 +897,6 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     if app.dbg.follow_pc {
         app.dbg.view_addr = pc;
     }
-    refresh_autodoc(app);
 
     ui.horizontal(|ui| {
         ui.label("Go to:");
@@ -1138,138 +1115,6 @@ fn scroll_through_memory(app: &mut App, ui: &mut egui::Ui, top: f32) {
         }
     }
     app.dbg.view_addr = addr;
-}
-
-/// Make the guess again, if what it was made from has changed.
-///
-/// Reading a few hundred instructions is cheap, but not cheap enough to do
-/// sixty times a second for no reason: it is redone when the listing moves or
-/// the machine stops somewhere new.
-fn refresh_autodoc(app: &mut App) {
-    if !app.dbg.autodoc {
-        if !app.dbg.doc.is_empty() {
-            app.dbg.doc = crate::autodoc::Doc::default();
-        }
-        return;
-    }
-    let from = (app.dbg.view_addr, app.cpu().pc);
-    if app.dbg.doc_from == Some(from) {
-        return;
-    }
-    app.dbg.doc_from = Some(from);
-    // Both the code on screen and the code being run are worth following: the
-    // listing may be somewhere the machine has not reached yet.
-    //
-    // A recording adds the best evidence there is. Static reading has to guess
-    // which bytes are code; a recording says where the program actually went,
-    // past the loader and the protection and into the game itself.
-    let mut entries = vec![from.0, from.1];
-    if let Some(rzx) = &app.rzx {
-        entries.extend(rzx.visited.iter().copied());
-    }
-    // Built from whatever ROM the machine is running: a game that has copied
-    // the print routine into RAM is then recognised wherever it put it.
-    let mut known = match app.roms.for_model(app.spec.bus.model) {
-        Some(rom) => crate::autodoc::Signatures::from_rom(rom),
-        None => crate::autodoc::Signatures::empty(),
-    };
-    // Anything else known goes in a file beside the notes: symbols from a ROM
-    // disassembly, signatures for loaders and compressors. Nobody can ship
-    // those here, and anybody who has them can drop them in.
-    let mut text = String::new();
-    for file in app.symbol_files() {
-        if let Ok(supplied) = std::fs::read_to_string(&file) {
-            text.push_str(&supplied);
-            text.push('\n');
-        }
-    }
-    known.add_from_text(&text);
-    let symbols = crate::autodoc::Symbols::from_text(&text);
-    let peek = |a: u16| app.peek(a);
-    let mut doc = crate::autodoc::analyse_with(&peek, &entries, &known);
-
-    // A name somebody supplied outranks anything worked out here.
-    for entry in doc.labels.keys().copied().collect::<Vec<_>>() {
-        if let Some((name, comment)) = symbols.get(entry) {
-            doc.labels.insert(entry, name.to_string());
-            if !comment.is_empty() {
-                doc.comments.insert(entry, comment.to_string());
-            }
-        }
-    }
-
-    // What was measured outranks what was read: a routine that wrote 6144
-    // bytes into the display file did that, whatever its instructions look
-    // like. Only routines the machine has actually been through have
-    // measurements, so the rest keep their static guess.
-    let observer = &app.spec.bus.observer;
-    let frames = observer.frames as u32;
-    let first_pixel = app.spec.bus.first_pixel_t();
-    let frame_t = app.spec.bus.frame_t();
-    let mut named: std::collections::BTreeMap<u16, String> = Default::default();
-
-    for (entry, seen) in &observer.routines {
-        if let Some((label, comment)) = crate::autodoc::describe_measured(seen, frames) {
-            // Where in the frame it runs, and what it appears to be handed:
-            // both are measurements, so both are said outright.
-            let phase = crate::autodoc::beam_phase(seen, first_pixel, frame_t);
-            let args = crate::autodoc::arguments(seen);
-            doc.labels.insert(*entry, format!("{label}_{entry:04X}"));
-            doc.comments
-                .insert(*entry, format!("{comment}{phase}{args}"));
-            named.insert(*entry, label);
-        }
-    }
-
-    // A routine is also described by what it calls. One whose callees read the
-    // keys, draw and keep the score is a game's turn, whatever its own
-    // instructions do — and that is worth more than anything read off them.
-    for (entry, seen) in &observer.routines {
-        if seen.calls == 0 {
-            continue;
-        }
-        let mut children: Vec<&str> = observer
-            .edges
-            .keys()
-            .filter(|(from, _)| from == entry)
-            .filter_map(|(_, to)| named.get(to).map(|s| s.as_str()))
-            .collect();
-        children.sort_unstable();
-        children.dedup();
-        if children.len() < 2 {
-            continue;
-        }
-        let what = children.join(", ");
-        doc.labels
-            .entry(*entry)
-            .and_modify(|label| {
-                if label.starts_with("routine_") || label.starts_with("game_") {
-                    *label = format!("game_turn_{entry:04X}");
-                }
-            })
-            .or_insert_with(|| format!("game_turn_{entry:04X}"));
-        let note = format!("Calls {what}: the shape of a turn of the game");
-        doc.comments
-            .entry(*entry)
-            .and_modify(|c| {
-                if c.is_empty() {
-                    *c = note.clone();
-                }
-            })
-            .or_insert(note);
-    }
-
-    // Into the notes, where they are kept with the rest. A guess replaces an
-    // earlier guess but never a line the user wrote.
-    for (addr, label) in &doc.labels {
-        app.notes.suggest(*addr, label, doc.comment(*addr));
-    }
-    for (addr, comment) in &doc.comments {
-        if !doc.labels.contains_key(addr) {
-            app.notes.suggest(*addr, "", comment);
-        }
-    }
-    app.dbg.doc = doc;
 }
 
 /// A column heading: the same width as the column under it, and left

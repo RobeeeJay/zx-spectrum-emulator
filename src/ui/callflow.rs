@@ -19,6 +19,13 @@ use crate::ui::{theme, App};
 /// What has been worked out, and when.
 #[derive(Default)]
 pub struct CallFlowState {
+    /// Whether it is watching the program at the moment. Watching costs a
+    /// branch on every memory access, so it only runs while somebody is
+    /// looking for something.
+    pub looking: bool,
+    /// The finding waiting to be accepted or thrown away. Nothing is written
+    /// against an address until somebody says so.
+    pub offered: Option<Finding>,
     /// What the detectors have made of the program: one line each, with how
     /// sure they are and what the answer rests on.
     pub findings: Vec<Finding>,
@@ -38,6 +45,9 @@ const ROW_H: f32 = 34.0;
 const INDENT: f32 = 26.0;
 const BOX_W: f32 = 260.0;
 
+/// What a confirmed main game loop is called in the notes.
+const LABEL: &str = "main_game_loop";
+
 /// How often the detectors run themselves. Sifting a few hundred thousand
 /// calls is not free, and the answer does not change from one frame to the
 /// next.
@@ -52,7 +62,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         .callflow
         .looked_at
         .is_none_or(|when| when.elapsed() > LOOK_AGAIN);
-    if due && app.spec.bus.observer.enabled {
+    if due && app.callflow.looking {
         look(app);
     }
 
@@ -75,45 +85,40 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 
 fn controls(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
+        // Always clickable: pressing it is what starts the machine being
+        // watched, so there is no switch to find first.
         if ui
             .button("Main game loop")
             .on_hover_text(
-                "Look again now. This runs by itself every few seconds while \
-                 the program is being watched.",
+                "Watch the program and look for the routine it keeps coming \
+                 back to. Nothing is written down until you say so.",
             )
             .clicked()
         {
-            look(app);
+            start_looking(app);
         }
-        theme::divider(ui);
-        // The same switch as the debugger's: watching has to be on for any of
-        // this to have anything to work from, and it is unhelpful to send
-        // somebody to another window to turn it on.
-        let was = app.dbg.autodoc;
-        ui.toggle_value(&mut app.dbg.autodoc, "AutoDoc")
-            .on_hover_text(
-                "Watch what the program does: which routines are called, what they \
-             write, how long their loops run. Everything in this window comes \
-             from it.",
-            );
-        if app.dbg.autodoc != was {
-            app.dbg.doc = crate::autodoc::Doc::default();
-            if !app.dbg.autodoc {
-                app.callflow.findings.clear();
+        if app.callflow.looking {
+            theme::divider(ui);
+            if ui.button("Stop").clicked() {
+                app.callflow.looking = false;
             }
         }
+
         theme::divider(ui);
-        let watching = app.spec.bus.observer.enabled;
+        let calls = app.spec.bus.observer.steps().count();
         ui.label(
-            RichText::new(if watching {
-                format!(
-                    "watching — {} calls so far",
-                    app.spec.bus.observer.steps().count()
-                )
+            RichText::new(if app.callflow.looking {
+                format!("watching — {calls} calls so far")
+            } else if calls > 0 {
+                format!("stopped — {calls} calls watched")
             } else {
-                "not watching; AutoDoc is off".to_string()
+                "not watching".to_string()
             })
-            .color(if watching { theme::LCD_FG } else { theme::DIM }),
+            .color(if app.callflow.looking {
+                theme::LCD_FG
+            } else {
+                theme::DIM
+            }),
         );
     });
     if !app.callflow.summary.is_empty() {
@@ -125,14 +130,26 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+/// Start watching from nothing, so what is found comes from now rather than
+/// from whatever happened to be in the buffer.
+fn start_looking(app: &mut App) {
+    app.spec.bus.observer.clear();
+    app.callflow.looking = true;
+    app.callflow.looked_at = None;
+    app.callflow.findings.clear();
+    app.callflow.offered = None;
+    app.callflow.turn = None;
+    app.callflow.summary = "Watching. Let the game run for a few seconds.".to_string();
+}
+
 /// What the detectors think, one line each.
 fn findings(app: &mut App, ui: &mut egui::Ui) {
     if app.callflow.findings.is_empty() {
         ui.label(
-            RichText::new(if app.spec.bus.observer.enabled {
-                "Nothing found yet."
+            RichText::new(if app.callflow.looking {
+                "Looking. Nothing found yet."
             } else {
-                "Switch AutoDoc on in the debugger to watch the program."
+                "Press Main game loop to look for it."
             })
             .color(theme::DIM),
         );
@@ -177,7 +194,33 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
                 }),
             );
         });
-        ui.label(RichText::new(&finding.because).small().color(theme::DIM));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(&finding.because).small().color(theme::DIM));
+
+            // The finding is a guess until somebody accepts it. Nothing is
+            // written against the address before that.
+            let already = app.notes.label(finding.address) == LABEL;
+            if already {
+                ui.label(RichText::new("labelled").small().color(theme::GREEN));
+            } else if ui
+                .button("Label it")
+                .on_hover_text(format!(
+                    "Write {LABEL} against ${:04X} in your notes, marked as a guess",
+                    finding.address
+                ))
+                .clicked()
+            {
+                app.notes.suggest(finding.address, LABEL, &finding.because);
+                if let Err(e) = app.notes.save_if_dirty() {
+                    app.set_status(format!("Could not save notes: {e}"), true);
+                } else {
+                    app.set_status(
+                        format!("Labelled ${:04X} as the main game loop", finding.address),
+                        false,
+                    );
+                }
+            }
+        });
     }
     if let Some(address) = go_to {
         app.dbg.view_addr = address;
