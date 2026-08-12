@@ -1185,10 +1185,13 @@ impl App {
         self.dbg.marked = Some(addr);
     }
 
-    /// The same, from another window: open the debugger as well.
+    /// The same, from another window: open the debugger, bring it to the
+    /// front and give it the focus. Sending somebody to a listing in a window
+    /// that is behind the one they are looking at is sending them nowhere.
     pub fn show_in_debugger(&mut self, addr: u16) {
         self.show_in_listing(addr);
         self.show_debugger = true;
+        self.dbg.raise = true;
     }
 
     pub fn peek(&self, addr: u16) -> u8 {

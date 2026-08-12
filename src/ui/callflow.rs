@@ -12,7 +12,7 @@
 
 use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
 
-use crate::detect::{self, Finding};
+use crate::detect::{self, Finding, Question};
 use crate::loops::{self, Turn};
 use crate::ui::{theme, App};
 
@@ -23,6 +23,9 @@ pub struct CallFlowState {
     /// branch on every memory access, so it only runs while somebody is
     /// looking for something.
     pub looking: bool,
+    /// Which question is being asked. One detector at a time, so what is in
+    /// the list is the answer to something the reader chose.
+    pub asking: Question,
     /// The finding waiting to be accepted or thrown away. Nothing is written
     /// against an address until somebody says so.
     pub offered: Option<Finding>,
@@ -82,17 +85,30 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 
 fn controls(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
-        // Always clickable: pressing it is what starts the machine being
+        // Always clickable: pressing one is what starts the machine being
         // watched, so there is no switch to find first.
-        if ui
-            .button("Main game loop")
-            .on_hover_text(
-                "Watch the program and look for the routine it keeps coming \
-                 back to. Nothing is written down until you say so.",
-            )
-            .clicked()
-        {
-            start_looking(app);
+        for question in Question::all() {
+            let asking = app.callflow.looking && app.callflow.asking == question;
+            if theme::selectable(ui, asking, question.label())
+                .on_hover_text(match question {
+                    Question::MainGameLoop => {
+                        "Watch the program and look for the routines it keeps \
+                         coming back to. Nothing is written down until you say so."
+                    }
+                    Question::Keyboard => {
+                        "Watch the program and look for the routines that read \
+                         the keyboard on port $FE."
+                    }
+                    Question::Joystick => {
+                        "Watch the program and look for the routines that read a \
+                         joystick — a Kempston or a Fuller on its own port, or a \
+                         Sinclair on the keyboard's rows."
+                    }
+                })
+                .clicked()
+            {
+                start_looking(app, question);
+            }
         }
         if app.callflow.looking {
             theme::divider(ui);
@@ -129,14 +145,18 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
 
 /// Start watching from nothing, so what is found comes from now rather than
 /// from whatever happened to be in the buffer.
-fn start_looking(app: &mut App) {
+fn start_looking(app: &mut App, question: Question) {
     app.spec.bus.observer.clear();
+    app.callflow.asking = question;
     app.callflow.looking = true;
     app.callflow.looked_at = None;
     app.callflow.findings.clear();
     app.callflow.offered = None;
     app.callflow.turn = None;
-    app.callflow.summary = "Watching. Let the game run for a few seconds.".to_string();
+    app.callflow.summary = format!(
+        "Watching for the {}. Let the program run for a few seconds.",
+        question.label().to_lowercase()
+    );
 }
 
 /// What the detectors think, one line each.
@@ -144,9 +164,12 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
     if app.callflow.findings.is_empty() {
         ui.label(
             RichText::new(if app.callflow.looking {
-                "Looking. Nothing found yet."
+                format!(
+                    "Looking for the {}. Nothing found yet.",
+                    app.callflow.asking.label().to_lowercase()
+                )
             } else {
-                "Press Main game loop to look for it."
+                "Press one of the buttons above to look for something.".to_string()
             })
             .color(theme::DIM),
         );
@@ -156,9 +179,10 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
     let findings = app.callflow.findings.clone();
     ui.label(
         RichText::new(format!(
-            "{} loop{} found, the likeliest first.",
+            "{} candidate{} for the {}, the likeliest first.",
             findings.len(),
-            if findings.len() == 1 { "" } else { "s" }
+            if findings.len() == 1 { "" } else { "s" },
+            app.callflow.asking.label().to_lowercase()
         ))
         .small()
         .color(theme::DIM),
@@ -253,7 +277,8 @@ fn look(app: &mut App) {
     let frame_t = app.spec.bus.frame_t();
     let steps: Vec<crate::observe::Step> = app.spec.bus.observer.steps().copied().collect();
     app.callflow.from_calls = steps.len();
-    app.callflow.findings = detect::everything(&steps, frame_t);
+    app.callflow.findings =
+        detect::ask(app.callflow.asking, &steps, &app.spec.bus.observer, frame_t);
 
     let phases = loops::phases(&steps, frame_t, 64);
     if let Some(phase) = phases.iter().max_by_key(|phase| phase.iterations) {
@@ -263,13 +288,25 @@ fn look(app: &mut App) {
         } else {
             format!("{head} (${:04X})", phase.head)
         };
-        app.callflow.summary = format!(
-            "{} phase(s) watched. One turn of the loop on {named}: {} turns seen, \
-             {:.2} frames a turn.",
-            phases.len(),
-            phase.iterations,
-            phase.frames_per_turn(frame_t),
-        );
+        // The chart is drawn whatever was asked for — it is what the window
+        // is — but the line above it answers the question that was asked, not
+        // the one the chart happens to be of.
+        app.callflow.summary = match app.callflow.asking {
+            Question::MainGameLoop => format!(
+                "{} phase(s) watched. One turn of the loop on {named}: {} turns seen, \
+                 {:.2} frames a turn.",
+                phases.len(),
+                phase.iterations,
+                phase.frames_per_turn(frame_t),
+            ),
+            question => format!(
+                "Watched {} routines over {} frames, looking for the {}. The chart \
+                 below is one turn of the loop on {named}.",
+                app.spec.bus.observer.routines.len(),
+                app.spec.bus.observer.frames,
+                question.label().to_lowercase(),
+            ),
+        };
         app.callflow.turn = loops::turn(&steps, phase, frame_t);
     }
 }

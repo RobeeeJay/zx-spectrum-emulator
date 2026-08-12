@@ -286,3 +286,163 @@ fn clicking_a_loop_marks_its_row_in_the_debugger() {
         "and stop following the PC, or the listing walks away from it"
     );
 }
+
+/// Each question has a button of its own, and pressing one asks that question
+/// of the machine — the list underneath is the answer to what was chosen, not
+/// a pile of everything the emulator can think of.
+#[test]
+fn each_question_has_its_own_button() {
+    use egui_kittest::kittest::Queryable;
+    use zx_rustrum::detect::Question;
+
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+    app.show_callflow = true;
+
+    // Notes of this test's own: the real ones beside the recording are the
+    // user's work.
+    let scratch = std::env::temp_dir().join(format!("zxrs-questions-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    if let Some(rzx) = app.rzx.as_mut() {
+        rzx.path = scratch.join("manic.rzx");
+        rzx.max_speed = true;
+    }
+    app.reload_notes();
+
+    let mut h = egui_kittest::Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+
+    for question in Question::all() {
+        h.get_by_label(question.label()).click();
+        h.run_steps(2);
+        assert_eq!(
+            h.state().callflow.asking,
+            question,
+            "pressing {} should ask that question",
+            question.label()
+        );
+        assert!(
+            h.state().callflow.looking,
+            "and start watching, so there is no switch to find first"
+        );
+
+        // Let the game run under the question being asked.
+        h.state_mut().spec.bus.observer.enabled = true;
+        for _ in 0..300 {
+            h.state_mut().advance(1.0 / 50.0);
+        }
+        h.state_mut().callflow.looked_at = None;
+        h.run_steps(3);
+
+        // Whatever is in the list answers the question that was asked, not the
+        // one asked before it.
+        let findings = h.state().callflow.findings.clone();
+        for finding in &findings {
+            // The loops after the best one are called "Loop" rather than the
+            // main game loop, which is still an answer to the question asked.
+            let answers = finding.what == question.label()
+                || (question == Question::MainGameLoop && finding.what == "Loop");
+            assert!(
+                answers,
+                "asked for the {}, and the list holds {:?}",
+                question.label(),
+                finding.what
+            );
+        }
+        if question != Question::Joystick {
+            // Manic Miner has a loop and reads the keys. It is played on the
+            // keyboard, so nothing is claimed about the joystick.
+            assert!(
+                !findings.is_empty(),
+                "the {} should have been found in a recording of the game",
+                question.label()
+            );
+        }
+    }
+}
+
+/// The keyboard detector, through the window: press the button, let the game
+/// run, and the routines that read port $FE are offered with their own name.
+#[test]
+fn the_keyboard_question_finds_and_labels_a_routine() {
+    use egui_kittest::kittest::Queryable;
+
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+    app.show_callflow = true;
+    let scratch = std::env::temp_dir().join(format!("zxrs-keys-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    if let Some(rzx) = app.rzx.as_mut() {
+        rzx.path = scratch.join("manic.rzx");
+        rzx.max_speed = true;
+    }
+    app.reload_notes();
+
+    let mut h = egui_kittest::Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+    h.get_by_label("Keyboard input").click();
+    h.run_steps(2);
+
+    h.state_mut().spec.bus.observer.enabled = true;
+    for _ in 0..300 {
+        h.state_mut().advance(1.0 / 50.0);
+    }
+    h.state_mut().callflow.looked_at = None;
+    h.run_steps(3);
+
+    let found = h
+        .state()
+        .callflow
+        .findings
+        .first()
+        .expect("the game reads the keyboard while it is being played")
+        .clone();
+    assert!(h.state().notes.label(found.address).is_empty());
+
+    h.get_all_by_label("Label").next().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().notes.label(found.address),
+        "read_keyboard",
+        "the keyboard routine is named for what it does, not for the loop"
+    );
+    assert!(
+        h.state().notes.label_is_auto(found.address),
+        "as a guess, so nothing of the user's is overwritten by it"
+    );
+}
+
+/// Being sent to a listing in a window that is behind the one you are looking
+/// at is being sent nowhere, so the debugger asks for the focus as well as
+/// opening. The window clears the request as it draws, which is why this asks
+/// the App rather than clicking through a harness.
+#[test]
+fn being_sent_to_the_debugger_asks_for_the_front() {
+    let mut app = app();
+    app.show_debugger = false;
+    app.dbg.raise = false;
+
+    app.show_in_debugger(0x8000);
+
+    assert!(app.show_debugger, "the window should be open");
+    assert!(app.dbg.raise, "and asking to be brought to the front");
+    assert_eq!(app.dbg.marked, Some(0x8000), "with the row marked");
+}

@@ -1,7 +1,8 @@
 //! Looking for particular things in a program.
 
-use zx_rustrum::detect::{main_game_loop, main_game_loops, Sure};
+use zx_rustrum::detect::{joystick_input, keyboard_input, main_game_loop, main_game_loops, Sure};
 use zx_rustrum::observe::Step;
+use zx_rustrum::observe::{Observed, Observer};
 
 const FRAME_T: u32 = 69888;
 
@@ -224,5 +225,170 @@ fn a_loop_seen_twice_is_listed_once() {
         times, 1,
         "the loop at $8000 was gone round in two stretches and should be one \
          line, not {times}"
+    );
+}
+
+/// A routine with some ports read, as the observer would have recorded it.
+fn reading(entry: u16, ports: &[u16], reads_a_call: u32, calls: u32) -> (u16, Observed) {
+    let mut seen = Observed::default();
+    seen.entry = entry;
+    seen.calls = calls;
+    seen.frames = calls;
+    seen.port_reads = reads_a_call * calls;
+    seen.ports_in = ports.to_vec();
+    (entry, seen)
+}
+
+fn watched(routines: Vec<(u16, Observed)>) -> Observer {
+    let mut observer = Observer::new();
+    observer.routines = routines.into_iter().collect();
+    observer
+}
+
+/// The ULA puts the keyboard on port $FE with the row in the top half of the
+/// address, so a routine walking the eight half-rows is scanning the keyboard
+/// whatever its instructions look like.
+#[test]
+fn a_routine_that_walks_the_half_rows_is_reading_the_keyboard() {
+    let observer = watched(vec![reading(
+        0x8000,
+        &[
+            0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE, 0xDFFE, 0xBFFE, 0x7FFE,
+        ],
+        8,
+        200,
+    )]);
+
+    let found = keyboard_input(&observer);
+    assert_eq!(found.len(), 1, "one routine reads the keyboard");
+    assert_eq!(found[0].address, 0x8000);
+    assert_eq!(found[0].label, "read_keyboard");
+    assert!(
+        found[0].sure >= Sure::Likely,
+        "eight half-rows is a keyboard scan, not a maybe: {} ({:.2})",
+        found[0].sure.label(),
+        found[0].score
+    );
+    assert!(
+        found[0].because.contains("8 half-rows"),
+        "it should say what the answer rests on: {:?}",
+        found[0].because
+    );
+}
+
+/// Port $FE carries the EAR bit as well as the keyboard, and a tape loader
+/// polls it thousands of times a call. Calling that a keyboard routine would
+/// be reading the port number and ignoring what was done with it.
+#[test]
+fn a_tape_loader_polling_the_ear_bit_is_not_keyboard_input() {
+    let observer = watched(vec![reading(0x9000, &[0x7FFE], 40_000, 3)]);
+    let found = keyboard_input(&observer);
+    assert!(
+        found.is_empty(),
+        "a routine reading one row 40,000 times a call is not reading keys: {:?}",
+        found.first().map(|finding| &finding.because)
+    );
+}
+
+/// A Kempston has a port of its own and says so plainly.
+#[test]
+fn reading_port_1f_is_a_kempston_joystick() {
+    let observer = watched(vec![reading(0x8100, &[0x001F], 1, 400)]);
+    let found = joystick_input(&observer);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].address, 0x8100);
+    assert_eq!(found[0].label, "read_joystick");
+    assert!(
+        found[0].sure >= Sure::Certain,
+        "its own port leaves little to guess at: {} ({:.2})",
+        found[0].sure.label(),
+        found[0].score
+    );
+    assert!(
+        found[0].because.contains("Kempston"),
+        "and it should say which joystick: {:?}",
+        found[0].because
+    );
+}
+
+/// A Sinclair or Interface II joystick is wired to the number keys, so the
+/// same instruction reads both. The most that can be said is that it might be
+/// a joystick, and it is said in those words.
+#[test]
+fn the_sinclair_rows_are_only_a_possible_joystick() {
+    let observer = watched(vec![
+        reading(0x8200, &[0xF7FE, 0xEFFE], 2, 400),
+        // The same rows among all eight is a keyboard scan, not a joystick.
+        reading(
+            0x8300,
+            &[
+                0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE, 0xDFFE, 0xBFFE, 0x7FFE,
+            ],
+            8,
+            400,
+        ),
+    ]);
+
+    let found = joystick_input(&observer);
+    let addresses: Vec<u16> = found.iter().map(|finding| finding.address).collect();
+    assert_eq!(
+        addresses,
+        vec![0x8200],
+        "only the routine reading nothing but those two rows"
+    );
+    assert_eq!(
+        found[0].sure,
+        Sure::Possible,
+        "and it is a possibility, not a finding: {:.2}",
+        found[0].score
+    );
+    assert!(
+        found[0].because.contains("number keys"),
+        "with the ambiguity said out loud: {:?}",
+        found[0].because
+    );
+}
+
+/// Manic Miner reads the keyboard every frame, and the detector should find it
+/// in a recording of the game being played rather than only in a fixture.
+#[test]
+fn it_finds_manic_miners_keyboard_routine() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{App, Roms};
+
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let roms = Roms {
+        rom48: std::fs::read("roms/48.rom").ok(),
+        ..Default::default()
+    };
+    let mut app = App::with_roms(Spectrum::new(), String::new(), roms, None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+    app.spec.bus.observer.enabled = true;
+    if let Some(rzx) = app.rzx.as_mut() {
+        rzx.max_speed = true;
+    }
+    for _ in 0..300 {
+        app.advance(1.0 / 50.0);
+    }
+
+    let found = keyboard_input(&app.spec.bus.observer);
+    assert!(
+        !found.is_empty(),
+        "a game being played reads the keyboard somewhere"
+    );
+    assert!(
+        found[0].because.contains("port $FE"),
+        "and it should say what it rests on: {:?}",
+        found[0].because
     );
 }

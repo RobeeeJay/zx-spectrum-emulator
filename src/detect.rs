@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use crate::loops::{self, Phase};
-use crate::observe::Step;
+use crate::observe::{Observed, Observer, Step};
 
 /// How sure a detector is, in the words the rest of the emulator uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -234,11 +234,183 @@ fn steadiness_of(times: &[u64]) -> f64 {
     1.0 / (1.0 + variance.sqrt() / mean)
 }
 
-/// Every detector there is, run over what has been watched.
+/// The keyboard's eight half-rows, as they appear in the top half of the port
+/// address. Reading `$FEFE` is the caps-shift to V row; a routine that reads
+/// several of these is walking the keyboard.
+const HALF_ROWS: [u8; 8] = [0xFE, 0xFD, 0xFB, 0xF7, 0xEF, 0xDF, 0xBF, 0x7F];
+
+/// The two half-rows a Sinclair-style joystick sits on: keys 1-5 and 6-0. An
+/// Interface II joystick *is* those keys, so reading them is the same
+/// instruction either way and only the reader knows which was meant.
+const SINCLAIR_ROWS: [u8; 2] = [0xF7, 0xEF];
+
+/// Which routines read the keyboard.
 ///
-/// One question so far, which can have several answers. The shape is here for
-/// the others: each answers its own question and says how sure it is, and the
-/// window lists whatever they find.
-pub fn everything(steps: &[Step], frame_t: u32) -> Vec<Finding> {
-    main_game_loops(steps, frame_t)
+/// The ULA puts the keyboard on port $FE, with the row to read in the top half
+/// of the address, so a keyboard scan shows up as reads of `$xxFE` with
+/// several different `xx`. That same port carries the EAR bit, which a tape
+/// loader polls thousands of times a call — so how many rows a routine reads,
+/// and how hard it hammers the port, are what tell them apart.
+pub fn keyboard_input(observer: &Observer) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for (entry, seen) in &observer.routines {
+        let rows: Vec<u8> = seen
+            .ports_in
+            .iter()
+            .filter(|port| port.to_le_bytes()[0] == 0xFE)
+            .map(|port| port.to_le_bytes()[1])
+            .filter(|high| HALF_ROWS.contains(high) || *high == 0x00)
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+
+        // Walking several rows is a keyboard scan; one row is a routine
+        // waiting on one key, which is still the keyboard.
+        let breadth = (rows.len().min(8) as f64) / 8.0;
+        let per_call = seen.port_reads as f64 / seen.calls.max(1) as f64;
+        // A tape loader reads the same port thousands of times a call for the
+        // EAR bit. Above a few dozen reads a call this is not somebody
+        // checking whether a key is down.
+        let polling = (per_call / 64.0).min(1.0);
+        let score = (0.45 + 0.5 * breadth - 0.6 * polling).clamp(0.0, 1.0);
+        if score < WORTH_SAYING {
+            continue;
+        }
+        found.push(Finding {
+            what: "Keyboard input",
+            label: "read_keyboard".to_string(),
+            address: *entry,
+            sure: Sure::from_score(score),
+            score,
+            because: format!(
+                "read port $FE on {} half-row{}, {:.1} reads a call, over {} calls",
+                rows.len(),
+                if rows.len() == 1 { "" } else { "s" },
+                per_call,
+                seen.calls
+            ),
+        });
+    }
+    rank(found, "read_keyboard")
+}
+
+/// Which routines read a joystick.
+///
+/// A Kempston is its own port and says so plainly; a Fuller likewise. A
+/// Sinclair or an Interface II is wired to the keyboard, so the most that can
+/// be said of a routine reading those two half-rows is that it might be a
+/// joystick being read — and it is said in those words rather than dressed up.
+pub fn joystick_input(observer: &Observer) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for (entry, seen) in &observer.routines {
+        let Some((score, kind)) = joystick_port(seen) else {
+            continue;
+        };
+        let per_call = seen.port_reads as f64 / seen.calls.max(1) as f64;
+        found.push(Finding {
+            what: "Joystick input",
+            label: "read_joystick".to_string(),
+            address: *entry,
+            sure: Sure::from_score(score),
+            score,
+            because: format!(
+                "{kind}, {:.1} reads a call, over {} calls",
+                per_call, seen.calls
+            ),
+        });
+    }
+    rank(found, "read_joystick")
+}
+
+/// What a routine's reads say about which joystick it is reading, if any.
+fn joystick_port(seen: &Observed) -> Option<(f64, String)> {
+    let low: Vec<u8> = seen
+        .ports_in
+        .iter()
+        .map(|port| port.to_le_bytes()[0])
+        .collect();
+    // A Kempston is read with `IN A,($1F)`, which puts A in the top half of
+    // the address, so only the bottom half can be relied on.
+    if low.contains(&0x1F) {
+        return Some((0.9, "read the Kempston port $1F".to_string()));
+    }
+    if low.contains(&0x7F) && !low.contains(&0xFE) {
+        return Some((0.7, "read the Fuller port $7F".to_string()));
+    }
+
+    // Wired to the keyboard: the two half-rows an Interface II sits on, and
+    // nothing else. A routine that reads those two and the other six is
+    // scanning the keyboard, not reading a joystick.
+    let rows: Vec<u8> = seen
+        .ports_in
+        .iter()
+        .filter(|port| port.to_le_bytes()[0] == 0xFE)
+        .map(|port| port.to_le_bytes()[1])
+        .collect();
+    if !rows.is_empty() && rows.iter().all(|row| SINCLAIR_ROWS.contains(row)) {
+        return Some((
+            0.45,
+            format!(
+                "read the {} half-row{} a Sinclair or Interface II joystick sits on, \
+                 which are also the number keys",
+                rows.len(),
+                if rows.len() == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+    None
+}
+
+/// Best first, and only the best one gets the plain name: a second candidate
+/// called `read_keyboard` would be saying the two are the same routine.
+fn rank(mut found: Vec<Finding>, name: &str) -> Vec<Finding> {
+    found.sort_by(|a, b| b.score.total_cmp(&a.score));
+    found.truncate(MOST);
+    for (rank, finding) in found.iter_mut().enumerate() {
+        if rank > 0 {
+            finding.label = format!("{name}_{:04X}", finding.address);
+        }
+    }
+    found
+}
+
+/// What is being looked for. A detector answers one question, and the reader
+/// wants to know which was asked before weighing the answer, so the question
+/// is chosen rather than everything being run at once and the results piled
+/// together.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Question {
+    #[default]
+    MainGameLoop,
+    Keyboard,
+    Joystick,
+}
+
+impl Question {
+    /// What the button says, and what the window says it is looking for.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Question::MainGameLoop => "Main game loop",
+            Question::Keyboard => "Keyboard input",
+            Question::Joystick => "Joystick input",
+        }
+    }
+
+    pub fn all() -> [Question; 3] {
+        [
+            Question::MainGameLoop,
+            Question::Keyboard,
+            Question::Joystick,
+        ]
+    }
+}
+
+/// Ask one question of what has been watched.
+pub fn ask(question: Question, steps: &[Step], observer: &Observer, frame_t: u32) -> Vec<Finding> {
+    match question {
+        Question::MainGameLoop => main_game_loops(steps, frame_t),
+        Question::Keyboard => keyboard_input(observer),
+        Question::Joystick => joystick_input(observer),
+    }
 }

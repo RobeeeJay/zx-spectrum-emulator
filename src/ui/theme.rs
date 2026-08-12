@@ -296,23 +296,29 @@ pub fn run_pause_button(ui: &mut egui::Ui, running: bool) -> egui::Response {
 /// the pointer arrives, but the outline that appears is a couple of points off
 /// from its neighbours', which reads exactly like the button jumping.
 pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
-    let height = button_height(ui);
-    let mut response = ui.add(
-        egui::Button::selectable(*on, text)
-            // Framed whether it is on or off. egui leaves the frame off a
-            // selectable button while it is unselected and the pointer is
-            // elsewhere, and puts it back the moment the pointer arrives:
-            // the stroke is a point on each side, so the toggle grew by two
-            // and shoved every control after it along the row. That is what
-            // "the buttons move on hover" was.
-            .frame_when_inactive(true)
-            .min_size(egui::vec2(0.0, height)),
-    );
+    let mut response = selectable(ui, *on, text);
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
     }
     response
+}
+
+/// A button that shows whether it is the one in force, without flipping a flag
+/// of its own: one of a set where pressing one chooses it.
+pub fn selectable(ui: &mut egui::Ui, on: bool, text: &str) -> egui::Response {
+    let height = button_height(ui);
+    ui.add(
+        egui::Button::selectable(on, text)
+            // Framed whether it is on or off. egui leaves the frame off a
+            // selectable button while it is unselected and the pointer is
+            // elsewhere, and puts it back the moment the pointer arrives: the
+            // stroke is a point on each side, so the button grew by two and
+            // shoved every control after it along the row. That is what "the
+            // buttons move on hover" was.
+            .frame_when_inactive(true)
+            .min_size(egui::vec2(0.0, height)),
+    )
 }
 
 /// How tall a button comes out, so anything sitting beside one can match it.
