@@ -86,6 +86,14 @@ pub struct Observed {
     pub inclusive: Writes,
     /// The lowest and highest address it wrote to.
     pub wrote_between: Option<(u16, u16)>,
+    /// The one value it has written everywhere, while there is one. A routine
+    /// that fills memory with a single byte is clearing it; one that writes
+    /// different bytes is drawing something. Nothing else tells those apart:
+    /// both write a lot into the display file, quickly, every frame.
+    pub filled_with: Option<u8>,
+    /// Whether it has written more than one distinct value, which is what
+    /// makes `filled_with` empty rather than nothing having been written yet.
+    pub mixed_values: bool,
     /// The lowest and highest address executed while it was the innermost
     /// routine: where the routine actually is, as against where it starts.
     /// What is between them is not necessarily all its own — a routine that
@@ -463,6 +471,20 @@ impl Observer {
         who.into_iter().map(|(entry, _)| entry).collect()
     }
 
+    /// Which pages a routine read, and how often. The other way round from
+    /// [`Self::readers_of`], for asking what one routine looked at rather than
+    /// who looked at one page.
+    pub fn pages_read_by(&self, entry: u16) -> Vec<(u8, u32)> {
+        let mut pages: Vec<(u8, u32)> = self
+            .readers
+            .iter()
+            .filter(|((_, who), _)| *who == entry)
+            .map(|((page, _), count)| (*page, *count))
+            .collect();
+        pages.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        pages
+    }
+
     /// The blocks of data found, longest first, each with a guess at what it
     /// is taken from what the routines that read it went on to do.
     pub fn blocks(&self, min_length: u16) -> Vec<Block> {
@@ -502,7 +524,7 @@ impl Observer {
     }
 
     /// A byte was written here by whatever routine is running.
-    pub fn on_write(&mut self, addr: u16) {
+    pub fn on_write(&mut self, addr: u16, value: u8) {
         if !self.enabled {
             return;
         }
@@ -524,6 +546,14 @@ impl Observer {
         }
         let stats = self.stats(entry);
         stats.writes.add(addr);
+        match stats.filled_with {
+            Some(seen) if seen != value => {
+                stats.filled_with = None;
+                stats.mixed_values = true;
+            }
+            None if !stats.mixed_values => stats.filled_with = Some(value),
+            _ => {}
+        }
         // Only worth keeping while there are few of them: a routine writing
         // half the screen is not keeping a variable, and the list is dropped
         // once it stops being a short one.

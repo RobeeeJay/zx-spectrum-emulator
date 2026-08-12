@@ -113,6 +113,15 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
                          joystick — a Kempston or a Fuller on its own port, or a \
                          Sinclair on the keyboard's rows."
                     }
+                    Question::ScreenClear => {
+                        "Watch the program and look for the routines that fill \
+                         the display file or the attributes with one value."
+                    }
+                    Question::SpriteUpdate => {
+                        "Watch the program and look for the routines that draw \
+                         the moving things: a sprite's worth of the screen at a \
+                         time, over and over, out of data held elsewhere."
+                    }
                 })
                 .clicked()
             {

@@ -1,8 +1,10 @@
 //! Looking for particular things in a program.
 
-use zx_rustrum::detect::{joystick_input, keyboard_input, main_game_loop, main_game_loops, Sure};
-use zx_rustrum::observe::Step;
-use zx_rustrum::observe::{Observer, Site};
+use zx_rustrum::detect::{
+    joystick_input, keyboard_input, main_game_loop, main_game_loops, screen_clear, sprite_update,
+    Sure,
+};
+use zx_rustrum::observe::{Observed, Observer, Site, Step};
 
 const FRAME_T: u32 = 69888;
 
@@ -452,5 +454,167 @@ fn a_read_outside_any_known_routine_is_still_found() {
     assert_eq!(
         found[0].entry, None,
         "with no routine to name, so the label goes where the reading is"
+    );
+}
+
+/// A routine as the observer would have recorded it, for the detectors that
+/// work from what a routine did rather than from one instruction.
+fn wrote(entry: u16, screen: u32, attrs: u32, calls: u32, frames: u32) -> (u16, Observed) {
+    let mut seen = Observed::default();
+    seen.entry = entry;
+    seen.calls = calls;
+    seen.frames = frames;
+    seen.writes.screen = screen * calls;
+    seen.writes.attrs = attrs * calls;
+    (entry, seen)
+}
+
+fn routines(seen: Vec<(u16, Observed)>) -> Observer {
+    let mut observer = Observer::new();
+    observer.routines = seen.into_iter().collect();
+    observer
+}
+
+/// A clear writes one value over the whole display file. What tells it from a
+/// routine painting a screenful of graphics is not how much it writes — a blit
+/// writes as much, as fast — but that every byte is the same one.
+#[test]
+fn a_routine_that_fills_the_display_file_with_one_value_is_a_clear() {
+    let (entry, mut seen) = wrote(0x8000, 6144, 0, 40, 40);
+    seen.filled_with = Some(0x00);
+    seen.wrote_between = Some((0x4000, 0x57FF));
+    let observer = routines(vec![(entry, seen)]);
+
+    let found = screen_clear(&observer);
+    assert_eq!(found.len(), 1, "one routine clears the screen");
+    assert_eq!(found[0].address, 0x8000);
+    assert_eq!(found[0].label, "clear_screen");
+    assert!(
+        found[0].sure >= Sure::Likely,
+        "a whole display file of one value is not a maybe: {} ({:.2})",
+        found[0].sure.label(),
+        found[0].score
+    );
+    assert!(
+        found[0].because.contains("$00"),
+        "and it should say what it filled it with: {:?}",
+        found[0].because
+    );
+}
+
+/// A screen blit writes as much of the display file as a clear does, and is
+/// not one. Nothing but the values distinguishes them, so a routine writing
+/// several is not offered at all rather than offered with a low number.
+#[test]
+fn a_screen_blit_is_not_a_clear() {
+    let (entry, mut seen) = wrote(0x8100, 6144, 0, 40, 40);
+    seen.filled_with = None;
+    seen.mixed_values = true;
+    seen.wrote_between = Some((0x4000, 0x57FF));
+
+    assert!(
+        screen_clear(&routines(vec![(entry, seen)])).is_empty(),
+        "writing a screenful of different bytes is drawing, not clearing"
+    );
+}
+
+/// A main loop is credited with everything it does over minutes of play, which
+/// is hundreds of screenfuls. Asking only what fraction of a screen it covered
+/// called Manic Miner's main loop a screen clear.
+#[test]
+fn a_main_loop_is_not_a_screen_clear() {
+    let (entry, mut seen) = wrote(0x9028, 1_953_494, 276_172, 5, 5);
+    seen.filled_with = Some(0x00);
+    seen.wrote_between = Some((0x4000, 0x9CFD));
+
+    assert!(
+        screen_clear(&routines(vec![(entry, seen)])).is_empty(),
+        "three hundred screenfuls in one call is not a screen being cleared"
+    );
+}
+
+/// A sprite goes on the screen a few dozen bytes at a time and the next one
+/// goes somewhere else: little in any one call, over the whole screen across
+/// many of them, again and again.
+#[test]
+fn a_routine_that_draws_a_little_all_over_the_screen_is_drawing_sprites() {
+    let (entry, mut seen) = wrote(0x8FF4, 12, 0, 9000, 3000);
+    seen.filled_with = None;
+    seen.mixed_values = true;
+    seen.wrote_between = Some((0x4000, 0x57FF));
+
+    let found = sprite_update(&routines(vec![(entry, seen)]));
+    assert_eq!(found.len(), 1, "one routine draws the sprites");
+    assert_eq!(found[0].address, 0x8FF4);
+    assert_eq!(found[0].label, "draw_sprite");
+    assert!(
+        found[0].because.contains("3.0 times a frame"),
+        "it should say how often, since that is half the case: {:?}",
+        found[0].because
+    );
+
+    // A routine that fills the same few bytes with one value is not drawing.
+    let (entry, mut seen) = wrote(0x92CB, 8, 0, 9000, 3000);
+    seen.filled_with = Some(0xFF);
+    seen.wrote_between = Some((0x5000, 0x577F));
+    assert!(
+        sprite_update(&routines(vec![(entry, seen)])).is_empty(),
+        "writing one value over and over is filling, not drawing a shape"
+    );
+}
+
+/// The sprite detector against a recording of a real game rather than a
+/// fixture. Manic Miner draws Willy, the guardians and the conveyor a dozen
+/// bytes at a time, three times a frame, out of shapes held above the code.
+#[test]
+fn it_finds_manic_miners_sprite_routine() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{App, Roms};
+
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let roms = Roms {
+        rom48: std::fs::read("roms/48.rom").ok(),
+        ..Default::default()
+    };
+    let mut app = App::with_roms(Spectrum::new(), String::new(), roms, None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+    app.spec.bus.observer.enabled = true;
+    if let Some(rzx) = app.rzx.as_mut() {
+        rzx.max_speed = true;
+    }
+    for _ in 0..600 {
+        app.advance(1.0 / 50.0);
+    }
+
+    let found = sprite_update(&app.spec.bus.observer);
+    assert!(
+        !found.is_empty(),
+        "a game with things moving about draws them somewhere"
+    );
+    assert!(
+        found[0].because.contains("times a frame"),
+        "and it should say how often: {:?}",
+        found[0].because
+    );
+
+    // Nothing clears the whole screen in this stretch: the recording starts
+    // part-way through a level and never leaves it. Saying so is the answer;
+    // offering the nearest routine would put an address in front of somebody
+    // who would go and look at it.
+    let clears = screen_clear(&app.spec.bus.observer);
+    assert!(
+        clears.is_empty(),
+        "nothing clears the screen here, and it should not invent one: {:?}",
+        clears.first().map(|finding| &finding.because)
     );
 }

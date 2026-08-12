@@ -867,7 +867,7 @@ impl Bus for SpectrumBus {
         self.access(addr, 3);
         let phys = self.phys_index(addr);
         self.tracker.on_write(phys, addr);
-        self.observer.on_write(addr);
+        self.observer.on_write(addr, value);
         if (SCREEN_START..SCREEN_END).contains(&addr) {
             self.screen_writes_acc += 1;
             if self.breaks.screen {

@@ -391,6 +391,173 @@ fn joystick_port(site: &Site) -> Option<(f64, String)> {
     None
 }
 
+/// The display file and the attributes, which is what "the screen" means here.
+const SCREEN: std::ops::RangeInclusive<u16> = 0x4000..=0x57FF;
+const ATTRS: std::ops::RangeInclusive<u16> = 0x5800..=0x5AFF;
+/// Bytes in each, for saying how much of it a routine covered.
+const SCREEN_BYTES: f64 = 6144.0;
+const ATTR_BYTES: f64 = 768.0;
+
+/// Which routines clear the screen.
+///
+/// A clear writes one value over a large part of the display file or the
+/// attributes and reads nothing back. What tells it from a drawing routine is
+/// not how much it writes — a screen blit writes as much and as fast — but
+/// that every byte it writes is the same one, which is why the observer keeps
+/// the value as well as the address.
+///
+/// And it writes about a screenful in one call. A main loop is credited with
+/// everything it does over minutes of play, which is hundreds of screenfuls;
+/// asking only what fraction of a screen it covered called Manic Miner's main
+/// loop a screen clear, at a hundred per cent of a display file it had written
+/// three hundred times over.
+pub fn screen_clear(observer: &Observer) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for (entry, seen) in &observer.routines {
+        let calls = seen.calls.max(1) as f64;
+        let screen = seen.writes.screen as f64 / calls;
+        let attrs = seen.writes.attrs as f64 / calls;
+        let attributes = attrs > screen;
+        let (wrote, whole) = if attributes {
+            (attrs, ATTR_BYTES)
+        } else {
+            (screen, SCREEN_BYTES)
+        };
+
+        // A screenful, give or take. Less is drawing part of it; a great deal
+        // more is a routine that has been running all game.
+        if wrote < whole / 4.0 || wrote > whole * 2.0 {
+            continue;
+        }
+        let covered = (wrote / whole).min(1.0);
+
+        // One value throughout is what makes it a clear rather than a draw.
+        // Without that there is nothing to tell it from a routine painting a
+        // whole screen of graphics, which is not what was asked for.
+        let Some(value) = seen.filled_with else {
+            continue;
+        };
+
+        // A clear does not read the screen back: one that does is scrolling
+        // it, or putting back what was under something.
+        let reads_screen = reads_the_screen(observer, *entry);
+        let score = (0.45 + 0.45 * covered - if reads_screen { 0.3 } else { 0.0 }).clamp(0.0, 1.0);
+        if score < WORTH_SAYING {
+            continue;
+        }
+
+        let what = if attributes {
+            "attribute file"
+        } else {
+            "display file"
+        };
+        found.push(Finding {
+            what: "Screen clear",
+            label: "clear_screen".to_string(),
+            address: *entry,
+            entry: Some(*entry),
+            sure: Sure::from_score(score),
+            score,
+            because: format!(
+                "writes {wrote:.0} bytes of the {what} a call, {:.0}% of it, all of \
+                 it ${value:02X}, over {} calls",
+                covered * 100.0,
+                seen.calls
+            ),
+        });
+    }
+    rank(found, "clear_screen")
+}
+
+/// Which routines draw the moving things.
+///
+/// A sprite goes on the screen a few dozen bytes at a time, and the next one
+/// goes somewhere else: little in any one call, but over the whole screen
+/// across many of them, again and again, out of shapes held elsewhere in
+/// memory. A routine that fills the screen in one call is clearing or blitting
+/// it, and one that writes a single value is not drawing anything.
+///
+/// The spread across calls is the signal, not narrowness within one. Asking
+/// for a narrow span rejected every real plotter, since a routine that draws
+/// wherever it is told covers the screen between them.
+pub fn sprite_update(observer: &Observer) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for (entry, seen) in &observer.routines {
+        let calls = seen.calls.max(1) as f64;
+        let screen = (seen.writes.screen + seen.writes.attrs) as f64 / calls;
+        // A sprite is a few character cells' worth: more than a byte, and far
+        // less than a screen.
+        if !(8.0..=1024.0).contains(&screen) {
+            continue;
+        }
+        // One value everywhere is a fill, whatever size it is.
+        if seen.filled_with.is_some() {
+            continue;
+        }
+        // And it has to have been doing it, not done it once.
+        if seen.calls < 16 {
+            continue;
+        }
+
+        // Little at a time, spread over the screen across calls.
+        let span = match seen.wrote_between {
+            Some((low, high)) => high as f64 - low as f64,
+            None => continue,
+        };
+        let spread = (span / SCREEN_BYTES).min(1.0);
+
+        // Called again and again: several sprites a frame, or one a frame for
+        // as long as the game has been watched.
+        let per_frame = seen.calls as f64 / seen.frames.max(1) as f64;
+        let often = (per_frame / 4.0).min(1.0);
+
+        // And reading its shape from somewhere that is not the screen.
+        let from_data = reads_data(observer, *entry);
+        let score = (0.15 + 0.3 * spread + 0.3 * often + if from_data { 0.25 } else { 0.0 })
+            .clamp(0.0, 1.0);
+        if score < WORTH_SAYING {
+            continue;
+        }
+        found.push(Finding {
+            what: "Sprite update",
+            label: "draw_sprite".to_string(),
+            address: *entry,
+            entry: Some(*entry),
+            sure: Sure::from_score(score),
+            score,
+            because: format!(
+                "writes {screen:.0} bytes of the screen a call, {per_frame:.1} times a \
+                 frame, over {:.0} bytes of it across {} calls{}",
+                span,
+                seen.calls,
+                if from_data {
+                    ", from shapes elsewhere in memory"
+                } else {
+                    ""
+                }
+            ),
+        });
+    }
+    rank(found, "draw_sprite")
+}
+
+/// Whether a routine reads the screen back as well as writing it.
+fn reads_the_screen(observer: &Observer, entry: u16) -> bool {
+    observer
+        .pages_read_by(entry)
+        .iter()
+        .any(|(page, count)| *count > 8 && SCREEN.contains(&((*page as u16) << 8)))
+}
+
+/// Whether a routine reads memory that is neither the screen nor its own
+/// working variables: where a sprite's shape comes from.
+fn reads_data(observer: &Observer, entry: u16) -> bool {
+    observer.pages_read_by(entry).iter().any(|(page, count)| {
+        let at = (*page as u16) << 8;
+        *count > 8 && !SCREEN.contains(&at) && !ATTRS.contains(&at)
+    })
+}
+
 /// Best first, and only the best one gets the plain name: a second candidate
 /// called `read_keyboard` would be saying the two are the same routine.
 fn rank(mut found: Vec<Finding>, name: &str) -> Vec<Finding> {
@@ -414,6 +581,8 @@ pub enum Question {
     MainGameLoop,
     Keyboard,
     Joystick,
+    ScreenClear,
+    SpriteUpdate,
 }
 
 impl Question {
@@ -423,14 +592,18 @@ impl Question {
             Question::MainGameLoop => "Main game loop",
             Question::Keyboard => "Keyboard input",
             Question::Joystick => "Joystick input",
+            Question::ScreenClear => "Screen clear",
+            Question::SpriteUpdate => "Sprite update",
         }
     }
 
-    pub fn all() -> [Question; 3] {
+    pub fn all() -> [Question; 5] {
         [
             Question::MainGameLoop,
             Question::Keyboard,
             Question::Joystick,
+            Question::ScreenClear,
+            Question::SpriteUpdate,
         ]
     }
 }
@@ -441,5 +614,7 @@ pub fn ask(question: Question, steps: &[Step], observer: &Observer, frame_t: u32
         Question::MainGameLoop => main_game_loops(steps, frame_t),
         Question::Keyboard => keyboard_input(observer),
         Question::Joystick => joystick_input(observer),
+        Question::ScreenClear => screen_clear(observer),
+        Question::SpriteUpdate => sprite_update(observer),
     }
 }

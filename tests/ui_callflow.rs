@@ -358,9 +358,15 @@ fn each_question_has_its_own_button() {
                 finding.what
             );
         }
-        if question != Question::Joystick {
-            // Manic Miner has a loop and reads the keys. It is played on the
-            // keyboard, so nothing is claimed about the joystick.
+        // Manic Miner has a loop, reads the keys and draws its sprites. It is
+        // played on the keyboard, and the recording starts part-way through a
+        // level and never leaves it, so nothing is claimed about the joystick
+        // or about clearing the screen — the answer to those is nothing.
+        let must_find = matches!(
+            question,
+            Question::MainGameLoop | Question::Keyboard | Question::SpriteUpdate
+        );
+        if must_find {
             assert!(
                 !findings.is_empty(),
                 "the {} should have been found in a recording of the game",
