@@ -646,6 +646,7 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
             let mut go_to = None;
+            let mut as_graphics = None;
             egui::ScrollArea::vertical()
                 .id_salt("datablocks")
                 .max_height(LABELS_H)
@@ -661,6 +662,13 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                         );
                         if row.clicked() {
                             go_to = Some(block.at);
+                            // Any block, not only the ones guessed to be
+                            // graphics: what a block holds is a guess made
+                            // from who read it, and a block whose reader was
+                            // never seen to be called has no guess at all.
+                            // Looking at it is how you find out, and a hover
+                            // preview is gone the moment the mouse moves.
+                            as_graphics = Some((block.at, block.length));
                         }
                         // Who reads it, and who calls them: a graphics block
                         // plus its reader plus its reader's caller is most of
@@ -692,6 +700,11 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                         };
                         row.on_hover_ui(|ui| {
                             ui.label(read_by);
+                            ui.label(
+                                RichText::new("Click to read it as graphics")
+                                    .small()
+                                    .color(theme::DIM),
+                            );
                             if block.kind == crate::observe::DataKind::Graphics {
                                 sprites(app, ui, block.at, block.length);
                             }
@@ -700,6 +713,9 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                 });
             if let Some(addr) = go_to {
                 show_in_dump(app, addr);
+            }
+            if let Some((addr, length)) = as_graphics {
+                app.show_as_graphics(addr, length);
             }
         });
     });

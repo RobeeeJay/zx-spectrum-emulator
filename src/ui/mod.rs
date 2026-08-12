@@ -1188,6 +1188,38 @@ impl App {
         self.dbg.centre = true;
     }
 
+    /// Read a block of memory as pictures: open the graphics viewer on it,
+    /// bring it forward, and start with a sprite size the block divides into.
+    ///
+    /// Nothing in the bytes says how wide a sprite is meant to be — that is
+    /// the one thing the viewer asks for — but a block's length usually
+    /// divides by the size of the sprites in it, which is a better place to
+    /// start guessing from than whatever was set last.
+    pub fn show_as_graphics(&mut self, addr: u16, length: u16) {
+        self.sprites.addr = addr;
+        self.sprites.addr_text = format!("{addr:04X}");
+        self.sprites.block_length = Some(length);
+        self.show_sprites = true;
+        self.sprites.raise = true;
+
+        // The largest square sprite the block divides into, up to four cells:
+        // a sheet of 16x16 sprites is 32 bytes each and a sheet of 8x8 is 8,
+        // and either divides the block exactly.
+        for cells in (1..=4usize).rev() {
+            let stride = (cells * cells * 8) as u16;
+            if length >= stride && length.is_multiple_of(stride) {
+                self.sprites.cells_across = cells;
+                self.sprites.cells_down = cells;
+                break;
+            }
+        }
+        // And enough across to show the whole block without scrolling, when
+        // that is a sensible number.
+        let stride = self.sprites.stride().max(1);
+        let sprites = (length / stride) as usize;
+        self.sprites.columns = sprites.clamp(1, 8);
+    }
+
     /// The same, from another window: open the debugger, bring it to the
     /// front and give it the focus. Sending somebody to a listing in a window
     /// that is behind the one they are looking at is sending them nowhere.
@@ -2119,6 +2151,10 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
+                    if self.sprites.raise {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        self.sprites.raise = false;
+                    }
                     if self.place_window("sprites", &ctx, [340.0, 200.0], [720.0, 640.0]) {
                         self.remember_window("sprites", &ctx);
                     }

@@ -26,6 +26,12 @@ pub struct SpriteView {
     pub zoom: f32,
     /// Draw the attribute file's colours over it, or plain white on black.
     pub inverted: bool,
+    /// Set when something sends the viewer somewhere: the window asks to be
+    /// brought forward on the next frame it draws, and clears it.
+    pub raise: bool,
+    /// How long the block it was sent to is, so the sheet can be sized to show
+    /// the whole of it rather than an arbitrary window on to it.
+    pub block_length: Option<u16>,
 }
 
 impl Default for SpriteView {
@@ -38,6 +44,8 @@ impl Default for SpriteView {
             columns: 8,
             zoom: 3.0,
             inverted: false,
+            raise: false,
+            block_length: None,
         }
     }
 }
@@ -51,6 +59,17 @@ impl SpriteView {
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     controls(app, ui);
+    if let Some(length) = app.sprites.block_length {
+        ui.label(
+            RichText::new(format!(
+                "Showing the {length}-byte block at ${:04X}. Nothing in the bytes says \
+                 how wide a sprite is, so try the widths until the shapes line up.",
+                app.sprites.addr
+            ))
+            .small()
+            .color(theme::DIM),
+        );
+    }
     ui.separator();
     sheet(app, ui);
 }
