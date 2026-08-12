@@ -33,6 +33,9 @@ pub const MARK: Color32 = Color32::from_rgb(0x16, 0x3c, 0x52);
 /// next to it are told apart at a glance. Two shades per kind and taken in
 /// turn, so neighbours differ; dark enough that the text over them is still
 /// the text and not a colour scheme.
+/// How tall every control is, and so how tall a row of the listing is.
+pub const CONTROL_H: f32 = 22.0;
+
 pub const CODE_BANDS: [Color32; 2] = [
     Color32::from_rgb(0x16, 0x33, 0x26),
     Color32::from_rgb(0x14, 0x2c, 0x40),
@@ -153,7 +156,7 @@ pub fn apply(ctx: &egui::Context) {
         // height in the row. Nothing moved when the pointer arrived, but the
         // outline appeared two points off from its neighbours', which is what
         // "the buttons jump on hover" actually was.
-        style.spacing.interact_size.y = 22.0;
+        style.spacing.interact_size.y = CONTROL_H;
         style.spacing.menu_margin = Margin::same(6);
         // No banded rows: the mockup's panels are flat, and stripes across an
         // LCD readout look like a fault rather than a decoration.

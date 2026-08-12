@@ -211,3 +211,73 @@ fn tempdir(name: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
+
+/// The listing is a window onto the whole address space, not a list with ends:
+/// rolling the wheel over it moves through memory an instruction at a time, as
+/// far as it goes in either direction.
+///
+/// It stopped doing that when the listing was given more rows than fit: the
+/// extra ones gave the area a scrollbar of its own, and the wheel moved within
+/// those rows instead of through memory. So the rows are cut to what fits.
+#[test]
+fn rolling_the_wheel_travels_through_memory_without_end() {
+    let mut app = app();
+    app.dbg.view_addr = 0x8000;
+    app.dbg.follow_pc = false;
+    let mut h = harness(app);
+    h.run_steps(3);
+
+    // Over the listing: the wheel is only answered where the listing is.
+    let over = h
+        .get_all_by_label("Instruction")
+        .next()
+        .and_then(|node| node.accesskit_node().bounding_box())
+        .map(|box_| egui::pos2(box_.x0 as f32 + 20.0, box_.y1 as f32 + 60.0))
+        .expect("the listing has a heading over it");
+
+    let roll = |h: &mut Harness<'_, App>, amount: f32| {
+        h.input_mut().events.push(egui::Event::PointerMoved(over));
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, amount),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.run_steps(2);
+    };
+
+    // Down through memory, then back up past where it started: neither
+    // direction runs out.
+    let start = h.state().dbg.view_addr;
+    roll(&mut h, -200.0);
+    let down = h.state().dbg.view_addr;
+    assert!(
+        down > start,
+        "rolling down should move the listing forwards: ${start:04X} to ${down:04X}"
+    );
+
+    roll(&mut h, 400.0);
+    let up = h.state().dbg.view_addr;
+    assert!(
+        up < start,
+        "and rolling up should go back past where it began: ${down:04X} to ${up:04X}"
+    );
+}
+
+/// Every row drawn is a row that can be seen. Rows past the bottom of the
+/// listing are the ones that put a scrollbar on it.
+#[test]
+fn the_listing_draws_no_more_rows_than_fit() {
+    let mut h = harness(app());
+    h.run_steps(3);
+
+    let rows = h.state().dbg.lines as f32;
+    let height = rows * zx_rustrum::ui::theme::CONTROL_H;
+    assert!(
+        height <= zx_rustrum::ui::debugger::LISTING_H,
+        "{rows} rows at {} points each is {height}, past the {} the listing has",
+        zx_rustrum::ui::theme::CONTROL_H,
+        zx_rustrum::ui::debugger::LISTING_H
+    );
+    assert!(rows >= 8.0, "and there should be a listing at all: {rows}");
+}

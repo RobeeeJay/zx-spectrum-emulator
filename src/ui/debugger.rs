@@ -37,7 +37,7 @@ const STACK_DEPTH: u16 = 12;
 const STACK_W: f32 = 124.0;
 
 /// How tall the listing is, and so how much of memory is on show.
-const LISTING_H: f32 = 360.0;
+pub const LISTING_H: f32 = 460.0;
 
 /// How far above the address on show the listing starts, so there is
 /// something to scroll back through. Bytes rather than lines, since how many
@@ -1011,6 +1011,13 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
+    // As many lines as the listing has room for, and no more. The rows are a
+    // window onto memory rather than a list with ends: any that do not fit
+    // would give the area a scrollbar of its own, and the wheel would move
+    // within those rows instead of travelling through the address space —
+    // which is what "infinite scroll stopped working" was.
+    app.dbg.lines = ((LISTING_H / row_height(ui)).floor() as usize).max(8);
+
     let peek = |a: u16| app.peek(a);
     // Start a little above the anchor, aligned to a real opcode boundary.
     // Well back from where you are, so there is something above the line you
@@ -1058,6 +1065,9 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .id_salt("disasm")
         .max_height(LISTING_H)
+        // Never scrolls itself: rolling the wheel over it moves the window
+        // through memory instead, which has no ends to stop at.
+        .scroll([false, false])
         // A scroll area that shrinks to its contents makes its width depend on
         // what is inside it, which is the other half of the feedback that had
         // the listing shivering.
