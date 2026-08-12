@@ -24,6 +24,11 @@ pub const LCD_FG: Color32 = Color32::from_rgb(0x5d, 0xff, 0x9e);
 /// The dim grid drawn inside an LCD panel.
 pub const LCD_GRID: Color32 = Color32::from_rgb(0x18, 0x30, 0x20);
 
+/// The band behind the row you asked to be taken to. Dark enough that the
+/// green text still reads, and nothing like the amber bar under the current
+/// instruction, which is a different question being answered.
+pub const MARK: Color32 = Color32::from_rgb(0x16, 0x3c, 0x52);
+
 pub const AMBER: Color32 = Color32::from_rgb(0xff, 0xb2, 0x38);
 pub const RED: Color32 = Color32::from_rgb(0xe0, 0x43, 0x3c);
 pub const BLUE: Color32 = Color32::from_rgb(0x20, 0x62, 0xff);
@@ -88,18 +93,24 @@ pub fn apply(ctx: &egui::Context) {
     w.hovered.bg_stroke = Stroke::new(1.0, EDGE);
     w.hovered.fg_stroke = Stroke::new(1.0, WHITE);
     w.hovered.corner_radius = radius;
+    // egui expands the rect it paints by a point on each side under the
+    // pointer. That is only the painting, not the layout, but the outline
+    // still swells as the pointer crosses it. It does not here.
+    w.hovered.expansion = 0.0;
 
     w.active.bg_fill = CASE_LIGHT;
     w.active.weak_bg_fill = CASE_LIGHT;
     w.active.bg_stroke = Stroke::new(1.0, EDGE);
     w.active.fg_stroke = Stroke::new(1.0, WHITE);
     w.active.corner_radius = radius;
+    w.active.expansion = 0.0;
 
     w.open.bg_fill = CONTROL;
     w.open.weak_bg_fill = CONTROL;
     w.open.bg_stroke = Stroke::new(1.0, EDGE);
     w.open.fg_stroke = Stroke::new(1.0, INK);
     w.open.corner_radius = radius;
+    w.open.expansion = 0.0;
 
     // The app is dark whatever the desktop is set to: it is a picture of a
     // machine, not a document.
@@ -286,8 +297,17 @@ pub fn run_pause_button(ui: &mut egui::Ui, running: bool) -> egui::Response {
 /// from its neighbours', which reads exactly like the button jumping.
 pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
     let height = button_height(ui);
-    let mut response =
-        ui.add(egui::Button::selectable(*on, text).min_size(egui::vec2(0.0, height)));
+    let mut response = ui.add(
+        egui::Button::selectable(*on, text)
+            // Framed whether it is on or off. egui leaves the frame off a
+            // selectable button while it is unselected and the pointer is
+            // elsewhere, and puts it back the moment the pointer arrives:
+            // the stroke is a point on each side, so the toggle grew by two
+            // and shoved every control after it along the row. That is what
+            // "the buttons move on hover" was.
+            .frame_when_inactive(true)
+            .min_size(egui::vec2(0.0, height)),
+    );
     if response.clicked() {
         *on = !*on;
         response.mark_changed();

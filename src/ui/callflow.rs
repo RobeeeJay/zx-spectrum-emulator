@@ -166,49 +166,19 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
 
     let mut go_to = None;
     for finding in &findings {
+        // Everything that can be pressed goes on one row, in front of the
+        // prose. The button used to follow the sentence saying what the guess
+        // rests on, and a row cannot wrap, so on a long sentence it was off
+        // the edge of the window and could not be reached at all.
         ui.horizontal(|ui| {
-            ui.label(RichText::new(finding.what).color(theme::LCD_FG));
-
-            let name = app.notes.label(finding.address);
-            let named = if name.is_empty() {
-                format!("${:04X}", finding.address)
-            } else {
-                format!("{name}  ${:04X}", finding.address)
-            };
-            if ui
-                .add(
-                    egui::Label::new(RichText::new(named).monospace().color(theme::AMBER))
-                        .sense(egui::Sense::click()),
-                )
-                .on_hover_text(&finding.because)
-                .clicked()
-            {
-                go_to = Some(finding.address);
-            }
-
-            // The word and the number behind it, because "likely" on its own
-            // is not something anybody can argue with.
-            ui.label(
-                RichText::new(format!(
-                    "{} ({:.0}%)",
-                    finding.sure.label(),
-                    finding.score * 100.0
-                ))
-                .color(match finding.sure {
-                    detect::Sure::Certain => theme::GREEN,
-                    detect::Sure::Likely => theme::LCD_FG,
-                    detect::Sure::Possible => theme::DIM,
-                }),
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(&finding.because).small().color(theme::DIM));
-
             // The finding is a guess until somebody accepts it. Nothing is
             // written against the address before that.
             let already = app.notes.label(finding.address) == finding.label;
             if already {
-                ui.label(RichText::new("labelled").small().color(theme::GREEN));
+                ui.add_enabled(
+                    false,
+                    egui::Button::new(RichText::new("Labelled").color(theme::GREEN)),
+                );
             } else if ui
                 .button("Label")
                 .on_hover_text(format!(
@@ -229,12 +199,45 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
                     );
                 }
             }
+
+            ui.label(RichText::new(finding.what).color(theme::LCD_FG));
+
+            let name = app.notes.label(finding.address);
+            let named = if name.is_empty() {
+                format!("${:04X}", finding.address)
+            } else {
+                format!("{name}  ${:04X}", finding.address)
+            };
+            if ui
+                .add(
+                    egui::Label::new(RichText::new(named).monospace().color(theme::AMBER))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text("Show it in the debugger")
+                .clicked()
+            {
+                go_to = Some(finding.address);
+            }
+
+            // The word and the number behind it, because "likely" on its own
+            // is not something anybody can argue with.
+            ui.label(
+                RichText::new(format!(
+                    "{} ({:.0}%)",
+                    finding.sure.label(),
+                    finding.score * 100.0
+                ))
+                .color(match finding.sure {
+                    detect::Sure::Certain => theme::GREEN,
+                    detect::Sure::Likely => theme::LCD_FG,
+                    detect::Sure::Possible => theme::DIM,
+                }),
+            );
         });
+        ui.label(RichText::new(&finding.because).small().color(theme::DIM));
     }
     if let Some(address) = go_to {
-        app.dbg.view_addr = address;
-        app.dbg.follow_pc = false;
-        app.show_debugger = true;
+        app.show_in_debugger(address);
     }
 }
 
@@ -372,8 +375,6 @@ fn draw(app: &mut App, ui: &mut egui::Ui, turn: &Turn) {
         });
 
     if let Some(entry) = go_to {
-        app.dbg.view_addr = entry;
-        app.dbg.follow_pc = false;
-        app.show_debugger = true;
+        app.show_in_debugger(entry);
     }
 }

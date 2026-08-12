@@ -1,4 +1,5 @@
-//! Every control in a row is the same height.
+//! Every control in a row is the same height, and nothing moves under the
+//! pointer.
 //!
 //! Nothing moves when the pointer arrives — that was checked by measuring the
 //! same widgets hovered and not. What "the buttons jump on hover" actually was
@@ -106,4 +107,100 @@ fn the_debuggers_controls_are_all_one_height() {
         &heights(&harness, &["Screen", "Beeper", "Interrupt", "ROM"]),
         "debugger's break row",
     );
+}
+
+/// Hovering a control must not move anything, including itself.
+///
+/// egui leaves the frame off a selectable button while it is unselected and
+/// the pointer is elsewhere, and puts it back when the pointer arrives. The
+/// stroke is a point on each side, so every toggle grew by two as the pointer
+/// crossed it and shoved the rest of the row along. Found by hovering the
+/// middle of every button in turn and diffing the position of every widget in
+/// the window, which is how it should stay found.
+fn nothing_moves_when_hovered(mut app: App, size: [f32; 2], what: &str) {
+    app.running = false;
+    let mut harness = Harness::builder()
+        .with_size(size)
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    harness.run_steps(4);
+    let away = every_widget(&harness);
+
+    let buttons: Vec<(String, [f32; 4])> = away
+        .iter()
+        .filter(|(name, _)| name.contains("Button|"))
+        .cloned()
+        .collect();
+    assert!(
+        buttons.len() > 5,
+        "only {} buttons found in the {what} — the sweep is not sweeping",
+        buttons.len()
+    );
+
+    for (who, rect) in buttons {
+        let at = egui::pos2((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(at));
+        harness.run_steps(3);
+        for (name, now) in every_widget(&harness) {
+            let Some((_, was)) = away.iter().find(|(other, _)| *other == name) else {
+                continue;
+            };
+            assert!(
+                (now[0] - was[0]).abs() < 0.4 && (now[1] - was[1]).abs() < 0.4,
+                "in the {what}, hovering {who} moved {name} from {was:?} to {now:?}"
+            );
+            assert!(
+                (now[2] - now[0] - (was[2] - was[0])).abs() < 0.4,
+                "in the {what}, hovering {who} made {name} {} wide instead of {}",
+                now[2] - now[0],
+                was[2] - was[0]
+            );
+        }
+    }
+}
+
+/// Every widget in the window, named so the same one can be found again after
+/// the pointer has moved. The index is part of the name because a window holds
+/// dozens of unlabelled text runs, and matching those by their text alone pairs
+/// up whichever two happen to be blank.
+fn every_widget(harness: &Harness<'_, App>) -> Vec<(String, [f32; 4])> {
+    harness
+        .root()
+        .children_recursive()
+        .enumerate()
+        .filter_map(|(index, node)| {
+            let node = node.accesskit_node();
+            let box_ = node.bounding_box()?;
+            Some((
+                format!(
+                    "#{index} {:?}|{}|{}",
+                    node.role(),
+                    node.label().unwrap_or_default(),
+                    node.value().unwrap_or_default()
+                ),
+                [
+                    box_.x0 as f32,
+                    box_.y0 as f32,
+                    box_.x1 as f32,
+                    box_.y1 as f32,
+                ],
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn nothing_in_the_main_window_moves_under_the_pointer() {
+    let mut app = app();
+    app.show_debugger = false;
+    nothing_moves_when_hovered(app, [1600.0, 900.0], "main window");
+}
+
+#[test]
+fn nothing_in_the_debugger_moves_under_the_pointer() {
+    let mut app = app();
+    app.show_debugger = true;
+    nothing_moves_when_hovered(app, [1600.0, 1100.0], "debugger");
 }

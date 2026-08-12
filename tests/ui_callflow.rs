@@ -221,3 +221,68 @@ fn nothing_is_written_down_until_it_is_confirmed() {
         "as a guess, so a later one can replace it and nothing of the user's is lost"
     );
 }
+
+/// Clicking a loop's address takes you to it in the debugger and marks the
+/// row. A listing scrolled to an address without marking it leaves the reader
+/// counting lines to work out which of the twenty on show was meant.
+#[test]
+fn clicking_a_loop_marks_its_row_in_the_debugger() {
+    use egui_kittest::kittest::Queryable;
+
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+    app.show_callflow = true;
+    app.show_debugger = false;
+    app.callflow.looking = true;
+    app.spec.bus.observer.enabled = true;
+    if let Some(rzx) = app.rzx.as_mut() {
+        rzx.max_speed = true;
+    }
+    for _ in 0..300 {
+        app.advance(1.0 / 50.0);
+    }
+
+    let mut h = egui_kittest::Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+
+    let finding = h
+        .state()
+        .callflow
+        .findings
+        .first()
+        .expect("the loop should have been found")
+        .clone();
+    assert_ne!(
+        h.state().dbg.marked,
+        Some(finding.address),
+        "nothing is marked before it is asked for"
+    );
+
+    h.get_by_label(&format!("${:04X}", finding.address)).click();
+    h.run_steps(3);
+
+    assert!(h.state().show_debugger, "it should open the debugger");
+    assert_eq!(
+        h.state().dbg.view_addr,
+        finding.address,
+        "and show the listing there"
+    );
+    assert_eq!(
+        h.state().dbg.marked,
+        Some(finding.address),
+        "with the row marked, so it can be picked out of the listing"
+    );
+    assert!(
+        !h.state().dbg.follow_pc,
+        "and stop following the PC, or the listing walks away from it"
+    );
+}

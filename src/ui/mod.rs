@@ -1177,6 +1177,20 @@ impl App {
         }
     }
 
+    /// Show an address in the disassembly and mark the row, so what was asked
+    /// for can be picked out of the twenty-odd lines around it.
+    pub fn show_in_listing(&mut self, addr: u16) {
+        self.dbg.view_addr = addr;
+        self.dbg.follow_pc = false;
+        self.dbg.marked = Some(addr);
+    }
+
+    /// The same, from another window: open the debugger as well.
+    pub fn show_in_debugger(&mut self, addr: u16) {
+        self.show_in_listing(addr);
+        self.show_debugger = true;
+    }
+
     pub fn peek(&self, addr: u16) -> u8 {
         match &self.zx81 {
             Some(zx) => zx.bus.peek_raw(addr),

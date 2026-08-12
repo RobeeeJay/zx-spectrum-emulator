@@ -87,6 +87,11 @@ pub struct DebuggerState {
     /// Whether the "clear everything" button is waiting to be confirmed.
     pub confirm_clear: bool,
     pub view_addr: u16,
+    /// The row to mark in the listing: what was last asked to be shown, from
+    /// the labels list or the call flow window. Marked rather than only
+    /// scrolled to, because a listing scrolled to an address leaves the reader
+    /// counting rows to find which one was meant.
+    pub marked: Option<u16>,
     pub lines: usize,
     pub goto_text: String,
     pub bp_text: String,
@@ -101,6 +106,7 @@ impl Default for DebuggerState {
             raise: false,
             confirm_clear: false,
             view_addr: 0,
+            marked: None,
             lines: 24,
             goto_text: String::new(),
             bp_text: String::new(),
@@ -444,8 +450,7 @@ fn labels(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             if let Some(addr) = go_to {
-                app.dbg.view_addr = addr;
-                app.dbg.follow_pc = false;
+                app.show_in_listing(addr);
             }
 
             // Throwing the lot away takes the file with it, so it is asked
@@ -680,8 +685,7 @@ fn video(app: &mut App, ui: &mut egui::Ui) {
             }
         }
         if let Some(entry) = go_to {
-            app.dbg.view_addr = entry;
-            app.dbg.follow_pc = false;
+            app.show_in_listing(entry);
         }
     });
 }
@@ -968,6 +972,7 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                 let insn = disasm::disasm(&peek, addr);
                 let is_pc = addr == pc;
                 let has_bp = app.breakpoints().contains(&addr);
+                let marked = app.dbg.marked == Some(addr);
                 let bytes: String = insn
                     .bytes
                     .iter()
@@ -982,6 +987,10 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                         rich = rich.color(Color32::BLACK).background_color(theme::AMBER);
                     } else if has_bp {
                         rich = rich.color(theme::RED);
+                    } else if marked {
+                        // Where you asked to be taken, on a band of its own so
+                        // it can be told from the current instruction.
+                        rich = rich.background_color(theme::MARK);
                     }
                     rich
                 };
