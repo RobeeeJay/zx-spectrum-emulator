@@ -39,9 +39,11 @@ const STACK_W: f32 = 124.0;
 /// How tall the listing is, and so how much of memory is on show.
 pub const LISTING_H: f32 = 460.0;
 
-/// Instructions moved for each row of wheel travel. Three is about what a
-/// document scrolls by, and an instruction is shorter than a line of prose.
-const LINES_PER_ROW: f32 = 3.0;
+/// Instructions moved for each row of wheel travel. Three of them read as a
+/// document being scrolled and went past what you were looking for; one and a
+/// half keeps a roll of the wheel to about a screenful, which is what reading
+/// a disassembly wants.
+const LINES_PER_ROW: f32 = 1.5;
 
 /// How far above the address on show the listing starts, so there is
 /// something to scroll back through. Bytes rather than lines, since how many

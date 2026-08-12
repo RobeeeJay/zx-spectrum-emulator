@@ -295,15 +295,18 @@ fn the_listing_keeps_up_with_the_wheel() {
         h.run_steps(2);
     };
 
-    // A roll of a screenful should move by more than a screenful of lines: the
-    // listing is a window on memory, and travelling it a line at a time is how
-    // an afternoon is spent.
+    // A roll of the listing's own height should carry it half again as far as
+    // one instruction per row of travel would: an instruction is shorter than
+    // the line of prose the wheel is set up for. The memory here is empty, so
+    // every instruction is a one-byte NOP and the bytes moved are the lines
+    // moved.
+    let rows = (zx_rustrum::ui::debugger::LISTING_H / zx_rustrum::ui::theme::CONTROL_H) as u16;
     let start = h.state().dbg.view_addr;
     roll(&mut h, -zx_rustrum::ui::debugger::LISTING_H);
     let moved = h.state().dbg.view_addr.wrapping_sub(start);
     assert!(
-        moved > zx_rustrum::ui::debugger::LISTING_H as u16 / 8,
-        "rolling a listing's height moved only {moved} bytes"
+        moved > rows * 3 / 2 - 1,
+        "rolling the listing's height moved {moved} lines, against {rows} rows of travel"
     );
 
     // And a trackpad's dribble of a few points at a time adds up instead of
