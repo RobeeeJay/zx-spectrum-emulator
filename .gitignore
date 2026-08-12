@@ -12,3 +12,6 @@
 .DS_Store
 *.afdesign~lock~
 recordings/
+
+# Model answers, listings and traces: generated, and often large.
+out/

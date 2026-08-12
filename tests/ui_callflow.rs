@@ -33,7 +33,7 @@ fn the_call_flow_window_opens_and_says_when_it_has_nothing() {
     h.get_by_label("Call flow").click();
     h.run_steps(3);
     assert!(h.state().show_callflow, "the toggle did not open it");
-    h.get_by_label("Find the loop");
+    h.get_by_label("Main game loop");
 }
 
 /// Given a program that has actually been watched, it finds the loop and has
@@ -61,11 +61,25 @@ fn it_finds_the_loop_in_a_recording() {
     let mut h = Harness::builder()
         .with_size([1500.0, 1000.0])
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
-    h.run_steps(3);
-    h.get_by_label("Find the loop").click();
+    // No clicking: detection runs by itself while the program is watched,
+    // which is the behaviour being checked.
     h.run_steps(3);
 
+    // The detector says where it thinks the loop is, and how sure it is,
+    // above the call flow rather than only naming an address.
     let state = h.state();
+    let finding = state
+        .callflow
+        .findings
+        .first()
+        .expect("the main game loop detector found nothing in a real game");
+    assert_eq!(finding.what, "Main game loop");
+    assert!(
+        finding.because.contains("frames apart"),
+        "a finding should say what it rests on: {:?}",
+        finding.because
+    );
+
     let turn = state
         .callflow
         .turn

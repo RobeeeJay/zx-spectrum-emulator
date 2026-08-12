@@ -5,6 +5,7 @@ pub mod audio;
 pub mod audio_out;
 pub mod autodoc;
 pub mod demo_rom;
+pub mod detect;
 pub mod disasm;
 pub mod flow;
 pub mod listing;

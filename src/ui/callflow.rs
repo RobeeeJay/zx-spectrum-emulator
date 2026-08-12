@@ -12,12 +12,19 @@
 
 use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
 
+use crate::detect::{self, Finding};
 use crate::loops::{self, Turn};
 use crate::ui::{theme, App};
 
 /// What has been worked out, and when.
 #[derive(Default)]
 pub struct CallFlowState {
+    /// What the detectors have made of the program: one line each, with how
+    /// sure they are and what the answer rests on.
+    pub findings: Vec<Finding>,
+    /// When they last ran, so they can run again without being asked and
+    /// without running every frame.
+    pub looked_at: Option<std::time::Instant>,
     pub turn: Option<Turn>,
     /// How the loop was described when it was found.
     pub summary: String,
@@ -31,8 +38,25 @@ const ROW_H: f32 = 34.0;
 const INDENT: f32 = 26.0;
 const BOX_W: f32 = 260.0;
 
+/// How often the detectors run themselves. Sifting a few hundred thousand
+/// calls is not free, and the answer does not change from one frame to the
+/// next.
+const LOOK_AGAIN: std::time::Duration = std::time::Duration::from_secs(3);
+
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     controls(app, ui);
+
+    // Detection runs on its own, so the window is telling you what it thinks
+    // rather than waiting to be asked.
+    let due = app
+        .callflow
+        .looked_at
+        .is_none_or(|when| when.elapsed() > LOOK_AGAIN);
+    if due && app.spec.bus.observer.enabled {
+        look(app);
+    }
+
+    findings(app, ui);
     ui.separator();
 
     let Some(turn) = app.callflow.turn.take() else {
@@ -52,14 +76,14 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 fn controls(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         if ui
-            .button("Find the loop")
+            .button("Main game loop")
             .on_hover_text(
-                "Sift what has been watched for the routine the program keeps \
-                 coming back to, and take one turn of it",
+                "Look again now. This runs by itself every few seconds while \
+                 the program is being watched.",
             )
             .clicked()
         {
-            find(app);
+            look(app);
         }
         theme::divider(ui);
         let watching = app.spec.bus.observer.enabled;
@@ -84,32 +108,98 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-/// Work out the loop from what has been watched.
-fn find(app: &mut App) {
+/// What the detectors think, one line each.
+fn findings(app: &mut App, ui: &mut egui::Ui) {
+    if app.callflow.findings.is_empty() {
+        ui.label(
+            RichText::new(if app.spec.bus.observer.enabled {
+                "Nothing found yet."
+            } else {
+                "Switch AutoDoc on in the debugger to watch the program."
+            })
+            .color(theme::DIM),
+        );
+        return;
+    }
+
+    let findings = app.callflow.findings.clone();
+    let mut go_to = None;
+    for finding in &findings {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(finding.what).color(theme::LCD_FG));
+
+            let name = app.notes.label(finding.address);
+            let named = if name.is_empty() {
+                format!("${:04X}", finding.address)
+            } else {
+                format!("{name}  ${:04X}", finding.address)
+            };
+            if ui
+                .add(
+                    egui::Label::new(RichText::new(named).monospace().color(theme::AMBER))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(&finding.because)
+                .clicked()
+            {
+                go_to = Some(finding.address);
+            }
+
+            // The word and the number behind it, because "likely" on its own
+            // is not something anybody can argue with.
+            ui.label(
+                RichText::new(format!(
+                    "{} ({:.0}%)",
+                    finding.sure.label(),
+                    finding.score * 100.0
+                ))
+                .color(match finding.sure {
+                    detect::Sure::Certain => theme::GREEN,
+                    detect::Sure::Likely => theme::LCD_FG,
+                    detect::Sure::Possible => theme::DIM,
+                }),
+            );
+        });
+        ui.label(RichText::new(&finding.because).small().color(theme::DIM));
+    }
+    if let Some(address) = go_to {
+        app.dbg.view_addr = address;
+        app.dbg.follow_pc = false;
+        app.show_debugger = true;
+    }
+}
+
+/// Run the detectors over what has been watched, and take a turn of whatever
+/// loop they found.
+///
+/// Both at once: sifting the calls is the expensive part and they want the
+/// same sift. Doing only the first would leave a finding sitting above an
+/// empty chart, which reads as a failure rather than as a window waiting to be
+/// asked.
+fn look(app: &mut App) {
+    app.callflow.looked_at = Some(std::time::Instant::now());
     let frame_t = app.spec.bus.frame_t();
     let steps: Vec<crate::observe::Step> = app.spec.bus.observer.steps().copied().collect();
     app.callflow.from_calls = steps.len();
+    app.callflow.findings = detect::everything(&steps, frame_t);
 
     let phases = loops::phases(&steps, frame_t, 64);
-    let Some(phase) = phases.first() else {
-        app.callflow.turn = None;
-        app.callflow.summary = "Nothing has repeated often enough to call a loop yet.".to_string();
-        return;
-    };
-    let head = app.notes.label(phase.head);
-    let named = if head.is_empty() {
-        format!("${:04X}", phase.head)
-    } else {
-        format!("{head} (${:04X})", phase.head)
-    };
-    app.callflow.summary = format!(
-        "{} phase(s) found. Showing the loop on {named}: {} turns watched, \
-         {:.2} frames a turn.",
-        phases.len(),
-        phase.iterations,
-        phase.frames_per_turn(frame_t),
-    );
-    app.callflow.turn = loops::turn(&steps, phase, frame_t);
+    if let Some(phase) = phases.iter().max_by_key(|phase| phase.iterations) {
+        let head = app.notes.label(phase.head);
+        let named = if head.is_empty() {
+            format!("${:04X}", phase.head)
+        } else {
+            format!("{head} (${:04X})", phase.head)
+        };
+        app.callflow.summary = format!(
+            "{} phase(s) watched. One turn of the loop on {named}: {} turns seen, \
+             {:.2} frames a turn.",
+            phases.len(),
+            phase.iterations,
+            phase.frames_per_turn(frame_t),
+        );
+        app.callflow.turn = loops::turn(&steps, phase, frame_t);
+    }
 }
 
 /// Draw one turn: a box per call, in order, indented as they nest.
