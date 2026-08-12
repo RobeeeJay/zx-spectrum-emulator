@@ -2,7 +2,7 @@
 
 use zx_rustrum::detect::{joystick_input, keyboard_input, main_game_loop, main_game_loops, Sure};
 use zx_rustrum::observe::Step;
-use zx_rustrum::observe::{Observed, Observer};
+use zx_rustrum::observe::{Observer, Site};
 
 const FRAME_T: u32 = 69888;
 
@@ -228,26 +228,26 @@ fn a_loop_seen_twice_is_listed_once() {
     );
 }
 
-/// A routine with some ports read, as the observer would have recorded it.
-fn reading(entry: u16, ports: &[u16], reads_a_call: u32, calls: u32) -> (u16, Observed) {
-    let mut seen = Observed::default();
-    seen.entry = entry;
-    seen.calls = calls;
-    seen.frames = calls;
-    seen.port_reads = reads_a_call * calls;
-    seen.ports_in = ports.to_vec();
-    (entry, seen)
+/// One IN instruction and what it was seen reading, as the observer would have
+/// recorded it.
+fn reading(at: u16, ports: &[u16], reads_a_frame: u32, frames: u32) -> Site {
+    let mut site = Site::default();
+    site.at = at;
+    site.ports = ports.to_vec();
+    site.reads = reads_a_frame * frames;
+    site.frames = frames;
+    site
 }
 
-fn watched(routines: Vec<(u16, Observed)>) -> Observer {
+fn watched(sites: Vec<Site>) -> Observer {
     let mut observer = Observer::new();
-    observer.routines = routines.into_iter().collect();
+    observer.port_sites = sites.into_iter().map(|site| (site.at, site)).collect();
     observer
 }
 
 /// The ULA puts the keyboard on port $FE with the row in the top half of the
-/// address, so a routine walking the eight half-rows is scanning the keyboard
-/// whatever its instructions look like.
+/// address, so an instruction walking the eight half-rows is scanning the
+/// keyboard whatever the code around it looks like.
 #[test]
 fn a_routine_that_walks_the_half_rows_is_reading_the_keyboard() {
     let observer = watched(vec![reading(
@@ -260,7 +260,7 @@ fn a_routine_that_walks_the_half_rows_is_reading_the_keyboard() {
     )]);
 
     let found = keyboard_input(&observer);
-    assert_eq!(found.len(), 1, "one routine reads the keyboard");
+    assert_eq!(found.len(), 1, "one instruction reads the keyboard");
     assert_eq!(found[0].address, 0x8000);
     assert_eq!(found[0].label, "read_keyboard");
     assert!(
@@ -277,15 +277,15 @@ fn a_routine_that_walks_the_half_rows_is_reading_the_keyboard() {
 }
 
 /// Port $FE carries the EAR bit as well as the keyboard, and a tape loader
-/// polls it thousands of times a call. Calling that a keyboard routine would
-/// be reading the port number and ignoring what was done with it.
+/// polls one row of it thousands of times a frame. Calling that keyboard input
+/// would be reading the port number and ignoring what was done with it.
 #[test]
 fn a_tape_loader_polling_the_ear_bit_is_not_keyboard_input() {
     let observer = watched(vec![reading(0x9000, &[0x7FFE], 40_000, 3)]);
     let found = keyboard_input(&observer);
     assert!(
         found.is_empty(),
-        "a routine reading one row 40,000 times a call is not reading keys: {:?}",
+        "an instruction reading one row 40,000 times a frame is not reading keys: {:?}",
         found.first().map(|finding| &finding.because)
     );
 }
@@ -334,7 +334,7 @@ fn the_sinclair_rows_are_only_a_possible_joystick() {
     assert_eq!(
         addresses,
         vec![0x8200],
-        "only the routine reading nothing but those two rows"
+        "only the instruction reading nothing but those two rows"
     );
     assert_eq!(
         found[0].sure,
@@ -390,5 +390,67 @@ fn it_finds_manic_miners_keyboard_routine() {
         found[0].because.contains("port $FE"),
         "and it should say what it rests on: {:?}",
         found[0].because
+    );
+}
+
+/// A game reads the keyboard from several places — a different IN for each
+/// half-row it cares about — and every one of them is worth a line. Answering
+/// with the one routine they happen to sit in says less than stopping on the
+/// port would have told you anyway.
+#[test]
+fn every_instruction_that_reads_the_keyboard_is_listed() {
+    let observer = watched(vec![
+        reading(0x87F4, &[0xFEFE], 1, 2995),
+        reading(0x87F9, &[0x7FFE], 1, 2995),
+        reading(0x8803, &[0xFDFE], 1, 2995),
+        reading(0x8822, &[0xBFFE], 1, 2995),
+    ]);
+
+    let found = keyboard_input(&observer);
+    let addresses: Vec<u16> = found.iter().map(|finding| finding.address).collect();
+    assert_eq!(
+        addresses,
+        vec![0x87F4, 0x87F9, 0x8803, 0x8822],
+        "all four reads should be listed, not the one thing they have in common"
+    );
+}
+
+/// Code the machine was already running when watching started was never seen
+/// to be called, so it has no routine to be credited to — and a game's own key
+/// handling is exactly that. Dropping those accesses left the detector with
+/// only what the ROM did.
+#[test]
+fn a_read_outside_any_known_routine_is_still_found() {
+    use zx_rustrum::machine::Spectrum;
+
+    let mut spec = Spectrum::new();
+    // LD BC,$FEFE : IN A,(C) : JR back — the row in B and the ULA's port in
+    // C, which is how the keyboard is read, in a loop called by nobody: the
+    // machine is simply running here.
+    for (offset, byte) in [0x01u8, 0xFE, 0xFE, 0xED, 0x78, 0x18, 0xFA]
+        .iter()
+        .enumerate()
+    {
+        spec.bus.poke(0x8000 + offset as u16, *byte);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.bus.observer.enabled = true;
+    for _ in 0..40 {
+        spec.step_instruction();
+    }
+
+    assert!(
+        spec.bus.observer.routines.is_empty(),
+        "nothing was called, so there are no routines to hang this on"
+    );
+    let found = keyboard_input(&spec.bus.observer);
+    assert!(
+        !found.is_empty(),
+        "the IN at $8003 reads the keyboard and should be found regardless"
+    );
+    assert_eq!(found[0].address, 0x8003, "at the instruction doing it");
+    assert_eq!(
+        found[0].entry, None,
+        "with no routine to name, so the label goes where the reading is"
     );
 }

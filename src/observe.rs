@@ -211,6 +211,16 @@ pub struct Observer {
     /// Which routine read each 256-byte page, and how often. Per page rather
     /// than per byte: a table of 65,536 counters would cost more than it says.
     readers: BTreeMap<(u8, u16), u32>,
+    /// Where each IN and OUT is, by the address of the instruction doing it.
+    /// A routine can hold several, and one of them can be the interesting one:
+    /// per routine, three separate reads of the keyboard in one loop are a
+    /// single line saying "this routine reads ports".
+    pub port_sites: BTreeMap<u16, Site>,
+    /// The address of the instruction being executed, so a port access can be
+    /// attributed to the instruction making it. Set by the machine before each
+    /// instruction; a port is read part-way through one, which is before
+    /// anything else here is told about it.
+    pub executing: u16,
     /// Which routine last wrote each byte of the display and attribute files.
     ///
     /// Per byte, unlike the readers, because this is the one place where being
@@ -531,6 +541,36 @@ impl Observer {
         if !self.enabled {
             return;
         }
+
+        // Recorded against the instruction first, and against the routine
+        // second. A program reads the keyboard from wherever it likes,
+        // including from code nothing was ever seen to call — in which case
+        // there is no routine to credit, and dropping the access on the floor
+        // is how a game's own key handling went unnoticed.
+        let at = self.executing;
+        let routine = self.stack.last().map(|frame| frame.entry);
+        let site = self.port_sites.entry(at).or_insert(Site {
+            at,
+            routine,
+            ports: Vec::new(),
+            reads: 0,
+            writes: 0,
+            frames: 0,
+            last_frame: u64::MAX,
+        });
+        if write {
+            site.writes += 1;
+        } else {
+            site.reads += 1;
+        }
+        if site.ports.len() < 8 && !site.ports.contains(&port) {
+            site.ports.push(port);
+        }
+        if site.last_frame != self.frames {
+            site.frames += 1;
+            site.last_frame = self.frames;
+        }
+
         let Some(entry) = self.current() else { return };
         let stats = self.stats(entry);
         if write {
@@ -767,6 +807,27 @@ fn note_exit(stats: &mut Observed, at: u16, after: u16) {
     }
     stats.exits.push(at);
     stats.after.push(after);
+}
+
+/// One IN or OUT instruction, and what it has been seen doing.
+///
+/// Kept per instruction rather than per routine because that is the grain a
+/// reader works at: stopping on every IN shows a handful of instructions, and
+/// a detector that answers with the routine they are all in is answering a
+/// coarser question than the one asked.
+#[derive(Clone, Debug, Default)]
+pub struct Site {
+    pub at: u16,
+    /// The routine it is in, when anything was seen to call one. Code the
+    /// machine was already running when watching started has none.
+    pub routine: Option<u16>,
+    /// The ports it has touched, up to a handful.
+    pub ports: Vec<u16>,
+    pub reads: u32,
+    pub writes: u32,
+    /// Frames in which it ran at all, so "every frame" means something.
+    pub frames: u32,
+    last_frame: u64,
 }
 
 /// A run of bytes that was read but never executed.

@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use crate::loops::{self, Phase};
-use crate::observe::{Observed, Observer, Step};
+use crate::observe::{Observer, Site, Step};
 
 /// How sure a detector is, in the words the rest of the emulator uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -59,6 +59,10 @@ pub struct Finding {
     pub sure: Sure,
     /// The score behind the word, 0 to 1.
     pub score: f64,
+    /// Where the label belongs, when the finding itself is in the middle of a
+    /// routine. An IN instruction is worth a comment where it is; a name
+    /// belongs at the entry point, since that is what a label is for.
+    pub entry: Option<u16>,
     /// What the answer rests on, in one line. A finding without this is an
     /// assertion, and the point of the exercise is not to make those.
     pub because: String,
@@ -185,6 +189,7 @@ fn in_phase(steps: &[Step], phase: &Phase, frame_t: u32) -> Vec<Finding> {
             what: "Main game loop",
             label: "main_game_loop".to_string(),
             address: entry,
+            entry: Some(entry),
             sure: Sure::from_score(score),
             score,
             because: format!(
@@ -244,18 +249,25 @@ const HALF_ROWS: [u8; 8] = [0xFE, 0xFD, 0xFB, 0xF7, 0xEF, 0xDF, 0xBF, 0x7F];
 /// instruction either way and only the reader knows which was meant.
 const SINCLAIR_ROWS: [u8; 2] = [0xF7, 0xEF];
 
-/// Which routines read the keyboard.
+/// Which instructions read the keyboard.
 ///
 /// The ULA puts the keyboard on port $FE, with the row to read in the top half
 /// of the address, so a keyboard scan shows up as reads of `$xxFE` with
 /// several different `xx`. That same port carries the EAR bit, which a tape
-/// loader polls thousands of times a call — so how many rows a routine reads,
-/// and how hard it hammers the port, are what tell them apart.
+/// loader polls thousands of times a call — so how many rows an instruction
+/// reads, and how hard it hammers the port, are what tell them apart.
+///
+/// One line per IN instruction, not per routine. A routine can read the
+/// keyboard from three places, and answering with the routine says less than
+/// stopping on the port would have told you anyway.
 pub fn keyboard_input(observer: &Observer) -> Vec<Finding> {
     let mut found = Vec::new();
-    for (entry, seen) in &observer.routines {
-        let rows: Vec<u8> = seen
-            .ports_in
+    for site in observer.port_sites.values() {
+        if site.reads == 0 {
+            continue;
+        }
+        let rows: Vec<u8> = site
+            .ports
             .iter()
             .filter(|port| port.to_le_bytes()[0] == 0xFE)
             .map(|port| port.to_le_bytes()[1])
@@ -265,14 +277,21 @@ pub fn keyboard_input(observer: &Observer) -> Vec<Finding> {
             continue;
         }
 
-        // Walking several rows is a keyboard scan; one row is a routine
+        // Walking several rows is a keyboard scan; one row is an instruction
         // waiting on one key, which is still the keyboard.
         let breadth = (rows.len().min(8) as f64) / 8.0;
-        let per_call = seen.port_reads as f64 / seen.calls.max(1) as f64;
-        // A tape loader reads the same port thousands of times a call for the
-        // EAR bit. Above a few dozen reads a call this is not somebody
-        // checking whether a key is down.
-        let polling = (per_call / 64.0).min(1.0);
+        let per_frame = site.reads as f64 / site.frames.max(1) as f64;
+
+        // A tape loader reads one row thousands of times a frame for the EAR
+        // bit. Only counted against an instruction that reads one row or two:
+        // anything walking three or more of them is scanning the keyboard
+        // however often it does so, and penalising that hid the routine a game
+        // sits in while it waits for a key.
+        let polling = if rows.len() <= 2 {
+            (per_frame / 512.0).min(1.0)
+        } else {
+            0.0
+        };
         let score = (0.45 + 0.5 * breadth - 0.6 * polling).clamp(0.0, 1.0);
         if score < WORTH_SAYING {
             continue;
@@ -280,70 +299,80 @@ pub fn keyboard_input(observer: &Observer) -> Vec<Finding> {
         found.push(Finding {
             what: "Keyboard input",
             label: "read_keyboard".to_string(),
-            address: *entry,
+            address: site.at,
+            entry: site.routine,
             sure: Sure::from_score(score),
             score,
             because: format!(
-                "read port $FE on {} half-row{}, {:.1} reads a call, over {} calls",
+                "reads port $FE on {} half-row{}, {:.0} times a frame{}",
                 rows.len(),
                 if rows.len() == 1 { "" } else { "s" },
-                per_call,
-                seen.calls
+                per_frame,
+                in_routine(site),
             ),
         });
     }
     rank(found, "read_keyboard")
 }
 
-/// Which routines read a joystick.
+/// Which instructions read a joystick.
 ///
-/// A Kempston is its own port and says so plainly; a Fuller likewise. A
+/// A Kempston has a port of its own and says so plainly; a Fuller likewise. A
 /// Sinclair or an Interface II is wired to the keyboard, so the most that can
-/// be said of a routine reading those two half-rows is that it might be a
+/// be said of an instruction reading those two half-rows is that it might be a
 /// joystick being read — and it is said in those words rather than dressed up.
 pub fn joystick_input(observer: &Observer) -> Vec<Finding> {
     let mut found = Vec::new();
-    for (entry, seen) in &observer.routines {
-        let Some((score, kind)) = joystick_port(seen) else {
+    for site in observer.port_sites.values() {
+        if site.reads == 0 {
+            continue;
+        }
+        let Some((score, kind)) = joystick_port(site) else {
             continue;
         };
-        let per_call = seen.port_reads as f64 / seen.calls.max(1) as f64;
+        let per_frame = site.reads as f64 / site.frames.max(1) as f64;
         found.push(Finding {
             what: "Joystick input",
             label: "read_joystick".to_string(),
-            address: *entry,
+            address: site.at,
+            entry: site.routine,
             sure: Sure::from_score(score),
             score,
-            because: format!(
-                "{kind}, {:.1} reads a call, over {} calls",
-                per_call, seen.calls
-            ),
+            because: format!("{kind}, {:.0} times a frame{}", per_frame, in_routine(site)),
         });
     }
     rank(found, "read_joystick")
 }
 
-/// What a routine's reads say about which joystick it is reading, if any.
-fn joystick_port(seen: &Observed) -> Option<(f64, String)> {
-    let low: Vec<u8> = seen
-        .ports_in
+/// Which routine an instruction is in, when anything was seen to call one.
+fn in_routine(site: &Site) -> String {
+    match site.routine {
+        Some(entry) => format!(", in the routine at ${entry:04X}"),
+        None => String::new(),
+    }
+}
+
+/// What an instruction's reads say about which joystick it is reading, if any.
+fn joystick_port(site: &Site) -> Option<(f64, String)> {
+    let low: Vec<u8> = site
+        .ports
         .iter()
         .map(|port| port.to_le_bytes()[0])
         .collect();
     // A Kempston is read with `IN A,($1F)`, which puts A in the top half of
     // the address, so only the bottom half can be relied on.
     if low.contains(&0x1F) {
-        return Some((0.9, "read the Kempston port $1F".to_string()));
+        return Some((0.9, "reads the Kempston port $1F".to_string()));
     }
     if low.contains(&0x7F) && !low.contains(&0xFE) {
-        return Some((0.7, "read the Fuller port $7F".to_string()));
+        return Some((0.7, "reads the Fuller port $7F".to_string()));
     }
 
     // Wired to the keyboard: the two half-rows an Interface II sits on, and
-    // nothing else. A routine that reads those two and the other six is
+    // nothing else. An instruction that reads those two and the other six is
     // scanning the keyboard, not reading a joystick.
-    let rows: Vec<u8> = seen
-        .ports_in
+    let rows: Vec<u8> = site
+        .ports
         .iter()
         .filter(|port| port.to_le_bytes()[0] == 0xFE)
         .map(|port| port.to_le_bytes()[1])
@@ -352,7 +381,7 @@ fn joystick_port(seen: &Observed) -> Option<(f64, String)> {
         return Some((
             0.45,
             format!(
-                "read the {} half-row{} a Sinclair or Interface II joystick sits on, \
+                "reads the {} half-row{} a Sinclair or Interface II joystick sits on, \
                  which are also the number keys",
                 rows.len(),
                 if rows.len() == 1 { "" } else { "s" }

@@ -1241,6 +1241,11 @@ impl Spectrum {
         // needed while it is on, and it is one comparison when it is not.
         let was_outside_rom = self.bus.breaks.rom && self.cpu.pc >= ROM_END;
 
+        if self.bus.observer.enabled {
+            // Before the instruction runs: a port is touched part-way through
+            // one, and the observer needs to know which instruction that was.
+            self.bus.observer.executing = pc0;
+        }
         self.cpu.step(&mut self.bus);
 
         // Going into the ROM from outside it is a program calling a ROM

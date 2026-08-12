@@ -206,7 +206,11 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             // The finding is a guess until somebody accepts it. Nothing is
             // written against the address before that.
-            let already = app.notes.label(finding.address) == finding.label;
+            // A label names a routine, so it goes at the entry point; the
+            // evidence is at the instruction, so the comment goes there. When
+            // nothing was seen to call the code, the two are the same address.
+            let name_at = finding.entry.unwrap_or(finding.address);
+            let already = app.notes.label(name_at) == finding.label;
             if already {
                 ui.add_enabled(
                     false,
@@ -222,12 +226,15 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
                 .clicked()
             {
                 let comment = format!("{}: {}", finding.what.to_lowercase(), finding.because);
-                app.notes.suggest(finding.address, &finding.label, &comment);
+                app.notes.suggest(name_at, &finding.label, &comment);
+                if name_at != finding.address {
+                    app.notes.suggest(finding.address, "", &comment);
+                }
                 if let Err(e) = app.notes.save_if_dirty() {
                     app.set_status(format!("Could not save notes: {e}"), true);
                 } else {
                     app.set_status(
-                        format!("Labelled ${:04X} as {}", finding.address, finding.label),
+                        format!("Labelled ${name_at:04X} as {}", finding.label),
                         false,
                     );
                 }
