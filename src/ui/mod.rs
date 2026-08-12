@@ -304,6 +304,9 @@ pub struct App {
     /// stepped back over. What each one holds is what it changed rather than a
     /// copy of the machine.
     pub rewind: std::collections::VecDeque<crate::machine::Undo>,
+    /// The machine as it was when recording started, waiting to be written
+    /// into the file when it stops.
+    pub recording_from: Option<Vec<u8>>,
     /// Emulated T-states left over from the previous host frame.
     leftover: f32,
 
@@ -382,6 +385,7 @@ impl App {
             profiler: profiler::ProfilerWindowState::default(),
             last_stop: None,
             rewind: std::collections::VecDeque::new(),
+            recording_from: None,
             leftover: 0.0,
             status_is_error: false,
             title_shown: String::new(),
@@ -608,6 +612,98 @@ impl App {
         });
     }
 
+    /// Start recording what the machine does, from where it is now.
+    ///
+    /// The snapshot is taken first: a recording is a machine to start from and
+    /// then every byte read from a port after it, and one without the first is
+    /// a list of numbers.
+    pub fn start_recording(&mut self) {
+        if self.rzx.is_some() {
+            self.set_status("A recording is already playing".to_string(), true);
+            return;
+        }
+        self.recording_from = Some(snapshot::save_sna(&self.spec));
+        self.spec.bus.capture = Some(crate::rzx::Capture {
+            start_t: self.spec.bus.tstates,
+            mark: self.spec.bus.fetches,
+            ..Default::default()
+        });
+        self.set_status("Recording".to_string(), false);
+    }
+
+    /// How many frames have been recorded so far, if anything is being.
+    pub fn recorded_frames(&self) -> Option<usize> {
+        self.spec
+            .bus
+            .capture
+            .as_ref()
+            .map(|capture| capture.frames.len())
+    }
+
+    /// Stop recording and hand back the file's bytes, or nothing if there was
+    /// nothing to record.
+    pub fn stop_recording(&mut self) -> Option<Vec<u8>> {
+        let capture = self.spec.bus.capture.take()?;
+        let snapshot = self.recording_from.take();
+        if capture.frames.is_empty() {
+            self.set_status("Nothing was recorded".to_string(), true);
+            return None;
+        }
+        let recording = crate::rzx::Recording {
+            creator: APP_NAME.to_string(),
+            snapshot: snapshot.map(|data| crate::rzx::Snapshot {
+                extension: "sna".to_string(),
+                data,
+            }),
+            frames: capture.frames,
+            start_t: capture.start_t,
+        };
+        Some(crate::rzx::write(&recording))
+    }
+
+    /// Where a recording should go by default: beside the tape that is in the
+    /// deck, under the same name. A machine with nothing loaded has nothing to
+    /// be named after, so it gets a plain one.
+    pub fn recording_path(&self) -> std::path::PathBuf {
+        match &self.tape_path {
+            Some(path) => path.with_extension("rzx"),
+            None => std::path::PathBuf::from("recording.rzx"),
+        }
+    }
+
+    /// Stop recording and ask where to put it.
+    ///
+    /// The dialog opens beside the tape in the deck, under the same name with
+    /// an `.rzx` on it, which is where somebody would go looking for a
+    /// recording of that game.
+    pub fn save_recording(&mut self) {
+        let Some(bytes) = self.stop_recording() else {
+            return;
+        };
+        let suggested = self.recording_path();
+        let dialog = rfd::FileDialog::new().set_file_name(
+            suggested
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "recording.rzx".to_string()),
+        );
+        let dialog = match suggested.parent() {
+            Some(parent) if parent.is_dir() => dialog.set_directory(parent),
+            _ => dialog,
+        };
+        let Some(path) = dialog.save_file() else {
+            self.set_status("Recording thrown away".to_string(), true);
+            return;
+        };
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => self.set_status(
+                format!("Wrote {} ({} bytes)", path.display(), bytes.len()),
+                false,
+            ),
+            Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
+        }
+    }
+
     /// A file picker that opens where the last file of that kind came from.
     pub fn pick_file(&self, kind: Option<FileKind>) -> Option<std::path::PathBuf> {
         let mut dialog = rfd::FileDialog::new();
@@ -774,7 +870,7 @@ impl App {
     }
 
     /// Stop playing, and give the machine back to the user.
-    pub fn stop_recording(&mut self) {
+    pub fn stop_playback(&mut self) {
         self.rzx = None;
         self.spec.bus.playback = None;
         self.reload_notes();
@@ -785,7 +881,7 @@ impl App {
         let Some(rzx) = &self.rzx else { return };
         if rzx.finished() {
             let done = rzx.recording.len();
-            self.stop_recording();
+            self.stop_playback();
             self.running = false;
             self.set_status(format!("The recording ended after {done} frames"), false);
             return;
@@ -1687,6 +1783,41 @@ impl App {
             if theme::run_pause_button(ui, self.running).clicked() {
                 self.running = !self.running;
             }
+
+            // Recording what the machine does, so a run of a game can be read
+            // back later instruction by instruction. Not offered while a
+            // recording is playing: what would be captured is the recording.
+            let recording = self.recorded_frames();
+            match recording {
+                None => {
+                    if ui
+                        .add_enabled(self.rzx.is_none(), egui::Button::new("⏺ Record"))
+                        .on_hover_text(
+                            "Record everything the machine reads from now on, so it \
+                             can be played back and read instruction by instruction. \
+                             It is kept in memory until you stop.",
+                        )
+                        .clicked()
+                    {
+                        self.start_recording();
+                    }
+                }
+                Some(frames) => {
+                    if ui
+                        .button("⏹ Stop")
+                        .on_hover_text("Stop recording and write it out")
+                        .clicked()
+                    {
+                        self.save_recording();
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("● {frames} frames"))
+                            .color(theme::RED)
+                            .monospace(),
+                    );
+                }
+            }
+
             theme::divider(ui);
             theme::group_label(ui, "Speed");
             speed_dropdown(&mut self.speed, ui);
@@ -1817,7 +1948,7 @@ impl App {
                         );
                 }
                 if ui.button("Stop").clicked() {
-                    self.stop_recording();
+                    self.stop_playback();
                     self.set_status("Stopped the recording".into(), false);
                 }
                 theme::divider(ui);

@@ -181,6 +181,11 @@ pub struct SpectrumBus {
     /// of bytes a second and none of them is going to be stepped back over.
     pub undo: Option<Vec<(u16, u8)>>,
 
+    /// The recording being made, if one is. A frame of an RZX is a number of
+    /// opcode fetches and the bytes every IN in that stretch gave back, and
+    /// neither can be worked out after the fact.
+    pub capture: Option<crate::rzx::Capture>,
+
     /// T-states elapsed in the current frame.
     pub tstates: u32,
     pub frame: u64,
@@ -260,6 +265,7 @@ impl SpectrumBus {
             slots: [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)],
             tracker: Tracker::new(),
             undo: None,
+            capture: None,
             tstates: 0,
             frame: 0,
             irq_pending: false,
@@ -799,6 +805,9 @@ impl SpectrumBus {
         // recording says it is — an instruction count, not a T-state count —
         // so the interrupt is raised there instead of here.
         self.irq_pending = self.playback.is_none();
+        if let Some(capture) = &mut self.capture {
+            capture.end_frame(self.fetches);
+        }
         self.screen_writes = self.screen_writes_acc;
         self.screen_writes_acc = 0;
         // Keep the finished frame; the renderer needs it for the part of the
@@ -909,34 +918,13 @@ impl Bus for SpectrumBus {
     }
 
     fn io_read(&mut self, port: u16) -> u8 {
-        let sampled = self.contend_io(port);
-        self.observer.on_port(port, false);
-        if self.breaks.port_in {
-            self.break_hit.get_or_insert(Event::In(port));
+        let byte = self.io_read_uncaptured(port);
+        if let Some(capture) = &mut self.capture {
+            // Every byte an IN gave back, in order: that is what playing the
+            // recording hands out again, in place of the hardware.
+            capture.inputs.push(byte);
         }
-        // A recording replaces the hardware, not just the keyboard: the
-        // floating bus, the tape and the sound chip all read back what they
-        // read back on the day.
-        if let Some(playback) = &mut self.playback {
-            let byte = playback.next();
-            if self.breaks.ay && self.model.has_ay() && port & 0xc002 == 0xc000 {
-                self.break_hit.get_or_insert(Event::Ay);
-            }
-            return byte;
-        }
-        // AY register read: $FFFD.
-        if self.model.has_ay() && port & 0xc002 == 0xc000 {
-            if self.breaks.ay {
-                self.break_hit.get_or_insert(Event::Ay);
-            }
-            return self.audio.ay.read();
-        }
-        if port & 1 == 0 {
-            let ear = self.tape_level();
-            self.keyboard(port, ear)
-        } else {
-            self.floating_bus(sampled)
-        }
+        byte
     }
 
     fn io_write(&mut self, port: u16, value: u8) {
@@ -1482,6 +1470,40 @@ impl Spectrum {
                 0xb0 | 0xb1 | 0xb2 | 0xb3 | 0xb8 | 0xb9 | 0xba | 0xbb
             ),
             _ => false,
+        }
+    }
+}
+
+impl SpectrumBus {
+    /// What an IN gives back, before the recording is told about it.
+    fn io_read_uncaptured(&mut self, port: u16) -> u8 {
+        let sampled = self.contend_io(port);
+        self.observer.on_port(port, false);
+        if self.breaks.port_in {
+            self.break_hit.get_or_insert(Event::In(port));
+        }
+        // A recording replaces the hardware, not just the keyboard: the
+        // floating bus, the tape and the sound chip all read back what they
+        // read back on the day.
+        if let Some(playback) = &mut self.playback {
+            let byte = playback.next();
+            if self.breaks.ay && self.model.has_ay() && port & 0xc002 == 0xc000 {
+                self.break_hit.get_or_insert(Event::Ay);
+            }
+            return byte;
+        }
+        // AY register read: $FFFD.
+        if self.model.has_ay() && port & 0xc002 == 0xc000 {
+            if self.breaks.ay {
+                self.break_hit.get_or_insert(Event::Ay);
+            }
+            return self.audio.ay.read();
+        }
+        if port & 1 == 0 {
+            let ear = self.tape_level();
+            self.keyboard(port, ear)
+        } else {
+            self.floating_bus(sampled)
         }
     }
 }

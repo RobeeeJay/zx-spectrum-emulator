@@ -152,7 +152,7 @@ fn notes_are_kept_beside_the_recording() {
     );
 
     // And they go back to the tape's when the recording is stopped.
-    app.stop_recording();
+    app.stop_playback();
     assert_eq!(
         app.notes.file(),
         Some(Notes::sidecar(std::path::Path::new("tapes/somethingelse.tap")).as_path())

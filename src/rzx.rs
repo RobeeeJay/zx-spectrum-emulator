@@ -52,6 +52,97 @@ impl Recording {
     }
 }
 
+/// A recording being made: the frames so far, and where the current one
+/// started.
+///
+/// A frame of a recording is a number of *opcode fetches* and the bytes every
+/// IN in that stretch gave back. Both are counted as the machine runs, because
+/// neither can be worked out afterwards.
+#[derive(Clone, Debug, Default)]
+pub struct Capture {
+    pub frames: Vec<Frame>,
+    /// What the INs in the frame being recorded have given back so far.
+    pub inputs: Vec<u8>,
+    /// The fetch count when this frame started.
+    pub mark: u32,
+    /// Where in the frame the recording began.
+    pub start_t: u32,
+}
+
+impl Capture {
+    /// Close off the frame that has just ended.
+    pub fn end_frame(&mut self, fetches: u32) {
+        let ran = fetches.wrapping_sub(self.mark);
+        self.mark = fetches;
+        self.frames.push(Frame {
+            // A frame that somehow ran more instructions than the count can
+            // hold is clamped rather than wrapped: a recording that says a
+            // frame is three instructions long comes adrift immediately.
+            fetches: ran.min(u16::MAX as u32) as u16,
+            inputs: std::mem::take(&mut self.inputs),
+        });
+    }
+}
+
+/// Write a recording out as an RZX file.
+///
+/// Uncompressed, which the format allows and which keeps this to arithmetic:
+/// the blocks that may be deflated say so in their flags, and these do not.
+pub fn write(recording: &Recording) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RZX!");
+    out.push(0); // major
+    out.push(13); // minor
+    out.extend_from_slice(&0u32.to_le_bytes()); // flags: not signed
+
+    // Who made it: twenty bytes of name, then a version.
+    let mut creator = [b' '; 20];
+    for (slot, byte) in creator.iter_mut().zip(recording.creator.bytes()) {
+        *slot = byte;
+    }
+    let mut body = Vec::new();
+    body.extend_from_slice(&creator);
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&1u16.to_le_bytes());
+    block(&mut out, 0x10, &body);
+
+    // The machine to start from.
+    if let Some(snapshot) = &recording.snapshot {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u32.to_le_bytes()); // flags: here, and not packed
+        let mut extension = [0u8; 4];
+        for (slot, byte) in extension.iter_mut().zip(snapshot.extension.bytes()) {
+            *slot = byte;
+        }
+        body.extend_from_slice(&extension);
+        body.extend_from_slice(&(snapshot.data.len() as u32).to_le_bytes());
+        body.extend_from_slice(&snapshot.data);
+        block(&mut out, 0x30, &body);
+    }
+
+    // And the frames.
+    let mut body = Vec::new();
+    body.extend_from_slice(&(recording.frames.len() as u32).to_le_bytes());
+    body.push(0); // reserved
+    body.extend_from_slice(&recording.start_t.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes()); // flags: not packed
+    for frame in &recording.frames {
+        body.extend_from_slice(&frame.fetches.to_le_bytes());
+        body.extend_from_slice(&(frame.inputs.len() as u16).to_le_bytes());
+        body.extend_from_slice(&frame.inputs);
+    }
+    block(&mut out, 0x80, &body);
+    out
+}
+
+/// One block: its kind, its length including the five bytes of header, and
+/// the body.
+fn block(out: &mut Vec<u8>, id: u8, body: &[u8]) {
+    out.push(id);
+    out.extend_from_slice(&(body.len() as u32 + 5).to_le_bytes());
+    out.extend_from_slice(body);
+}
+
 /// Read a recording from the bytes of a file.
 pub fn parse(data: &[u8]) -> Result<Recording, String> {
     if data.len() < 10 || &data[0..4] != b"RZX!" {
