@@ -459,3 +459,53 @@ fn a_jump_back_into_the_routine_is_a_loop_not_an_ending() {
         "the loop's own target should not be a routine: {entries:04X?}"
     );
 }
+
+/// A run of one byte has nothing inside it to cut at.
+///
+/// Asking for the boundaries between `from + 1` and `to` on such a run asks
+/// for a range that runs backwards, which is a panic rather than an empty
+/// answer — and it took the emulator down the moment Find blocks was pressed
+/// on a recording that had executed a lone byte. They are ordinary: a RST
+/// reached by nothing else, or the last byte before a stretch nobody has run.
+#[test]
+fn a_run_of_one_byte_does_not_take_the_emulator_down() {
+    let mut spec = Spectrum::new();
+    // A routine of a single byte — RET — jumped to and returned from, with a
+    // caller either side of a gap so the executed run really is one byte long.
+    for (at, bytes) in [
+        (0x8000u16, &[0xCD, 0x00, 0x90, 0x18, 0xFB][..]),
+        (0x9000, &[0xC9][..]),
+    ] {
+        for (offset, byte) in bytes.iter().enumerate() {
+            spec.bus.poke(at + offset as u16, *byte);
+        }
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.bus.observer.enabled = true;
+    for _ in 0..200 {
+        spec.step_instruction();
+    }
+
+    let runs = spec.bus.observer.code_runs();
+    assert!(
+        runs.iter().any(|(from, to)| from == to && *from == 0x9000),
+        "the RET at $9000 should be a run of one byte: {runs:04X?}"
+    );
+
+    // The whole point: this used to panic inside the B-tree rather than
+    // returning a block.
+    let found = blocks::work_out(&spec.bus.observer);
+    assert!(
+        found.contains(&Block {
+            from: 0x9000,
+            to: 0x9000,
+            kind: Kind::Code
+        }),
+        "and it should come out as a block of one byte: {found:?}"
+    );
+
+    // Merging it with what was known does not lose it either.
+    let merged = blocks::merge(&found, &found);
+    assert!(merged.iter().any(|block| block.contains(0x9000)));
+}

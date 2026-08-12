@@ -126,9 +126,16 @@ pub fn merge(known: &[Block], found: &[Block]) -> Vec<Block> {
 fn split_at(from: u16, to: u16, boundaries: &BTreeSet<u16>) -> Vec<(u16, u16)> {
     let mut pieces = Vec::new();
     let mut start = from;
-    for cut in boundaries.range(from.saturating_add(1)..=to) {
-        pieces.push((start, cut - 1));
-        start = *cut;
+    // A run of one byte has nothing inside it to cut at, and asking for the
+    // boundaries between `from + 1` and `to` is asking for a range that runs
+    // backwards, which is a panic rather than an empty answer. One-byte runs
+    // are ordinary: a RST reached by nothing else, or the last byte before a
+    // stretch nobody has executed yet.
+    if from < to {
+        for cut in boundaries.range(from + 1..=to) {
+            pieces.push((start, cut - 1));
+            start = *cut;
+        }
     }
     pieces.push((start, to));
     pieces
