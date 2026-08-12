@@ -951,8 +951,22 @@ fn registers_lcd(app: &mut App, ui: &mut egui::Ui) {
         ui.separator();
         flag_chip(ui, "IFF1", c.iff1);
         flag_chip(ui, "IFF2", c.iff2);
+        // Shown when it is halted, and its space kept when it is not. The
+        // panel sizes itself to its contents, so a word appearing at the end
+        // of this row widened the panel and shoved the stack, the labels and
+        // the screen along beside it — every frame, since HALT is entered and
+        // left once a frame while a program waits for the interrupt.
+        let halted = RichText::new("HALTED").color(theme::AMBER).monospace();
         if c.halted {
-            ui.label(RichText::new("HALTED").color(theme::AMBER).monospace());
+            ui.label(halted);
+        } else {
+            let galley = egui::WidgetText::from(halted).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Monospace,
+            );
+            ui.allocate_space(galley.size());
         }
     });
 }

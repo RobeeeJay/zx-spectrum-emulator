@@ -204,3 +204,49 @@ fn nothing_in_the_debugger_moves_under_the_pointer() {
     app.show_debugger = true;
     nothing_moves_when_hovered(app, [1600.0, 1100.0], "debugger");
 }
+
+/// The debugger's panels do not change width with what they are showing.
+///
+/// HALTED appears at the end of the flags row while the machine is halted,
+/// which is once a frame for a program waiting on the interrupt. The panel
+/// sizes itself to its contents, so a word appearing there widened it and
+/// shoved the stack, the labels and the screen along beside it — twice a
+/// frame, back and forth.
+#[test]
+fn the_halted_flag_does_not_move_the_panels_beside_it() {
+    let panels = |halted: bool| -> Vec<(String, [f32; 4])> {
+        let mut app = app();
+        app.show_debugger = true;
+        app.spec.cpu.halted = halted;
+        let mut harness = Harness::builder()
+            .with_size([1600.0, 1100.0])
+            .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+        harness.run_steps(4);
+        every_widget(&harness)
+            .into_iter()
+            .filter(|(name, _)| {
+                ["Stack", "Labels", "Data", "Screen"]
+                    .iter()
+                    .any(|panel| name.ends_with(panel))
+            })
+            .collect()
+    };
+
+    let running = panels(false);
+    let halted = panels(true);
+    assert!(
+        !running.is_empty(),
+        "the panels beside the registers should be on show"
+    );
+    for (name, was) in &running {
+        let Some((_, now)) = halted.iter().find(|(other, _)| other == name) else {
+            continue;
+        };
+        assert!(
+            (now[0] - was[0]).abs() < 0.5,
+            "{name} sits at x {} while running and {} while halted",
+            was[0],
+            now[0]
+        );
+    }
+}
