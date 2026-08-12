@@ -39,17 +39,11 @@ const STACK_W: f32 = 124.0;
 /// How tall the listing is, and so how much of memory is on show.
 pub const LISTING_H: f32 = 460.0;
 
-/// Instructions moved for each row of wheel travel. Three of them read as a
-/// document being scrolled and went past what you were looking for; one and a
-/// half keeps a roll of the wheel to about a screenful, which is what reading
-/// a disassembly wants.
-const LINES_PER_ROW: f32 = 1.5;
-
-/// How far above the address on show the listing starts, so there is
-/// something to scroll back through. Bytes rather than lines, since how many
-/// instructions that is depends on what they are — and not so far that the
-/// line you came to look at falls off the bottom of what is visible.
-const BEFORE: u16 = 32;
+/// Instructions moved for each row of wheel travel: a roll of the wheel moves
+/// the listing by about what it shows. More than that overshoots whatever you
+/// were reading; the part of a roll too small to be a whole instruction is
+/// kept rather than rounded away, which is what makes a slow rate usable.
+const LINES_PER_ROW: f32 = 1.0;
 
 /// The list of names, and how far it runs before it scrolls.
 const LABELS_W: f32 = 132.0;
@@ -111,6 +105,14 @@ pub struct DebuggerState {
     /// trackpad delivers a few points at a time, and rounding each of those to
     /// the nearest line throws every one of them away.
     pub scroll_debt: f32,
+    /// The first line the listing draws. Held rather than worked out from the
+    /// address on show: deriving it each frame re-synced the disassembly to a
+    /// different instruction boundary as the address moved, and the whole
+    /// listing jumped about under a steady roll of the wheel.
+    pub top: u16,
+    /// Whether the line of interest should be put back in the middle: set when
+    /// something sends the listing somewhere rather than when it is scrolled.
+    pub centre: bool,
     pub lines: usize,
     pub goto_text: String,
     pub bp_text: String,
@@ -128,6 +130,8 @@ impl Default for DebuggerState {
             marked: None,
             watching_blocks: false,
             scroll_debt: 0.0,
+            top: 0,
+            centre: true,
             lines: 96,
             goto_text: String::new(),
             bp_text: String::new(),
@@ -339,6 +343,30 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
                  calling another one is left alone.",
             );
         });
+    }
+
+    // A line at a time with the arrow keys, once nothing is being typed into:
+    // the listing is full of label and comment fields, and an arrow key in one
+    // of those belongs to the field.
+    let typing = ui.memory(|memory| memory.focused().is_some());
+    if !typing {
+        let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+        let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+        let moved = {
+            let peek = |a: u16| app.peek(a);
+            let at = app.dbg.view_addr;
+            if down {
+                let insn = disasm::disasm(&peek, at);
+                Some(at.wrapping_add(insn.len.max(1) as u16))
+            } else if up {
+                Some(back(&peek, at, 1))
+            } else {
+                None
+            }
+        };
+        if let Some(addr) = moved {
+            app.show_in_listing(addr);
+        }
     }
 
     if ui.input(|i| i.key_pressed(egui::Key::F7)) {
@@ -1029,12 +1057,16 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     // which is what "infinite scroll stopped working" was.
     app.dbg.lines = ((LISTING_H / row_height(ui)).floor() as usize).max(8);
 
-    let peek = |a: u16| app.peek(a);
-    // Start a little above the anchor, aligned to a real opcode boundary.
-    // Well back from where you are, so there is something above the line you
-    // came to look at: a listing that starts at the address you asked for can
-    // only be scrolled one way.
-    let mut addr = disasm::sync_start(&peek, app.dbg.view_addr.wrapping_sub(BEFORE), 12);
+    // The line being followed sits in the middle of the listing, with as much
+    // above it as below: an instruction at the top edge has no context before
+    // it, which is half of what a disassembly is read for.
+    if app.dbg.follow_pc || app.dbg.centre {
+        let peek = |a: u16| app.peek(a);
+        app.dbg.top = back(&peek, app.dbg.view_addr, app.dbg.lines / 2);
+        app.dbg.centre = false;
+    }
+
+    let mut addr = app.dbg.top;
 
     // Take a copy of the bytes on show, so the listing can be drawn without
     // holding a borrow of the machine while the rest of the window is built.
@@ -1247,19 +1279,33 @@ fn scroll_through_memory(app: &mut App, ui: &mut egui::Ui, top: f32) {
     }
     app.dbg.follow_pc = false;
     let peek = |a: u16| app.peek(a);
-    let mut addr = app.dbg.view_addr;
+    let mut addr = app.dbg.top;
     if lines < 0 {
         for _ in 0..(-lines) {
             let insn = disasm::disasm(&peek, addr);
             addr = addr.wrapping_add(insn.len.max(1) as u16);
         }
     } else {
-        for _ in 0..lines {
-            // Back one instruction: the boundary above where we are.
-            addr = disasm::sync_start(&peek, addr.wrapping_sub(1), 4);
-        }
+        addr = back(&peek, addr, lines as usize);
     }
+    app.dbg.top = addr;
+    // The listing has been moved by hand, so the address on show is wherever
+    // the top of it now is: pressing a key afterwards carries on from here
+    // rather than from wherever the machine was left.
     app.dbg.view_addr = addr;
+}
+
+/// The address `count` instructions above `addr`.
+///
+/// Backwards through a variable-length instruction set means finding the
+/// instruction that ends where you are, one at a time; there is no arithmetic
+/// that does it.
+fn back<F: Fn(u16) -> u8>(peek: &F, addr: u16, count: usize) -> u16 {
+    let mut addr = addr;
+    for _ in 0..count {
+        addr = disasm::previous(peek, addr);
+    }
+    addr
 }
 
 /// A column heading: the same width as the column under it, and left

@@ -181,3 +181,34 @@ fn screen_renderer_produces_a_full_frame() {
         buf.chunks(4).map(|p| [p[0], p[1], p[2]]).collect();
     assert!(distinct.len() > 1, "rendered a blank screen");
 }
+
+/// One instruction back is the instruction that ends where you are — not the
+/// furthest boundary within reach, which is what lining a listing up wants.
+/// Asked for a single line, that went four or five bytes and several
+/// instructions at a time, and scrolling a disassembly upwards skidded.
+#[test]
+fn one_instruction_back_is_the_one_that_ends_here() {
+    // LD HL,$1234 : NOP : LD A,$05 : RET, at $8000.
+    let code: [u8; 7] = [0x21, 0x34, 0x12, 0x00, 0x3E, 0x05, 0xC9];
+    let peek = |a: u16| {
+        code.get(a.wrapping_sub(0x8000) as usize)
+            .copied()
+            .unwrap_or(0)
+    };
+
+    assert_eq!(
+        disasm::previous(&peek, 0x8006),
+        0x8004,
+        "the LD A,$05 is two bytes and ends at the RET"
+    );
+    assert_eq!(
+        disasm::previous(&peek, 0x8004),
+        0x8003,
+        "and the NOP before it is one"
+    );
+    assert_eq!(
+        disasm::previous(&peek, 0x8003),
+        0x8000,
+        "and the LD HL,$1234 before that is three"
+    );
+}

@@ -1183,6 +1183,9 @@ impl App {
         self.dbg.view_addr = addr;
         self.dbg.follow_pc = false;
         self.dbg.marked = Some(addr);
+        // Put in the middle of the listing rather than at whatever line it
+        // happens to fall on, so what was asked for is where the eye goes.
+        self.dbg.centre = true;
     }
 
     /// The same, from another window: open the debugger, bring it to the

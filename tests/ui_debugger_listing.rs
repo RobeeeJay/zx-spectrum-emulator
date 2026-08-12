@@ -248,16 +248,16 @@ fn rolling_the_wheel_travels_through_memory_without_end() {
 
     // Down through memory, then back up past where it started: neither
     // direction runs out.
-    let start = h.state().dbg.view_addr;
+    let start = h.state().dbg.top;
     roll(&mut h, -200.0);
-    let down = h.state().dbg.view_addr;
+    let down = h.state().dbg.top;
     assert!(
         down > start,
         "rolling down should move the listing forwards: ${start:04X} to ${down:04X}"
     );
 
     roll(&mut h, 400.0);
-    let up = h.state().dbg.view_addr;
+    let up = h.state().dbg.top;
     assert!(
         up < start,
         "and rolling up should go back past where it began: ${down:04X} to ${up:04X}"
@@ -301,22 +301,23 @@ fn the_listing_keeps_up_with_the_wheel() {
     // every instruction is a one-byte NOP and the bytes moved are the lines
     // moved.
     let rows = (zx_rustrum::ui::debugger::LISTING_H / zx_rustrum::ui::theme::CONTROL_H) as u16;
-    let start = h.state().dbg.view_addr;
+    let start = h.state().dbg.top;
     roll(&mut h, -zx_rustrum::ui::debugger::LISTING_H);
-    let moved = h.state().dbg.view_addr.wrapping_sub(start);
+    let moved = h.state().dbg.top.wrapping_sub(start);
     assert!(
-        moved > rows * 3 / 2 - 1,
-        "rolling the listing's height moved {moved} lines, against {rows} rows of travel"
+        moved >= rows - 1 && moved <= rows * 2,
+        "rolling the listing's height moved {moved} lines, against {rows} rows \
+         of travel: it should move by about what it shows"
     );
 
     // And a trackpad's dribble of a few points at a time adds up instead of
     // being rounded to nothing each frame.
-    let start = h.state().dbg.view_addr;
+    let start = h.state().dbg.top;
     for _ in 0..12 {
         roll(&mut h, -4.0);
     }
     assert_ne!(
-        h.state().dbg.view_addr,
+        h.state().dbg.top,
         start,
         "forty-eight points of wheel in small pieces should still move it"
     );
@@ -338,4 +339,86 @@ fn the_listing_draws_no_more_rows_than_fit() {
         zx_rustrum::ui::debugger::LISTING_H
     );
     assert!(rows >= 8.0, "and there should be a listing at all: {rows}");
+}
+
+/// The line being followed sits in the middle of the listing, with as much
+/// above it as below. An instruction at the top edge has no context before it,
+/// which is half of what a disassembly is read for.
+#[test]
+fn the_line_of_interest_is_in_the_middle_of_the_listing() {
+    let mut app = app();
+    app.spec.cpu.pc = 0x8000;
+    app.dbg.follow_pc = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+
+    // Empty memory disassembles as one-byte NOPs, so the distance from the top
+    // of the listing to the line on show is the number of lines above it.
+    let above = h.state().dbg.view_addr.wrapping_sub(h.state().dbg.top);
+    let rows = h.state().dbg.lines as u16;
+    assert!(
+        above.abs_diff(rows / 2) <= 1,
+        "the PC is {above} lines down a listing of {rows}"
+    );
+
+    // And being sent somewhere puts that line in the middle too.
+    h.state_mut().show_in_listing(0x9000);
+    h.run_steps(3);
+    let above = h.state().dbg.view_addr.wrapping_sub(h.state().dbg.top);
+    assert!(
+        above.abs_diff(rows / 2) <= 1,
+        "sent to $9000 and it sits {above} lines down a listing of {rows}"
+    );
+}
+
+/// The arrow keys move a line at a time, which is how a listing is read when
+/// the mouse is somewhere else. They do not while something is being typed
+/// into: the listing is full of label and comment fields, and an arrow key in
+/// one of those belongs to the field.
+#[test]
+fn the_arrow_keys_move_the_listing_a_line_at_a_time() {
+    let mut app = app();
+    app.dbg.view_addr = 0x8000;
+    app.dbg.follow_pc = false;
+    let mut h = harness(app);
+    h.run_steps(3);
+
+    let press = |h: &mut Harness<'_, App>, key: egui::Key| {
+        h.input_mut().events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+    };
+
+    press(&mut h, egui::Key::ArrowDown);
+    assert_eq!(
+        h.state().dbg.view_addr,
+        0x8001,
+        "down should move on by one instruction"
+    );
+    assert!(
+        !h.state().dbg.follow_pc,
+        "and stop following the PC, or the listing walks away from you"
+    );
+
+    press(&mut h, egui::Key::ArrowUp);
+    press(&mut h, egui::Key::ArrowUp);
+    assert_eq!(
+        h.state().dbg.view_addr,
+        0x7FFF,
+        "and up should go back, one instruction at a time"
+    );
+
+    // Still in the middle after moving: the listing follows the line rather
+    // than the line running to the edge of the listing.
+    let above = h.state().dbg.view_addr.wrapping_sub(h.state().dbg.top);
+    let rows = h.state().dbg.lines as u16;
+    assert!(
+        above.abs_diff(rows / 2) <= 1,
+        "after arrowing about it sits {above} lines down a listing of {rows}"
+    );
 }
