@@ -11,7 +11,9 @@
 //! candidate with a low number attached is worse than returning nothing: it
 //! puts an address in front of somebody who will go and look at it.
 
-use crate::loops;
+use std::collections::BTreeMap;
+
+use crate::loops::{self, Phase};
 use crate::observe::Step;
 
 /// How sure a detector is, in the words the rest of the emulator uses.
@@ -48,6 +50,11 @@ impl Sure {
 pub struct Finding {
     /// What was being looked for, for the reader.
     pub what: &'static str,
+    /// What it would be called if it were written down. The best loop is the
+    /// main one; the others are named after where they are, because calling a
+    /// second candidate the main loop would be saying something the evidence
+    /// does not.
+    pub label: String,
     pub address: u16,
     pub sure: Sure,
     /// The score behind the word, 0 to 1.
@@ -57,50 +64,157 @@ pub struct Finding {
     pub because: String,
 }
 
-/// Where the main game loop is.
+/// Every loop the program was found going round, best candidate first.
 ///
-/// The main loop is the routine the program keeps coming back to at the top of
-/// the call tree, going round at a steady interval, calling several different
-/// things each time. Those three properties are what is scored: nothing here
-/// assumes a frame, since a game may take several over one turn.
-pub fn main_game_loop(steps: &[Step], frame_t: u32) -> Option<Finding> {
-    let phases = loops::phases(steps, frame_t, 64);
-    let phase = phases.iter().max_by_key(|phase| phase.iterations)?;
-    if phase.iterations < 3 {
-        return None;
+/// A loop is a routine the program keeps coming back to at the top of the call
+/// tree, going round at a steady interval, calling several different things
+/// each time. Those three properties are what is scored: nothing here assumes
+/// a frame, since a game may take several over one turn.
+///
+/// A program has more than one — a title screen, a menu, the game itself, and
+/// often an inner loop that is doing most of the work — so they are all
+/// returned, with what each rests on, and it is left to the reader to say which
+/// is which. Deciding on their behalf means being wrong silently.
+pub fn main_game_loops(steps: &[Step], frame_t: u32) -> Vec<Finding> {
+    let mut best: BTreeMap<u16, Finding> = BTreeMap::new();
+    for phase in loops::phases(steps, frame_t, 64) {
+        // Every routine the phase kept coming back to, not only the one it
+        // came back to most regularly. A program runs several loops over its
+        // life and often more than one at a time — a title screen waiting for
+        // a key while it animates, a game loop with a slower one around it —
+        // and the reader is the one who should say which is which.
+        for finding in in_phase(steps, &phase, frame_t) {
+            // The same routine can head a loop in two phases: a game that goes
+            // back to its title screen and round again. One line for it,
+            // showing the stretch that makes the better case.
+            let keep = best
+                .get(&finding.address)
+                .is_none_or(|already| finding.score > already.score);
+            if keep {
+                best.insert(finding.address, finding);
+            }
+        }
     }
 
-    // How steady the turns are: the interval between one and the next should
-    // be much the same every time.
-    let times: Vec<u64> = steps
+    let mut found: Vec<Finding> = best.into_values().collect();
+    found.sort_by(|a, b| b.score.total_cmp(&a.score));
+    found.truncate(MOST);
+    for (rank, finding) in found.iter_mut().enumerate() {
+        if rank > 0 {
+            finding.what = "Loop";
+            finding.label = format!("loop_{:04X}", finding.address);
+        }
+    }
+    found
+}
+
+/// The best candidate, or nothing.
+pub fn main_game_loop(steps: &[Step], frame_t: u32) -> Option<Finding> {
+    main_game_loops(steps, frame_t).into_iter().next()
+}
+
+/// How many loops are worth listing. Past a handful the list stops being
+/// something a reader looks down and starts being a log.
+const MOST: usize = 8;
+
+/// A candidate has to look enough like a loop to be worth a line. Below this
+/// it is a routine that happened to be called a few times.
+const WORTH_SAYING: f64 = 0.35;
+
+/// Every loop in one phase, scored.
+fn in_phase(steps: &[Step], phase: &Phase, frame_t: u32) -> Vec<Finding> {
+    let when = |step: &Step| step.frame as u64 * frame_t as u64 + step.t as u64;
+    let within: Vec<(usize, &Step)> = steps
         .iter()
-        .filter(|step| step.enter && step.entry == phase.head)
-        .map(|step| step.frame as u64 * frame_t as u64 + step.t as u64)
+        .enumerate()
+        .filter(|(_, step)| when(step) >= phase.from && when(step) <= phase.to)
         .collect();
-    let steadiness = steadiness_of(&times);
 
-    // A main loop does several different things each turn. One that calls
-    // nothing, or the same thing over and over, is an inner loop.
-    let variety = (phase.routines.len().min(8) as f64) / 8.0;
+    // The top of the program as it actually ran, which need not be depth one.
+    let Some(top) = within
+        .iter()
+        .filter(|(_, step)| step.enter)
+        .map(|(_, step)| step.depth)
+        .min()
+    else {
+        return Vec::new();
+    };
 
-    // And it should have gone round enough times to be a habit rather than a
-    // coincidence.
-    let repetition = ((phase.iterations as f64) / 50.0).min(1.0);
+    let mut entries: BTreeMap<u16, Vec<(usize, u64)>> = BTreeMap::new();
+    for (index, step) in &within {
+        if step.enter && step.depth == top {
+            entries
+                .entry(step.entry)
+                .or_default()
+                .push((*index, when(step)));
+        }
+    }
 
-    let score = 0.5 * steadiness + 0.3 * variety + 0.2 * repetition;
-    let turns = phase.frames_per_turn(frame_t);
-    Some(Finding {
-        what: "Main game loop",
-        address: phase.head,
-        sure: Sure::from_score(score),
-        score,
-        because: format!(
-            "came back {} times, {:.2} frames apart, calling {} different routines",
-            phase.iterations,
-            turns,
-            phase.routines.len()
-        ),
-    })
+    let span = phase.to.saturating_sub(phase.from).max(1) as f64;
+    let mut found = Vec::new();
+    for (entry, seen) in entries {
+        if seen.len() < 3 {
+            continue;
+        }
+        let times: Vec<u64> = seen.iter().map(|(_, at)| *at).collect();
+
+        // How steady the turns are: the interval between one and the next
+        // should be much the same every time.
+        let steadiness = steadiness_of(&times);
+
+        // Weighed against how much of the phase it was going round for. Thirty
+        // calls in a burst are perfectly steady and are not a loop.
+        let coverage = ((times[times.len() - 1] - times[0]) as f64 / span).min(1.0);
+
+        // A loop of any interest does several different things each turn. One
+        // that calls nothing is a routine being called repeatedly.
+        let variety = (calls_in_a_turn(steps, &seen).min(8) as f64) / 8.0;
+
+        // And it should have gone round enough times to be a habit rather than
+        // a coincidence.
+        let repetition = ((times.len() as f64) / 50.0).min(1.0);
+
+        let score = 0.5 * steadiness * coverage + 0.3 * variety + 0.2 * repetition;
+        if score < WORTH_SAYING {
+            continue;
+        }
+        let mut gaps: Vec<u64> = times.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        gaps.sort_unstable();
+        let period = gaps[gaps.len() / 2] as f64 / frame_t as f64;
+        found.push(Finding {
+            what: "Main game loop",
+            label: "main_game_loop".to_string(),
+            address: entry,
+            sure: Sure::from_score(score),
+            score,
+            because: format!(
+                "came back {} times, {:.2} frames apart, calling {} different routines",
+                times.len(),
+                period,
+                calls_in_a_turn(steps, &seen)
+            ),
+        });
+    }
+    found
+}
+
+/// How many different routines one turn of this loop calls.
+///
+/// The second turn rather than the first: the first time round usually does
+/// setting up that the rest do not. Looking at one turn rather than all of
+/// them keeps this to a few hundred steps however long the program has been
+/// watched.
+fn calls_in_a_turn(steps: &[Step], seen: &[(usize, u64)]) -> usize {
+    let Some(window) = seen.windows(2).nth(1) else {
+        return 0;
+    };
+    let (from, to) = (window[0].0, window[1].0);
+    steps[from + 1..to]
+        .iter()
+        .filter(|step| step.enter)
+        .map(|step| step.entry)
+        .collect::<std::collections::BTreeSet<u16>>()
+        .len()
 }
 
 /// How regular a series of times is, as a number between 0 and 1.
@@ -122,11 +236,9 @@ fn steadiness_of(times: &[u64]) -> f64 {
 
 /// Every detector there is, run over what has been watched.
 ///
-/// One so far. The shape is here for the others: each answers its own question
-/// and says how sure it is, and the window lists whatever they find.
+/// One question so far, which can have several answers. The shape is here for
+/// the others: each answers its own question and says how sure it is, and the
+/// window lists whatever they find.
 pub fn everything(steps: &[Step], frame_t: u32) -> Vec<Finding> {
-    [main_game_loop(steps, frame_t)]
-        .into_iter()
-        .flatten()
-        .collect()
+    main_game_loops(steps, frame_t)
 }

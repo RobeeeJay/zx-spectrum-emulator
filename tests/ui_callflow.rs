@@ -169,10 +169,8 @@ fn nothing_is_written_down_until_it_is_confirmed() {
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
     h.run_steps(3);
 
-    let found = h
-        .state()
-        .callflow
-        .findings
+    let findings = h.state().callflow.findings.clone();
+    let found = findings
         .first()
         .expect("the loop should have been found")
         .address;
@@ -181,7 +179,17 @@ fn nothing_is_written_down_until_it_is_confirmed() {
         "it wrote a label without being asked"
     );
 
-    h.get_by_label("Label it").click();
+    // One button per loop found, not one for the window: a list of candidates
+    // with a single button would label whichever the code picked.
+    let buttons = h.get_all_by_label("Label").count();
+    assert_eq!(
+        buttons,
+        findings.len(),
+        "{} loops were found and {buttons} of them can be labelled",
+        findings.len()
+    );
+
+    h.get_all_by_label("Label").next().unwrap().click();
     h.run_steps(3);
 
     assert_eq!(
@@ -189,6 +197,25 @@ fn nothing_is_written_down_until_it_is_confirmed() {
         "main_game_loop",
         "and after confirming, it should be written down"
     );
+    assert!(
+        h.state().notes.comment(found).contains("came back"),
+        "with what the guess rests on as the comment, so the listing says why: {:?}",
+        h.state().notes.comment(found)
+    );
+
+    // Each of the others writes its own name. Calling the second candidate the
+    // main game loop would say something the detector did not.
+    if let Some(other) = findings.get(1) {
+        // The row just labelled says so instead of offering a button, so the
+        // next button along is the second loop's.
+        h.get_all_by_label("Label").next().unwrap().click();
+        h.run_steps(3);
+        assert_eq!(
+            h.state().notes.label(other.address),
+            format!("loop_{:04X}", other.address),
+            "the second loop should be named after where it is"
+        );
+    }
     assert!(
         h.state().notes.label_is_auto(found),
         "as a guess, so a later one can replace it and nothing of the user's is lost"

@@ -1,6 +1,6 @@
 //! Looking for particular things in a program.
 
-use zx_rustrum::detect::{main_game_loop, Sure};
+use zx_rustrum::detect::{main_game_loop, main_game_loops, Sure};
 use zx_rustrum::observe::Step;
 
 const FRAME_T: u32 = 69888;
@@ -138,5 +138,91 @@ fn it_finds_manic_miners_loop() {
         found.sure.label(),
         found.score,
         found.because
+    );
+}
+
+/// A program does more than one thing over its life — a title screen, then the
+/// game — and each has its own loop. Both are reported, in the order of how
+/// good the case for them is, because picking one and throwing the other away
+/// is deciding on the reader's behalf and being wrong silently.
+#[test]
+fn every_loop_the_program_went_round_is_listed() {
+    // A title screen doing two things a frame, then the game doing four every
+    // other frame. The addresses share nothing, so the phases part — and each
+    // stretch is a whole number of the 64-entry windows the phase finder looks
+    // through, since a window holding the end of one and the start of the
+    // other overlaps both and reads as neither having changed.
+    let mut steps = looping(0x8000, &[0x9000, 0x9100], FRAME_T as u64, 128);
+    let started = 128 * FRAME_T as u64;
+    let mut game = looping(
+        0xA000,
+        &[0xB000, 0xB100, 0xB200, 0xB300],
+        FRAME_T as u64 * 2,
+        128,
+    );
+    for step in &mut game {
+        let when = step.frame as u64 * FRAME_T as u64 + step.t as u64 + started;
+        step.frame = (when / FRAME_T as u64) as u32;
+        step.t = (when % FRAME_T as u64) as u32;
+    }
+    steps.append(&mut game);
+
+    let found = main_game_loops(&steps, FRAME_T);
+    let addresses: Vec<u16> = found.iter().map(|finding| finding.address).collect();
+    assert!(
+        addresses.contains(&0x8000) && addresses.contains(&0xA000),
+        "both loops should be listed, not only the better one: {addresses:02X?}"
+    );
+
+    // Ranked, and only the best one is called the main loop: the second is
+    // named after where it is, since calling it the main game loop would say
+    // something the evidence does not.
+    for pair in found.windows(2) {
+        assert!(
+            pair[0].score >= pair[1].score,
+            "the likeliest should come first: {:.2} before {:.2}",
+            pair[0].score,
+            pair[1].score
+        );
+    }
+    assert_eq!(found[0].label, "main_game_loop", "the best candidate");
+    assert_eq!(
+        found[1].label,
+        format!("loop_{:04X}", found[1].address),
+        "and the rest are named after where they are"
+    );
+    assert_eq!(found[1].what, "Loop");
+}
+
+/// The same routine can head the loop in two stretches — a game that goes back
+/// to its title screen and round again. One line for it, or the list turns
+/// into a log of how often the program changed what it was doing.
+#[test]
+fn a_loop_seen_twice_is_listed_once() {
+    let mut steps = looping(0x8000, &[0x9000, 0x9100], FRAME_T as u64, 128);
+    let started = 128 * FRAME_T as u64;
+    let mut other = looping(0xA000, &[0xB000, 0xB100], FRAME_T as u64, 128);
+    let mut again = looping(0x8000, &[0x9000, 0x9100], FRAME_T as u64, 128);
+    for (step, offset) in other
+        .iter_mut()
+        .map(|step| (step, started))
+        .chain(again.iter_mut().map(|step| (step, started * 2)))
+    {
+        let when = step.frame as u64 * FRAME_T as u64 + step.t as u64 + offset;
+        step.frame = (when / FRAME_T as u64) as u32;
+        step.t = (when % FRAME_T as u64) as u32;
+    }
+    steps.append(&mut other);
+    steps.append(&mut again);
+
+    let found = main_game_loops(&steps, FRAME_T);
+    let times = found
+        .iter()
+        .filter(|finding| finding.address == 0x8000)
+        .count();
+    assert_eq!(
+        times, 1,
+        "the loop at $8000 was gone round in two stretches and should be one \
+         line, not {times}"
     );
 }

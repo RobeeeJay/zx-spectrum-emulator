@@ -102,7 +102,7 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
                 .show_value(false)
                 .text("zoom"),
         );
-        ui.toggle_value(&mut app.sprites.inverted, "Invert")
+        theme::toggle(ui, &mut app.sprites.inverted, "Invert")
             .on_hover_text("Some sheets are stored as masks, which read inside out");
     });
 

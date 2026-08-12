@@ -26,8 +26,8 @@ pub struct CallFlowState {
     /// The finding waiting to be accepted or thrown away. Nothing is written
     /// against an address until somebody says so.
     pub offered: Option<Finding>,
-    /// What the detectors have made of the program: one line each, with how
-    /// sure they are and what the answer rests on.
+    /// What the detectors have made of the program: one line per loop found,
+    /// with how sure they are and what the answer rests on.
     pub findings: Vec<Finding>,
     /// When they last ran, so they can run again without being asked and
     /// without running every frame.
@@ -44,9 +44,6 @@ pub struct CallFlowState {
 const ROW_H: f32 = 34.0;
 const INDENT: f32 = 26.0;
 const BOX_W: f32 = 260.0;
-
-/// What a confirmed main game loop is called in the notes.
-const LABEL: &str = "main_game_loop";
 
 /// How often the detectors run themselves. Sifting a few hundred thousand
 /// calls is not free, and the answer does not change from one frame to the
@@ -72,8 +69,8 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     let Some(turn) = app.callflow.turn.take() else {
         ui.label(
             RichText::new(
-                "Switch AutoDoc on in the debugger to watch the program, let it \
-                 run for a few seconds, then find the loop.",
+                "Press Main game loop, let the program run for a few seconds, \
+                 and one turn of the loop it keeps coming back to is drawn here.",
             )
             .color(theme::DIM),
         );
@@ -157,6 +154,16 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
     }
 
     let findings = app.callflow.findings.clone();
+    ui.label(
+        RichText::new(format!(
+            "{} loop{} found, the likeliest first.",
+            findings.len(),
+            if findings.len() == 1 { "" } else { "s" }
+        ))
+        .small()
+        .color(theme::DIM),
+    );
+
     let mut go_to = None;
     for finding in &findings {
         ui.horizontal(|ui| {
@@ -199,23 +206,25 @@ fn findings(app: &mut App, ui: &mut egui::Ui) {
 
             // The finding is a guess until somebody accepts it. Nothing is
             // written against the address before that.
-            let already = app.notes.label(finding.address) == LABEL;
+            let already = app.notes.label(finding.address) == finding.label;
             if already {
                 ui.label(RichText::new("labelled").small().color(theme::GREEN));
             } else if ui
-                .button("Label it")
+                .button("Label")
                 .on_hover_text(format!(
-                    "Write {LABEL} against ${:04X} in your notes, marked as a guess",
-                    finding.address
+                    "Write {} against ${:04X} in the listing, with what it \
+                     rests on as the comment, marked as a guess",
+                    finding.label, finding.address
                 ))
                 .clicked()
             {
-                app.notes.suggest(finding.address, LABEL, &finding.because);
+                let comment = format!("{}: {}", finding.what.to_lowercase(), finding.because);
+                app.notes.suggest(finding.address, &finding.label, &comment);
                 if let Err(e) = app.notes.save_if_dirty() {
                     app.set_status(format!("Could not save notes: {e}"), true);
                 } else {
                     app.set_status(
-                        format!("Labelled ${:04X} as the main game loop", finding.address),
+                        format!("Labelled ${:04X} as {}", finding.address, finding.label),
                         false,
                     );
                 }

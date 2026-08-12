@@ -588,13 +588,13 @@ impl App {
         let layout = egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true);
         ui.allocate_ui_with_layout(row, layout, |ui| {
             theme::group_label(ui, "Windows");
-            ui.toggle_value(&mut self.show_ram_map, "RAM map");
-            ui.toggle_value(&mut self.show_debugger, "Debugger");
-            ui.toggle_value(&mut self.show_tape, "Tape");
-            ui.toggle_value(&mut self.show_back_buffer, "Back buffer");
-            ui.toggle_value(&mut self.show_sprites, "Sprites");
-            ui.toggle_value(&mut self.show_callflow, "Call flow");
-            ui.toggle_value(&mut self.show_profiler, "Profiler");
+            theme::toggle(ui, &mut self.show_ram_map, "RAM map");
+            theme::toggle(ui, &mut self.show_debugger, "Debugger");
+            theme::toggle(ui, &mut self.show_tape, "Tape");
+            theme::toggle(ui, &mut self.show_back_buffer, "Back buffer");
+            theme::toggle(ui, &mut self.show_sprites, "Sprites");
+            theme::toggle(ui, &mut self.show_callflow, "Call flow");
+            theme::toggle(ui, &mut self.show_profiler, "Profiler");
         });
     }
 
@@ -1604,16 +1604,14 @@ impl App {
 
             theme::divider(ui);
             theme::group_label(ui, "Video");
-            ui.toggle_value(&mut self.race_the_beam, "Race the beam")
-                .on_hover_text(
-                    "Hover the picture to see the frame half-drawn: everything up to \
+            theme::toggle(ui, &mut self.race_the_beam, "Race the beam").on_hover_text(
+                "Hover the picture to see the frame half-drawn: everything up to \
                      the cursor is what the ULA has put out so far, the rest is the \
                      previous frame, dimmed. Works while paused too.",
-                );
-            ui.toggle_value(&mut self.overscan, "Overscan")
-                .on_hover_text(
-                    "Show the whole border the ULA draws, not just a television's worth.",
-                );
+            );
+            theme::toggle(ui, &mut self.overscan, "Overscan").on_hover_text(
+                "Show the whole border the ULA draws, not just a television's worth.",
+            );
         });
     }
 
@@ -1623,8 +1621,7 @@ impl App {
             return;
         }
         let mut late = self.spec.bus.late_timing;
-        if ui
-            .checkbox(&mut late, "Late timing")
+        if theme::toggle(ui, &mut late, "Late timing")
             .on_hover_text(
                 "Later 48K machines run the display one T-state later \
                  relative to the interrupt. HALT2INT tells them apart.",
@@ -1641,7 +1638,7 @@ impl App {
 
     fn controls_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.toggle_value(&mut self.spec.bus.slow.enabled, "Slow draw")
+            theme::toggle(ui, &mut self.spec.bus.slow.enabled, "Slow draw")
                 .on_hover_text(
                     "Park the CPU after a set number of writes to watched video memory \
                      so the picture visibly builds up over several host frames.",
@@ -1653,8 +1650,8 @@ impl App {
                         .logarithmic(true)
                         .text("writes/frame"),
                 );
-                ui.toggle_value(&mut self.spec.bus.slow.watch_screen, "video RAM");
-                ui.toggle_value(&mut self.spec.bus.slow.watch_back_buffer, "back buffer");
+                theme::toggle(ui, &mut self.spec.bus.slow.watch_screen, "video RAM");
+                theme::toggle(ui, &mut self.spec.bus.slow.watch_back_buffer, "back buffer");
             });
             ui.separator();
             if let Some(rzx) = &self.rzx {
@@ -1745,7 +1742,7 @@ impl App {
                 (None, None) => "no audio device".to_string(),
             };
             let failed = self.audio_out.is_none();
-            ui.toggle_value(&mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
+            theme::toggle(ui, &mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
                 .on_hover_text(&sound);
             theme::slider(
                 ui,
@@ -1753,7 +1750,7 @@ impl App {
                     .show_value(false)
                     .text("vol"),
             );
-            ui.toggle_value(&mut self.spec.bus.audio.mute_off_speed, "auto-mute")
+            theme::toggle(ui, &mut self.spec.bus.audio.mute_off_speed, "auto-mute")
                 .on_hover_text("Silence the sound unless the machine is running at about normal speed, so fast-forwarding does not shriek.");
             theme::slider(
                 ui,

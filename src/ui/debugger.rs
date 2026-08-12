@@ -280,7 +280,7 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             app.status = "Reset".into();
         }
         ui.separator();
-        ui.toggle_value(&mut app.dbg.follow_pc, "Follow PC");
+        theme::toggle(ui, &mut app.dbg.follow_pc, "Follow PC");
     });
 
     // Stopping on what a program does rather than on where it is: the things
@@ -292,17 +292,17 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             theme::group_label(ui, "Break");
             let breaks = &mut app.spec.bus.breaks;
-            ui.toggle_value(&mut breaks.screen, "Screen")
+            theme::toggle(ui, &mut breaks.screen, "Screen")
                 .on_hover_text("Stop on a write anywhere in the display file");
-            ui.toggle_value(&mut breaks.beeper, "Beeper")
+            theme::toggle(ui, &mut breaks.beeper, "Beeper")
                 .on_hover_text("Stop when the speaker or MIC bit of port $FE changes");
             if has_ay {
-                ui.toggle_value(&mut breaks.ay, "AY")
+                theme::toggle(ui, &mut breaks.ay, "AY")
                     .on_hover_text("Stop on any access to the sound chip");
             }
-            ui.toggle_value(&mut breaks.interrupt, "Interrupt")
+            theme::toggle(ui, &mut breaks.interrupt, "Interrupt")
                 .on_hover_text("Stop when the CPU accepts the frame interrupt");
-            ui.toggle_value(&mut breaks.rom, "ROM").on_hover_text(
+            theme::toggle(ui, &mut breaks.rom, "ROM").on_hover_text(
                 "Stop when the program goes into the ROM from outside it. \
                  Moving about within the ROM does not count, so a ROM routine \
                  calling another one is left alone.",

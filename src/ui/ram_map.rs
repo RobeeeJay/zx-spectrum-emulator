@@ -218,14 +218,14 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.horizontal_wrapped(|ui| {
         ui.label("Show:");
-        ui.toggle_value(&mut app.ram.show_read, "Read");
+        theme::toggle(ui, &mut app.ram.show_read, "Read");
         ui.colored_label(theme::GREEN, "■");
-        ui.toggle_value(&mut app.ram.show_write, "Write");
+        theme::toggle(ui, &mut app.ram.show_write, "Write");
         ui.colored_label(theme::RED, "■");
-        ui.toggle_value(&mut app.ram.show_exec, "Execute");
+        theme::toggle(ui, &mut app.ram.show_exec, "Execute");
         ui.colored_label(theme::BLUE, "■");
         ui.separator();
-        ui.toggle_value(&mut app.ram.show_overlays, "Overlays");
+        theme::toggle(ui, &mut app.ram.show_overlays, "Overlays");
     });
     ui.horizontal_wrapped(|ui| {
         theme::slider(

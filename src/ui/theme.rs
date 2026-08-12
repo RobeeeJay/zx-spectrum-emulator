@@ -112,6 +112,13 @@ pub fn apply(ctx: &egui::Context) {
         style.override_font_id = Some(FontId::monospace(12.0));
         style.spacing.item_spacing = egui::vec2(7.0, 5.0);
         style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        // Every control the same height. egui sizes a button to at least
+        // `interact_size` and a toggle to its text plus padding, so a row of
+        // them came out at 18, 20 and 22 points, each sitting at a different
+        // height in the row. Nothing moved when the pointer arrived, but the
+        // outline appeared two points off from its neighbours', which is what
+        // "the buttons jump on hover" actually was.
+        style.spacing.interact_size.y = 22.0;
         style.spacing.menu_margin = Margin::same(6);
         // No banded rows: the mockup's panels are flat, and stripes across an
         // LCD readout look like a fault rather than a decoration.
@@ -268,6 +275,33 @@ pub fn run_pause_button(ui: &mut egui::Ui, running: bool) -> egui::Response {
     );
     let label = if running { PAUSE_LABEL } else { RUN_LABEL };
     ui.add(egui::Button::new(label).min_size(size))
+}
+
+/// A toggle the same height as a button.
+///
+/// egui sizes a button to at least `interact_size`, and a selectable label to
+/// its text plus padding, so a row of the two comes out at 22, 20 and 18
+/// points and every one of them sits at a different height. Nothing moves when
+/// the pointer arrives, but the outline that appears is a couple of points off
+/// from its neighbours', which reads exactly like the button jumping.
+pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
+    let height = button_height(ui);
+    let mut response =
+        ui.add(egui::Button::selectable(*on, text).min_size(egui::vec2(0.0, height)));
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response
+}
+
+/// How tall a button comes out, so anything sitting beside one can match it.
+pub fn button_height(ui: &egui::Ui) -> f32 {
+    // What a plain button comes out at: egui gives one a minimum size of
+    // `interact_size`, and that is the height everything in a row of controls
+    // has to match. Working it out from the text and the padding instead
+    // overshoots by a point, which is just as visible as being short by two.
+    ui.spacing().interact_size.y
 }
 
 /// A divider between groups of controls.
