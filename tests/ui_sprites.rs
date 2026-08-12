@@ -50,7 +50,7 @@ fn the_sprite_window_opens() {
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
     h.run_steps(3);
 
-    h.get_by_label("Sprites").click();
+    h.get_by_label("Graphics").click();
     h.run_steps(3);
     assert!(h.state().show_sprites, "the toggle did not open it");
 
@@ -183,4 +183,94 @@ fn clicking_graphics_data_in_the_debugger_shows_it_as_pictures() {
         0xB000,
         "at the block that was clicked"
     );
+}
+
+/// Not every format packs its rows together: some keep a mask byte, an
+/// attribute or a byte of padding after each row of cells. Reading straight
+/// past those shears the picture exactly as a wrong width does, so they can be
+/// stepped over — and a graphic then takes more bytes than its pixels do.
+#[test]
+fn bytes_can_be_skipped_after_each_row_of_cells() {
+    let packed = SpriteView {
+        cells_across: 2,
+        cells_down: 3,
+        skip_after_row: 0,
+        ..Default::default()
+    };
+    assert_eq!(packed.stride(), 48, "six cells of eight bytes");
+    assert_eq!(packed.row_bytes(), 16, "two cells across");
+
+    let padded = SpriteView {
+        cells_across: 2,
+        cells_down: 3,
+        skip_after_row: 1,
+        ..Default::default()
+    };
+    assert_eq!(
+        padded.stride(),
+        51,
+        "a byte after each of the three rows, the last one included: the next \
+         graphic starts after the padding, not before it"
+    );
+}
+
+/// The skipped bytes are stepped over in the drawing as well as counted in the
+/// stride, or the sheet would be spaced correctly and drawn wrongly.
+#[test]
+fn skipped_bytes_are_left_out_of_the_picture() {
+    let padded = SpriteView {
+        cells_across: 2,
+        cells_down: 2,
+        skip_after_row: 1,
+        ..Default::default()
+    };
+    // First row of cells: sixteen bytes of pixels from $9000.
+    assert_eq!(padded.byte_of(0x9000, 0, 0, 0), 0x9000);
+    assert_eq!(padded.byte_of(0x9000, 0, 1, 7), 0x900F);
+    // Second row starts past the padding byte, at $9011 rather than $9010.
+    assert_eq!(
+        padded.byte_of(0x9000, 1, 0, 0),
+        0x9011,
+        "the byte after the first row of cells is not part of the picture"
+    );
+
+    let mut spec = Spectrum::new();
+    // Two rows of one cell, with a byte of padding after each row. The pixel
+    // rows are $FF and the padding is $00, so drawn correctly every pixel is
+    // set, and drawn without the skip half of them are not.
+    let mut at = 0x9000u16;
+    for _ in 0..2 {
+        for _ in 0..8 {
+            spec.bus.poke(at, 0xFF);
+            at += 1;
+        }
+        spec.bus.poke(at, 0x00);
+        at += 1;
+    }
+
+    let mut app = app();
+    app.spec = spec;
+    app.show_sprites = true;
+    app.sprites.addr = 0x9000;
+    app.sprites.addr_text = "9000".into();
+    app.sprites.cells_across = 1;
+    app.sprites.cells_down = 2;
+    app.sprites.skip_after_row = 1;
+    app.sprites.columns = 1;
+
+    // What the drawing reads, row by row, is what the stride says it should.
+    assert_eq!(app.sprites.stride(), 18, "eight bytes and a byte, twice");
+    let mut harness = Harness::builder()
+        .with_size([900.0, 700.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    harness.run_steps(3);
+
+    // The second row of the graphic starts at $9009, not $9008: the padding
+    // after the first row is not part of the picture.
+    assert_eq!(
+        harness.state().sprites.row_bytes(),
+        8,
+        "one cell across is eight bytes of pixels"
+    );
+    assert_eq!(harness.state().sprites.stride(), 18);
 }

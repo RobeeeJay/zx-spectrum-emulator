@@ -592,7 +592,7 @@ impl App {
             theme::toggle(ui, &mut self.show_debugger, "Debugger");
             theme::toggle(ui, &mut self.show_tape, "Tape");
             theme::toggle(ui, &mut self.show_back_buffer, "Back buffer");
-            theme::toggle(ui, &mut self.show_sprites, "Sprites");
+            theme::toggle(ui, &mut self.show_sprites, "Graphics");
             theme::toggle(ui, &mut self.show_callflow, "Call flow");
             theme::toggle(ui, &mut self.show_profiler, "Profiler");
         });
@@ -2142,7 +2142,7 @@ impl App {
                 ViewportId::from_hash_of("sprites"),
                 self.restore_window(
                     "sprites",
-                    ViewportBuilder::default().with_title("Sprites"),
+                    ViewportBuilder::default().with_title("Graphics"),
                     [340.0, 200.0],
                     [720.0, 640.0],
                 ),

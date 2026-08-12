@@ -1,10 +1,14 @@
 //! Memory read as graphics.
 //!
-//! A sprite on this machine is nothing but bytes: eight to a character cell,
+//! A graphic on this machine is nothing but bytes: eight to a character cell,
 //! most significant bit on the left, and cells stored one after another. What
-//! nobody can tell from the bytes is how wide the sprite is meant to be, so
-//! that is the one thing this asks for. Get the width right and a sheet of
-//! sprites appears; get it wrong and it shears, which is itself the clue.
+//! nobody can tell from the bytes is how wide it is meant to be, so that is
+//! the one thing this asks for. Get the width right and a sheet of graphics
+//! appears; get it wrong and it shears, which is itself the clue.
+//!
+//! Nor is the data always packed. A format may carry a mask byte, an attribute
+//! or a byte of padding after each row of cells, which shears the picture in
+//! the same way and is cured by stepping over them.
 
 use egui::{Color32, RichText};
 
@@ -24,6 +28,11 @@ pub struct SpriteView {
     pub columns: usize,
     /// Pixels per Spectrum pixel.
     pub zoom: f32,
+    /// Bytes to step over after each row of cells within one graphic. Some
+    /// formats keep a mask, an attribute or a byte of padding there, and
+    /// reading straight past it shears the picture exactly as a wrong width
+    /// does.
+    pub skip_after_row: u16,
     /// Draw the attribute file's colours over it, or plain white on black.
     pub inverted: bool,
     /// Set when something sends the viewer somewhere: the window asks to be
@@ -42,6 +51,7 @@ impl Default for SpriteView {
             cells_across: 2,
             cells_down: 2,
             columns: 8,
+            skip_after_row: 0,
             zoom: 3.0,
             inverted: false,
             raise: false,
@@ -51,9 +61,24 @@ impl Default for SpriteView {
 }
 
 impl SpriteView {
-    /// Bytes in one sprite.
+    /// Bytes in one graphic, the skipped ones included: the next graphic
+    /// starts after the padding of the last row, not before it.
     pub fn stride(&self) -> u16 {
-        (self.cells_across * self.cells_down * 8) as u16
+        ((self.cells_across * 8) as u16 + self.skip_after_row) * self.cells_down as u16
+    }
+
+    /// Bytes in one row of cells, before whatever is skipped after it.
+    pub fn row_bytes(&self) -> u16 {
+        (self.cells_across * 8) as u16
+    }
+
+    /// Where one pixel row of one cell lives, counting from the start of a
+    /// graphic. Cells are stored one after another within a row of them, eight
+    /// bytes each, and whatever the format keeps between rows is stepped over.
+    pub fn byte_of(&self, at: u16, cell_y: usize, cell_x: usize, row: usize) -> u16 {
+        let row_start =
+            at.wrapping_add((self.row_bytes() + self.skip_after_row).wrapping_mul(cell_y as u16));
+        row_start.wrapping_add((cell_x * 8 + row) as u16)
     }
 }
 
@@ -107,9 +132,10 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         }
 
         theme::divider(ui);
-        theme::group_label(ui, "Sprite");
+        theme::group_label(ui, "Graphic");
         size_picker(ui, &mut app.sprites.cells_across, "wide");
         size_picker(ui, &mut app.sprites.cells_down, "tall");
+        skip_picker(ui, &mut app.sprites.skip_after_row);
 
         theme::divider(ui);
         theme::group_label(ui, "Sheet");
@@ -125,15 +151,52 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             .on_hover_text("Some sheets are stored as masks, which read inside out");
     });
 
+    if app.sprites.skip_after_row > 0 {
+        ui.label(
+            RichText::new(format!(
+                "Stepping over {} byte{} after each row of cells: {} of the {} bytes \
+                 a graphic takes are not drawn.",
+                app.sprites.skip_after_row,
+                if app.sprites.skip_after_row == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                app.sprites.skip_after_row as usize * app.sprites.cells_down,
+                app.sprites.stride()
+            ))
+            .small()
+            .color(theme::DIM),
+        );
+    }
+
     ui.label(
         RichText::new(format!(
-            "{} bytes a sprite, {} for the sheet on show",
+            "{} bytes a graphic, {} for the sheet on show",
             app.sprites.stride(),
             app.sprites.stride() as usize * app.sprites.columns * rows_shown(app)
         ))
         .small()
         .color(theme::DIM),
     );
+}
+
+/// How many bytes to step over after each row of cells. Kept to a short list:
+/// a format carries a mask byte, an attribute, or a few bytes of padding, and
+/// anything longer than a cell is a different question about the data.
+fn skip_picker(ui: &mut egui::Ui, value: &mut u16) {
+    // The explanation goes on the group label rather than the button: the
+    // dropdown hands back what its menu returned, not the button's response.
+    theme::dropdown(ui, 74.0, format!("skip {value}"), |ui| {
+        for n in 0..=16u16 {
+            if ui
+                .selectable_label(*value == n, format!("skip {n}"))
+                .clicked()
+            {
+                *value = n;
+            }
+        }
+    });
 }
 
 /// A number of cells, chosen from a small list: sprite sizes on this machine
@@ -231,12 +294,10 @@ fn draw_sprite(
     down: usize,
     zoom: f32,
 ) {
-    let mut byte_at = at;
     for cell_y in 0..down {
         for cell_x in 0..across {
             for row in 0..8 {
-                let byte = app.peek(byte_at);
-                byte_at = byte_at.wrapping_add(1);
+                let byte = app.peek(app.sprites.byte_of(at, cell_y, cell_x, row));
                 for bit in 0..8 {
                     let set = byte & (0x80 >> bit) != 0;
                     if set == app.sprites.inverted {
