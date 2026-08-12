@@ -1037,7 +1037,7 @@ impl App {
             if ended {
                 // The frame boundary is the recording's, so the interrupt is
                 // raised here rather than by the T-state count.
-                self.spec.bus.irq_pending = true;
+                self.spec.bus.raise_interrupt();
                 due -= 1;
             }
             self.last_stop = Some(stop);

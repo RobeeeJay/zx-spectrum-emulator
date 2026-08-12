@@ -352,3 +352,125 @@ fn loading_a_recording_remembers_its_directory() {
         "and the next Load recording should open where this one came from"
     );
 }
+
+/// The interrupt a recording asks for is taken, and one nobody takes in time
+/// is dropped.
+///
+/// The ULA holds the interrupt line down for a few dozen T-states and then
+/// lets it go, so a program with interrupts disabled across the top of a frame
+/// misses that one. That window was timed from the start of a frame of
+/// T-states — but a recording's frames are counted in opcode fetches and
+/// wander away from the T-state frame, so the interrupt it asked for was
+/// thrown away as "missed" and the machine ran on without ever taking one.
+#[test]
+fn the_interrupt_window_is_timed_from_when_the_line_goes_down() {
+    use zx_rustrum::machine::{Spectrum, IRQ_LEN};
+
+    // EI, then a stretch of NOPs to run through.
+    let mut spec = Spectrum::new();
+    spec.bus.poke(0x8000, 0xFB);
+    for at in 0x8001..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.step_instruction(); // EI, which defers the interrupt by one
+    spec.step_instruction();
+
+    // Well past the top of the frame, where a recording's boundary can fall.
+    while spec.bus.tstates < IRQ_LEN * 4 {
+        spec.step_instruction();
+    }
+    spec.bus.raise_interrupt();
+    spec.run_fetches(1);
+    assert_eq!(
+        spec.cpu.pc, 0x0038,
+        "the interrupt was asked for here and should have been taken here"
+    );
+
+    // And one that nobody takes in time is let go, as the ULA lets it go.
+    let mut spec = Spectrum::new();
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.cpu.iff1 = false;
+    spec.bus.raise_interrupt();
+    let before = spec.bus.total_t();
+    while spec.bus.total_t() - before < IRQ_LEN as u64 * 2 {
+        spec.run_fetches(1);
+    }
+    spec.cpu.iff1 = true;
+    spec.run_fetches(2);
+    assert!(
+        spec.cpu.pc >= 0x8000,
+        "the line was let go long before this, so nothing should be waiting \
+         to fire into ${:04X}",
+        spec.cpu.pc
+    );
+}
+
+/// A recording plays back exactly: every frame the machine reads what the
+/// recording holds for it, and no more. Reading more than was recorded means
+/// the machine has taken a path the recording never took.
+///
+/// Two thousand frames, which is forty seconds of play. They stay in step for
+/// a good deal longer than that — Manic Miner for the whole recording, Space
+/// Harrier for 7,891 frames and Vindicator for 13,328 — and then drift, for
+/// something this does not yet explain. Asserting where they part company
+/// would be writing today's accuracy into a test; asserting a stretch they are
+/// exact over catches the thing that had them adrift by the second frame.
+#[test]
+fn the_recordings_play_back_without_coming_adrift() {
+    for name in ["manic.rzx", "spaceharrier.rzx", "vindicator.zip"] {
+        let path = std::path::PathBuf::from("recordings").join(name);
+        if !path.exists() {
+            continue;
+        }
+        let mut app = app();
+        // The ROM matters: a game with IM 1 spends every frame in the ROM's
+        // interrupt handler, and without one it sits on $FF at $0038 forever.
+        if let Some(rom) = app.roms.rom48.clone() {
+            app.spec.load_rom(&rom);
+        }
+        app.load_path(&path);
+        if app.rzx.is_none() {
+            continue;
+        }
+        // One recording frame per call, so what is left of each frame's input
+        // can be read before the next frame replaces it. Both halves matter:
+        // reading more than was recorded means the machine went somewhere the
+        // recording never went, and reading less means it never got to the
+        // code that reads at all — which is what a missed interrupt looks
+        // like, and which a count of overruns alone would call perfect.
+        let mut unused = 0;
+        for _ in 0..2000 {
+            app.advance(1.0 / 50.0);
+            if let Some(playback) = app.spec.bus.playback.as_ref() {
+                if playback.cursor != playback.inputs.len() {
+                    unused += 1;
+                }
+            }
+        }
+        let played = app.rzx.as_ref().map(|rzx| rzx.frame).unwrap_or(0);
+        assert!(played > 1500, "{name} only played {played} frames");
+        let short = app
+            .spec
+            .bus
+            .playback
+            .as_ref()
+            .map(|playback| playback.short)
+            .unwrap_or(0);
+        assert_eq!(
+            short, 0,
+            "{name} asked for {short} bytes of input the recording did not hold"
+        );
+        assert_eq!(
+            unused, 0,
+            "{name} left the recorded input unread in {unused} of {played} frames"
+        );
+    }
+}

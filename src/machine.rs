@@ -181,6 +181,11 @@ pub struct SpectrumBus {
     /// of bytes a second and none of them is going to be stepped back over.
     pub undo: Option<Vec<(u16, u8)>>,
 
+    /// When the interrupt line went down, in T-states since the machine
+    /// started. The ULA lets it go again after a few dozen, and that has to be
+    /// counted from when it went down.
+    pub irq_raised: u64,
+
     /// The recording being made, if one is. A frame of an RZX is a number of
     /// opcode fetches and the bytes every IN in that stretch gave back, and
     /// neither can be worked out after the fact.
@@ -266,6 +271,7 @@ impl SpectrumBus {
             tracker: Tracker::new(),
             undo: None,
             capture: None,
+            irq_raised: 0,
             tstates: 0,
             frame: 0,
             irq_pending: false,
@@ -798,6 +804,13 @@ impl SpectrumBus {
     }
 
     /// End-of-frame bookkeeping: flush sound, re-arm the interrupt.
+    /// Put the interrupt line down, and note when: the ULA lets it go again
+    /// after a few dozen T-states whether anything took it or not.
+    pub fn raise_interrupt(&mut self) {
+        self.irq_pending = true;
+        self.irq_raised = self.total_t();
+    }
+
     pub fn end_frame(&mut self) {
         self.tstates -= self.model.frame_t();
         self.frame += 1;
@@ -805,6 +818,9 @@ impl SpectrumBus {
         // recording says it is — an instruction count, not a T-state count —
         // so the interrupt is raised there instead of here.
         self.irq_pending = self.playback.is_none();
+        if self.irq_pending {
+            self.irq_raised = self.total_t();
+        }
         if let Some(capture) = &mut self.capture {
             capture.end_frame(self.fetches);
         }
@@ -1227,8 +1243,19 @@ impl Spectrum {
 
     fn check_interrupt(&mut self) {
         if self.bus.irq_pending {
-            if self.bus.tstates >= IRQ_LEN {
-                // Missed the window entirely.
+            // The ULA holds the interrupt line down for thirty-odd T-states
+            // and then lets it go, so a program with interrupts disabled
+            // across the top of the frame misses that one entirely.
+            //
+            // Timed from when the line went down rather than from the start of
+            // a frame of T-states. The two are the same thing while the
+            // machine is running on its own, but a recording's frames are
+            // counted in opcode fetches and wander away from the T-state
+            // frame: measuring from the frame start threw the recording's
+            // interrupt away as missed, and holding it until it was taken ran
+            // the handler at the wrong moment instead.
+            let missed = self.bus.total_t().saturating_sub(self.bus.irq_raised) >= IRQ_LEN as u64;
+            if missed {
                 self.bus.irq_pending = false;
             } else if self.cpu.interrupt(&mut self.bus) {
                 self.bus.irq_pending = false;
