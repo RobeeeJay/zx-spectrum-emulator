@@ -17,7 +17,7 @@
 //! long run of a recording worked out is still there next time, and can be
 //! read and corrected by hand.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::observe::Observer;
 
@@ -77,19 +77,24 @@ const SHORTEST_DATA: u16 = 8;
 /// furthest address reached inside it. Then the data — addresses read and
 /// never executed — fills whatever is left between them.
 pub fn work_out(observer: &Observer) -> Vec<Block> {
+    // Everything executed is code, whether or not anything was seen to call
+    // it. Working only from routines that were called leaves out the code the
+    // machine was already running when watching started — which, playing back
+    // a recording of a game, is the game.
+    let mut boundaries: BTreeSet<u16> = observer.routines.keys().copied().collect();
+    for seen in observer.routines.values() {
+        // Where a routine ends, the next thing begins — after the whole
+        // instruction, not one byte past its first, or the block is cut
+        // through the middle of the JP that ends it.
+        for after in &seen.after {
+            boundaries.insert(*after);
+        }
+    }
+
     let code: Vec<(u16, u16)> = observer
-        .routines
-        .values()
-        .filter_map(|seen| {
-            let (low, high) = seen.spans?;
-            // Where the routine ends is where it returned from, when it was
-            // seen to return; the furthest address reached otherwise. A
-            // routine that jumps forward over a table reaches past it, and the
-            // table shows up inside the block, which is the truth about it
-            // rather than a tidier fiction.
-            let end = seen.exits.iter().copied().max().unwrap_or(high).max(high);
-            Some((seen.entry.min(low), end.max(seen.entry)))
-        })
+        .code_runs()
+        .into_iter()
+        .flat_map(|(from, to)| split_at(from, to, &boundaries))
         .collect();
     let data: Vec<(u16, u16)> = observer
         .data_blocks(SHORTEST_DATA)
@@ -115,6 +120,18 @@ pub fn merge(known: &[Block], found: &[Block]) -> Vec<Block> {
             .collect()
     };
     assemble(&ranges(Kind::Code), &ranges(Kind::Data))
+}
+
+/// Cut one run of code where a routine starts or another ended.
+fn split_at(from: u16, to: u16, boundaries: &BTreeSet<u16>) -> Vec<(u16, u16)> {
+    let mut pieces = Vec::new();
+    let mut start = from;
+    for cut in boundaries.range(from.saturating_add(1)..=to) {
+        pieces.push((start, cut - 1));
+        start = *cut;
+    }
+    pieces.push((start, to));
+    pieces
 }
 
 /// Turn overlapping ranges into blocks that divide the address space.

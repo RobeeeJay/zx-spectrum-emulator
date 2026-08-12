@@ -34,12 +34,12 @@ pub const MARK: Color32 = Color32::from_rgb(0x16, 0x3c, 0x52);
 /// turn, so neighbours differ; dark enough that the text over them is still
 /// the text and not a colour scheme.
 pub const CODE_BANDS: [Color32; 2] = [
-    Color32::from_rgb(0x11, 0x22, 0x1a),
-    Color32::from_rgb(0x0e, 0x1c, 0x28),
+    Color32::from_rgb(0x16, 0x33, 0x26),
+    Color32::from_rgb(0x14, 0x2c, 0x40),
 ];
 pub const DATA_BANDS: [Color32; 2] = [
-    Color32::from_rgb(0x2a, 0x1e, 0x12),
-    Color32::from_rgb(0x24, 0x16, 0x22),
+    Color32::from_rgb(0x42, 0x2d, 0x16),
+    Color32::from_rgb(0x38, 0x1e, 0x36),
 ];
 
 /// The band behind a row of the listing: which block it is in, and what that

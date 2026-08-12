@@ -261,6 +261,16 @@ fn a_recording_gives_the_shape_of_the_program() {
         .filter(|block| block.kind == Kind::Data)
         .map(|block| block.length())
         .sum();
+    // Every byte executed is in a code block: the blocks are cut out of what
+    // ran, not out of what was seen to be called, so nothing the machine
+    // executed goes missing between them.
+    let executed = (0..=u16::MAX)
+        .filter(|addr| app.spec.bus.observer.was_executed(*addr))
+        .count() as u32;
+    assert_eq!(
+        code, executed,
+        "the code blocks should account for every byte executed"
+    );
     println!(
         "MANIC {} blocks, {code} bytes of code, {data} of data",
         found.len()
@@ -313,4 +323,139 @@ fn neighbouring_blocks_are_drawn_in_different_colours() {
             "code and data should not share a shade"
         );
     }
+}
+
+/// A program to run, poked in at its addresses.
+fn running(program: &[(u16, &[u8])], instructions: usize) -> Spectrum {
+    let mut spec = Spectrum::new();
+    for (at, bytes) in program {
+        for (offset, byte) in bytes.iter().enumerate() {
+            spec.bus.poke(at + offset as u16, *byte);
+        }
+    }
+    spec.cpu.pc = program[0].0;
+    spec.cpu.sp = 0xFF00;
+    spec.bus.observer.enabled = true;
+    for _ in 0..instructions {
+        spec.step_instruction();
+    }
+    spec
+}
+
+/// A Z80 program tail-calls: it jumps to the next routine rather than calling
+/// it and returning, and whatever that routine returns to is the caller of the
+/// first. So an unconditional JP ends the routine it is in, and where it lands
+/// is where another begins.
+#[test]
+fn an_unconditional_jump_ends_a_routine() {
+    let spec = running(
+        &[
+            // $8000  CALL $8020 : JR $8000
+            (0x8000, &[0xCD, 0x20, 0x80, 0x18, 0xFB]),
+            // $8020  XOR A : JP NZ,$8040 : NOP NOP : JP $8060
+            (
+                0x8020,
+                &[0xAF, 0xC2, 0x40, 0x80, 0x00, 0x00, 0xC3, 0x60, 0x80],
+            ),
+            // $8060  NOP NOP : RET
+            (0x8060, &[0x00, 0x00, 0xC9]),
+        ],
+        200,
+    );
+    let watched = &spec.bus.observer;
+
+    let called = watched.routines.get(&0x8020).expect("it was called");
+    assert!(
+        called.exits.contains(&0x8026),
+        "the JP at $8026 ends the routine, and should be recorded as an exit: {:04X?}",
+        called.exits
+    );
+    assert!(
+        watched.routines.contains_key(&0x8060),
+        "and where it lands is a routine of its own: {:04X?}",
+        watched.routines.keys().collect::<Vec<_>>()
+    );
+
+    // The conditional jump was not taken, and its target is nobody's entry.
+    assert!(
+        !watched.routines.contains_key(&0x8040),
+        "$8040 was never reached and should not be a routine"
+    );
+
+    let found = blocks::work_out(watched);
+    assert!(
+        found
+            .iter()
+            .any(|block| block.from == 0x8060 && block.kind == Kind::Code),
+        "the jumped-to routine should start a block of its own: {found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|block| block.from == 0x8020 && block.to == 0x8028),
+        "and the block it jumped out of should end at the end of the jump, \
+         not inside it: {found:?}"
+    );
+}
+
+/// A conditional jump is an early way out taken when a flag says so, and the
+/// routine carries on underneath it. Treating those as endings would cut every
+/// guarded routine into pieces at its first test.
+#[test]
+fn a_conditional_jump_does_not_end_a_routine() {
+    let spec = running(
+        &[
+            // $8000  CALL $8020 : JR $8000
+            (0x8000, &[0xCD, 0x20, 0x80, 0x18, 0xFB]),
+            // $8020  SCF : JP C,$8030 — taken, and forward, so it lands
+            // outside anything this routine has run so far.
+            (0x8020, &[0x37, 0xDA, 0x30, 0x80]),
+            // $8030  NOP : RET
+            (0x8030, &[0x00, 0xC9]),
+        ],
+        200,
+    );
+    let watched = &spec.bus.observer;
+
+    assert!(
+        !watched.routines.contains_key(&0x8030),
+        "the routine escaped forward to $8030; that is not another routine: {:04X?}",
+        watched.routines.keys().collect::<Vec<_>>()
+    );
+    let called = watched.routines.get(&0x8020).expect("it was called");
+    assert!(
+        !called.exits.contains(&0x8021),
+        "and the conditional jump is not an ending: {:04X?}",
+        called.exits
+    );
+    assert_eq!(
+        called.spans,
+        Some((0x8020, 0x8031)),
+        "the routine reaches over the jump to the RET it ends at"
+    );
+}
+
+/// A jump backwards into what the routine has already run is a loop going
+/// round, not an ending. Every loop written as `JP` rather than `JR` would
+/// otherwise cut its own routine in two on the first turn.
+#[test]
+fn a_jump_back_into_the_routine_is_a_loop_not_an_ending() {
+    let spec = running(
+        &[
+            (0x8000, &[0xCD, 0x20, 0x80, 0x18, 0xFB]),
+            // $8020  LD B,4 : DEC B : JP NZ,$8022 ... then JP $8022 backwards
+            // unconditionally is the case at hand: NOP : JP $8021
+            (0x8020, &[0x00, 0x00, 0xC3, 0x21, 0x80]),
+        ],
+        60,
+    );
+    let watched = &spec.bus.observer;
+
+    // $8021 is inside the routine and was already run, so nothing begins there.
+    let entries: Vec<u16> = watched.routines.keys().copied().collect();
+    assert_eq!(
+        entries.iter().filter(|entry| **entry == 0x8021).count(),
+        0,
+        "the loop's own target should not be a routine: {entries:04X?}"
+    );
 }

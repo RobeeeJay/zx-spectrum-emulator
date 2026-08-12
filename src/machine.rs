@@ -1286,9 +1286,16 @@ impl Spectrum {
                 };
                 let pushed = stack_word(sp1);
                 let popped = stack_word(sp0);
+                // The first two bytes of the instruction that ran: enough to
+                // tell an unconditional jump from a conditional one, which the
+                // stack pointer cannot say since neither touches it.
+                let opcode = [
+                    self.bus.peek_raw(pc0),
+                    self.bus.peek_raw(pc0.wrapping_add(1)),
+                ];
                 self.bus
                     .observer
-                    .on_instruction(pc0, sp0, pc1, sp1, registers, |a| {
+                    .on_instruction(pc0, sp0, pc1, sp1, registers, opcode, |a| {
                         if a == sp1 {
                             pushed
                         } else {

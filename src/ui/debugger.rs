@@ -39,6 +39,12 @@ const STACK_W: f32 = 124.0;
 /// How tall the listing is, and so how much of memory is on show.
 const LISTING_H: f32 = 360.0;
 
+/// How far above the address on show the listing starts, so there is
+/// something to scroll back through. Bytes rather than lines, since how many
+/// instructions that is depends on what they are — and not so far that the
+/// line you came to look at falls off the bottom of what is visible.
+const BEFORE: u16 = 32;
+
 /// The list of names, and how far it runs before it scrolls.
 const LABELS_W: f32 = 132.0;
 /// The list of data blocks found.
@@ -111,7 +117,7 @@ impl Default for DebuggerState {
             view_addr: 0,
             marked: None,
             watching_blocks: false,
-            lines: 24,
+            lines: 96,
             goto_text: String::new(),
             bp_text: String::new(),
             mem_addr: 0x4000,
@@ -1007,7 +1013,10 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
 
     let peek = |a: u16| app.peek(a);
     // Start a little above the anchor, aligned to a real opcode boundary.
-    let mut addr = disasm::sync_start(&peek, app.dbg.view_addr, 12);
+    // Well back from where you are, so there is something above the line you
+    // came to look at: a listing that starts at the address you asked for can
+    // only be scrolled one way.
+    let mut addr = disasm::sync_start(&peek, app.dbg.view_addr.wrapping_sub(BEFORE), 12);
 
     // Take a copy of the bytes on show, so the listing can be drawn without
     // holding a borrow of the machine while the rest of the window is built.

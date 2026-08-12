@@ -21,6 +21,27 @@ pub enum Flow {
     Straight,
 }
 
+/// Whether an opcode is a jump that always jumps.
+///
+/// `JP nn`, and the indirect `JP (HL)`, `JP (IX)` and `JP (IY)` a dispatch
+/// table goes through. A conditional `JP cc,nn` is not one of these: it is an
+/// early way out of a routine taken when a flag says so, and the routine
+/// carries on underneath it. Treating those as endings would cut every guarded
+/// routine into pieces at its first test.
+///
+/// `JR` is left out on purpose. Its reach is a hundred and twenty-odd bytes
+/// either way, which is inside the routine it is in almost every time, and
+/// calling each one an ending would divide loops rather than routines.
+pub fn always_jumps(opcode: [u8; 2]) -> bool {
+    match opcode[0] {
+        // JP nn, JP (HL)
+        0xC3 | 0xE9 => true,
+        // JP (IX), JP (IY)
+        0xDD | 0xFD => opcode[1] == 0xE9,
+        _ => false,
+    }
+}
+
 /// Classify one executed instruction. `peek` reads the word at an address.
 pub fn classify(
     pc_before: u16,

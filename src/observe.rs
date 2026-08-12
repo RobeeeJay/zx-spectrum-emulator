@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::flow::{classify, Flow};
+use crate::flow::{always_jumps, classify, Flow};
 
 /// Where a write landed. The Spectrum's memory map makes these worth counting
 /// separately: they are the difference between drawing, colouring and thinking.
@@ -92,10 +92,15 @@ pub struct Observed {
     /// jumps over a table of data reaches past the table — but it is where to
     /// start looking.
     pub spans: Option<(u16, u16)>,
-    /// The addresses it returned from, which is where a routine ends. A few
-    /// of them: a routine with several exits has several, and one with dozens
-    /// is not telling us anything more by the twentieth.
+    /// The addresses it returned or jumped away from, which is where a
+    /// routine ends. A few of them: a routine with several exits has several,
+    /// and one with dozens is not telling us anything more by the twentieth.
     pub exits: Vec<u16>,
+    /// Where the byte after each of those instructions is — which is not one
+    /// past the exit, since `RET` is one byte and `JP nn` is three. It is
+    /// where the next routine begins when one falls straight after another,
+    /// so it has to be the end of the instruction rather than the start.
+    pub after: Vec<u16>,
     pub ports_in: Vec<u16>,
     pub ports_out: Vec<u16>,
     /// How many times, which is what tells a beeper routine hammering port
@@ -323,6 +328,30 @@ impl Observer {
         bit(&self.read, addr) && !bit(&self.executed, addr)
     }
 
+    /// Runs of addresses that were executed, in address order.
+    ///
+    /// Every byte of an instruction counts, operands included: what the CPU
+    /// read as part of an instruction is code however it was reached, and a
+    /// routine nobody was seen to call is still code.
+    pub fn code_runs(&self) -> Vec<(u16, u16)> {
+        let mut runs = Vec::new();
+        let mut start: Option<u16> = None;
+        for addr in 0..=u16::MAX {
+            match (self.was_executed(addr), start) {
+                (true, None) => start = Some(addr),
+                (false, Some(from)) => {
+                    runs.push((from, addr - 1));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(from) = start {
+            runs.push((from, u16::MAX));
+        }
+        runs
+    }
+
     /// Runs of data, longest first, for whatever wants to look at them.
     pub fn data_blocks(&self, min_length: u16) -> Vec<(u16, u16)> {
         let mut blocks = Vec::new();
@@ -529,6 +558,9 @@ impl Observer {
         pc_after: u16,
         sp_after: u16,
         registers: Registers,
+        // The first two bytes of the instruction, for the one thing the stack
+        // cannot answer: whether a jump was conditional.
+        opcode: [u8; 2],
         peek: impl Fn(u16) -> u16,
     ) {
         if !self.enabled {
@@ -552,6 +584,14 @@ impl Observer {
             }
         }
 
+        // A jump that always jumps ends the routine it is in and starts
+        // another where it lands — the tail call a Z80 program writes instead
+        // of CALL followed by RET. A conditional jump is an early way out and
+        // leaves the routine where it is.
+        if always_jumps(opcode) {
+            self.tail_jump(pc_before, pc_after, registers, opcode);
+        }
+
         match classify(pc_before, sp_before, pc_after, sp_after, peek) {
             Flow::Call { entry, sp } => self.enter(entry, sp, registers),
             Flow::Return { sp_before, .. } => {
@@ -559,15 +599,52 @@ impl Observer {
                 // fact about the run rather than something to be worked out by
                 // decoding forwards and hoping to meet a RET.
                 if let Some(entry) = self.current() {
+                    // RET is one byte; RETI and RETN carry the ED prefix.
+                    let length = if opcode[0] == 0xED { 2 } else { 1 };
                     let stats = self.stats(entry);
-                    if stats.exits.len() < 8 && !stats.exits.contains(&pc_before) {
-                        stats.exits.push(pc_before);
-                    }
+                    note_exit(stats, pc_before, pc_before.wrapping_add(length));
                 }
                 self.leave(sp_before)
             }
             Flow::Straight => {}
         }
+    }
+
+    /// An unconditional jump out of the routine it was in.
+    ///
+    /// Where it lands is the entry of another routine, at the same depth and
+    /// with the same stack: whatever eventually returns goes back to whoever
+    /// called the first one, which is what a tail call means. A jump back into
+    /// the routine is a loop going round, not an ending, so only a jump
+    /// outside what the routine has run so far counts.
+    fn tail_jump(&mut self, from: u16, to: u16, registers: Registers, opcode: [u8; 2]) {
+        let Some(frame) = self.stack.last().copied() else {
+            return;
+        };
+        if to >= frame.low && to <= frame.high {
+            return;
+        }
+
+        self.stack.pop();
+        let depth = self.stack.len() as u8 + 1;
+        self.remember(frame.entry, depth, false);
+        let stats = self.stats(frame.entry);
+        stats.instructions += frame.instructions;
+        stats.spans = Some(match stats.spans {
+            Some((low, high)) => (low.min(frame.low), high.max(frame.high)),
+            None => (frame.low, frame.high),
+        });
+        // JP nn is three bytes, JP (IX) two, JP (HL) one.
+        let length = match opcode[0] {
+            0xC3 => 3,
+            0xDD | 0xFD => 2,
+            _ => 1,
+        };
+        note_exit(stats, from, from.wrapping_add(length));
+
+        // Entered like anything else, so it is counted, timed and joined to
+        // whoever called the routine it jumped out of.
+        self.enter(to, frame.sp, registers);
     }
 
     /// Entered directly, which is what an interrupt does.
@@ -681,6 +758,15 @@ impl DataKind {
             DataKind::Unknown => "data",
         }
     }
+}
+
+/// Note where a routine ended and where the byte after that instruction is.
+fn note_exit(stats: &mut Observed, at: u16, after: u16) {
+    if stats.exits.len() >= 8 || stats.exits.contains(&at) {
+        return;
+    }
+    stats.exits.push(at);
+    stats.after.push(after);
 }
 
 /// A run of bytes that was read but never executed.
