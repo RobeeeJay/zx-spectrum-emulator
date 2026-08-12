@@ -723,6 +723,19 @@ pub const EDGE_HISTORY: usize = 16384;
 impl Tape {
     pub fn load(path: &Path) -> Result<Tape, String> {
         let data = std::fs::read(path).map_err(|e| e.to_string())?;
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        Tape::from_bytes(&name, &data)
+    }
+
+    /// A tape from bytes rather than from a file, so one that arrived inside
+    /// an archive can be read without being written out first. The name is
+    /// what the file was called, which decides how it is read and what the
+    /// tape is called afterwards.
+    pub fn from_bytes(file_name: &str, data: &[u8]) -> Result<Tape, String> {
+        let path = Path::new(file_name);
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -733,26 +746,22 @@ impl Tape {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         let blocks = match ext.as_str() {
-            "tzx" => parse_tzx(&data)?,
-            "tap" => parse_tap(&data)?,
+            "tzx" => parse_tzx(data)?,
+            "tap" => parse_tap(data)?,
             // ZX81 program dumps. A .p has no name on the front, so one is
             // made up from the file name; a .p81 carries its own.
-            "p" | "81" => vec![zx81_block(&zx81_name(&stem), &data)],
-            "p81" => parse_p81(&data)?,
+            "p" | "81" => vec![zx81_block(&zx81_name(&stem), data)],
+            "p81" => parse_p81(data)?,
             // Sniff the signature if the extension is unhelpful.
             _ => {
                 if data.starts_with(b"ZXTape!\x1a") {
-                    parse_tzx(&data)?
+                    parse_tzx(data)?
                 } else {
-                    parse_tap(&data)?
+                    parse_tap(data)?
                 }
             }
         };
-        let name = path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        Ok(Tape::from_blocks(name, blocks))
+        Ok(Tape::from_blocks(file_name.to_string(), blocks))
     }
 
     pub fn from_blocks(name: String, blocks: Vec<Block>) -> Tape {

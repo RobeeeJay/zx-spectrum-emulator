@@ -709,7 +709,9 @@ impl App {
         let mut dialog = rfd::FileDialog::new();
         dialog = match kind {
             Some(FileKind::Rom) => dialog.add_filter("ROM image", &["rom", "bin"]),
-            Some(FileKind::Tape) => dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81"]),
+            Some(FileKind::Tape) => {
+                dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81", "zip"])
+            }
             Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80"]),
             // No filter, deliberately. rfd's macOS backend sets the panel's
             // allowed types from the extension list through an API that wants
@@ -721,11 +723,12 @@ impl App {
                 .add_filter(
                     "Tape, snapshot or ROM",
                     &[
-                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "rom", "bin", "rzx",
+                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "rom", "bin", "rzx", "zip",
                     ],
                 )
                 .add_filter("Tape", &["tzx", "tap", "p", "81", "p81"])
                 .add_filter("Snapshot", &["sna", "z80"])
+                .add_filter("Archive", &["zip"])
                 .add_filter("ROM image", &["rom", "bin"]),
         };
         // For the catch-all picker, start wherever the most recent file of any
@@ -753,31 +756,103 @@ impl App {
     }
 
     /// Put a tape in the deck of whichever machine is running.
+    /// Load whatever is worth loading out of an archive.
+    ///
+    /// The first file of a kind this can read, which is how a download of one
+    /// game is usually shaped: the tape, a scan of the inlay and a text file
+    /// about the cracking group. An archive with nothing loadable in it does
+    /// nothing, rather than guessing at the readme.
+    fn load_zip(&mut self, path: &std::path::Path) {
+        let data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                return self.set_status(format!("Could not read {}: {e}", path.display()), true)
+            }
+        };
+        let wanted = ["tzx", "tap", "p", "81", "p81", "rzx", "sna", "z80"];
+        let Some((name, bytes)) = crate::zip::first_with_extension(&data, &wanted) else {
+            return self.set_status(
+                format!(
+                    "{} holds nothing this can load",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                true,
+            );
+        };
+
+        let inner = std::path::Path::new(&name);
+        let ext = inner
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "rzx" => self.load_recording_bytes(path, &bytes),
+            "sna" | "z80" => match snapshot::probe_model_bytes(&ext, &bytes) {
+                Ok(model) => {
+                    self.switch_model(model);
+                    let loaded = if ext == "sna" {
+                        snapshot::load_sna(&mut self.spec, &bytes)
+                    } else {
+                        snapshot::load_z80(&mut self.spec, &bytes)
+                    };
+                    match loaded {
+                        Ok(()) => {
+                            self.set_status(format!("Loaded {name} from {}", path.display()), false)
+                        }
+                        Err(e) => self.set_status(format!("{name}: {e}"), true),
+                    }
+                }
+                Err(e) => self.set_status(format!("{name}: {e}"), true),
+            },
+            _ => {
+                // A ZX81 program only plays into a ZX81, the same as one that
+                // arrived on its own.
+                if matches!(ext.as_str(), "p" | "81" | "p81") && !self.on_zx81() {
+                    self.switch_to_zx81(self.zx81_ram);
+                }
+                self.insert_tape_bytes(path, &name, &bytes);
+            }
+        }
+    }
+
     fn insert_tape(&mut self, path: &std::path::Path) {
         match crate::tape::Tape::load(path) {
-            Ok(t) => {
-                let blocks = t.blocks.len();
-                let zx81 = matches!(t.blocks.first(), Some(crate::tape::Block::Zx81 { .. }));
-                let name = t.name.clone();
-                self.set_tape(Some(t));
-                self.show_tape = true;
-                self.tape.scroll_to_current = true;
-                self.tape.last_block = None;
-                self.prefs.remember_file(FileKind::Tape, path);
-                self.tape_path = Some(path.to_path_buf());
-                self.reload_notes();
-                // A tape waits for Play, as a real one does; a ZX81 also needs
-                // LOAD "" typed at it first, which is easy to forget.
-                let hint = if zx81 {
-                    " — type LOAD \"\" then press Play"
-                } else {
-                    " — press Play"
-                };
-                let plural = if blocks == 1 { "block" } else { "blocks" };
-                self.set_status(format!("Tape: {name} ({blocks} {plural}){hint}"), false);
-            }
+            Ok(t) => self.accept_tape(path, t),
             Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
         }
+    }
+
+    /// The same, for a tape that came out of an archive. The notes still go
+    /// beside the archive: that is the file the user has, and unpacking it
+    /// somewhere temporary to hold the annotations would lose them.
+    fn insert_tape_bytes(&mut self, path: &std::path::Path, name: &str, data: &[u8]) {
+        match crate::tape::Tape::from_bytes(name, data) {
+            Ok(t) => self.accept_tape(path, t),
+            Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
+        }
+    }
+
+    fn accept_tape(&mut self, path: &std::path::Path, t: crate::tape::Tape) {
+        let blocks = t.blocks.len();
+        let zx81 = matches!(t.blocks.first(), Some(crate::tape::Block::Zx81 { .. }));
+        let name = t.name.clone();
+        self.set_tape(Some(t));
+        self.show_tape = true;
+        self.tape.scroll_to_current = true;
+        self.tape.last_block = None;
+        self.prefs.remember_file(FileKind::Tape, path);
+        self.tape_path = Some(path.to_path_buf());
+        self.reload_notes();
+        // A tape waits for Play, as a real one does; a ZX81 also needs
+        // LOAD "" typed at it first, which is easy to forget.
+        let hint = if zx81 {
+            " — type LOAD \"\" then press Play"
+        } else {
+            " — press Play"
+        };
+        let plural = if blocks == 1 { "block" } else { "blocks" };
+        self.set_status(format!("Tape: {name} ({blocks} {plural}){hint}"), false);
     }
 
     /// Write the notes out a little after they last changed.
@@ -815,7 +890,14 @@ impl App {
                 return self.set_status(format!("Could not read {}: {e}", path.display()), true)
             }
         };
-        let recording = match crate::rzx::parse(&bytes) {
+        self.load_recording_bytes(path, &bytes);
+    }
+
+    /// A recording from bytes rather than from a file, so one that arrived
+    /// inside an archive can be played without being written out first. The
+    /// path is still the archive's, which is where the notes go.
+    fn load_recording_bytes(&mut self, path: &std::path::Path, bytes: &[u8]) {
+        let recording = match crate::rzx::parse(bytes) {
             Ok(recording) => recording,
             Err(e) => return self.set_status(format!("{}: {e}", path.display()), true),
         };
@@ -1052,6 +1134,7 @@ impl App {
                 Ok(data) => self.load_rom_image(path, data),
                 Err(e) => self.set_status(format!("ROM load failed: {e}"), true),
             },
+            "zip" => self.load_zip(path),
             other => self.set_status(format!("Unsupported file type: .{other}"), true),
         }
     }
