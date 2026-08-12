@@ -1836,6 +1836,12 @@ impl App {
         // doing that after a menu popup has been opened discards the popup.
         self.debug_viewports(&ctx);
 
+        // Watching is switched on from more than one window, and the window
+        // that used to do it may not be open: the debugger's own frame is
+        // where this used to live, so turning AutoDoc on from the call flow
+        // window watched nothing at all.
+        self.spec.bus.observer.enabled = self.dbg.autodoc;
+
         self.save_window_state_if_settled();
         self.save_notes_if_due();
         ctx.request_repaint();

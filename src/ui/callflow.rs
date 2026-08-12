@@ -86,6 +86,23 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             look(app);
         }
         theme::divider(ui);
+        // The same switch as the debugger's: watching has to be on for any of
+        // this to have anything to work from, and it is unhelpful to send
+        // somebody to another window to turn it on.
+        let was = app.dbg.autodoc;
+        ui.toggle_value(&mut app.dbg.autodoc, "AutoDoc")
+            .on_hover_text(
+                "Watch what the program does: which routines are called, what they \
+             write, how long their loops run. Everything in this window comes \
+             from it.",
+            );
+        if app.dbg.autodoc != was {
+            app.dbg.doc = crate::autodoc::Doc::default();
+            if !app.dbg.autodoc {
+                app.callflow.findings.clear();
+            }
+        }
+        theme::divider(ui);
         let watching = app.spec.bus.observer.enabled;
         ui.label(
             RichText::new(if watching {

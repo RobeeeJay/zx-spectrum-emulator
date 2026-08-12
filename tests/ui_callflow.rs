@@ -96,3 +96,40 @@ fn it_finds_the_loop_in_a_recording() {
         state.callflow.summary
     );
 }
+
+/// AutoDoc can be switched on from the call flow window, and it watches even
+/// with the debugger shut.
+///
+/// Turning it on used to take effect in the debugger's own frame, so switching
+/// it on from here with the debugger closed set a flag and watched nothing.
+#[test]
+fn autodoc_can_be_switched_on_from_the_call_flow_window() {
+    let mut app = app();
+    app.show_callflow = true;
+    app.show_debugger = false;
+    app.dbg.autodoc = false;
+
+    let mut h = Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+    assert!(
+        !h.state().spec.bus.observer.enabled,
+        "nothing should be watched before it is asked for"
+    );
+
+    h.get_by_label("AutoDoc").click();
+    h.run_steps(3);
+
+    assert!(h.state().dbg.autodoc, "the toggle did not take");
+    assert!(
+        h.state().spec.bus.observer.enabled,
+        "the switch is on but nothing is being watched, which is the bug this \
+         window used to have with the debugger closed"
+    );
+
+    // And off again.
+    h.get_by_label("AutoDoc").click();
+    h.run_steps(3);
+    assert!(!h.state().spec.bus.observer.enabled, "it should stop too");
+}

@@ -1146,9 +1146,6 @@ fn scroll_through_memory(app: &mut App, ui: &mut egui::Ui, top: f32) {
 /// sixty times a second for no reason: it is redone when the listing moves or
 /// the machine stops somewhere new.
 fn refresh_autodoc(app: &mut App) {
-    // Watching costs something on every memory access, so it is only done
-    // while there is something reading the results.
-    app.spec.bus.observer.enabled = app.dbg.autodoc;
     if !app.dbg.autodoc {
         if !app.dbg.doc.is_empty() {
             app.dbg.doc = crate::autodoc::Doc::default();
