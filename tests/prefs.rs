@@ -441,3 +441,57 @@ fn a_file_with_no_windows_open_is_not_the_same_as_one_that_never_said() {
     let silent = Prefs::parse("rom_dir = \"\"\n");
     assert_eq!(silent.open_windows, None);
 }
+
+/// Recordings remember where they were opened from, and not where a snapshot
+/// was. They live with the games they are of; sending somebody back to
+/// wherever they last opened a snapshot is sending them somewhere else.
+#[test]
+fn recordings_remember_their_own_directory() {
+    let mut prefs = Prefs::default();
+    prefs.remember_file(FileKind::Snapshot, std::path::Path::new("/snaps/game.z80"));
+    prefs.remember_file(
+        FileKind::Recording,
+        std::path::Path::new("/games/manic/manic.rzx"),
+    );
+
+    assert_eq!(
+        prefs.dir_for(FileKind::Recording),
+        Some(&std::path::PathBuf::from("/games/manic")),
+        "the recording's own directory, not the snapshot's"
+    );
+    assert_eq!(
+        prefs.dir_for(FileKind::Snapshot),
+        Some(&std::path::PathBuf::from("/snaps")),
+        "and the snapshot's is left where it was"
+    );
+
+    // It survives being written out and read back.
+    let text = prefs.to_text();
+    let read = Prefs::parse(&text);
+    assert_eq!(
+        read.recording_dir,
+        Some(std::path::PathBuf::from("/games/manic"))
+    );
+}
+
+/// Before a recording has ever been opened, the tapes are the best guess
+/// there is: a recording is of something, and that something came off a tape.
+#[test]
+fn recordings_start_where_the_tapes_are() {
+    let mut prefs = Prefs::default();
+    assert_eq!(prefs.dir_for(FileKind::Recording), None);
+
+    prefs.remember_file(FileKind::Tape, std::path::Path::new("/games/manic.tap"));
+    assert_eq!(
+        prefs.dir_for(FileKind::Recording),
+        Some(&std::path::PathBuf::from("/games")),
+        "wherever the games are"
+    );
+
+    prefs.remember_file(FileKind::Recording, std::path::Path::new("/rzx/manic.rzx"));
+    assert_eq!(
+        prefs.dir_for(FileKind::Recording),
+        Some(&std::path::PathBuf::from("/rzx")),
+        "and after that, wherever the recordings are"
+    );
+}

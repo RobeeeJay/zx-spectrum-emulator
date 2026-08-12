@@ -119,6 +119,11 @@ pub struct Prefs {
     pub tape_dir: Option<PathBuf>,
     /// Directory the last snapshot was opened from.
     pub snapshot_dir: Option<PathBuf>,
+    /// Directory the last recording was opened from or written to. Its own
+    /// rather than the snapshots': recordings are kept with the games they are
+    /// of, and sending somebody back to wherever they last opened a snapshot
+    /// is sending them somewhere else entirely.
+    pub recording_dir: Option<PathBuf>,
     /// Where each window was when the emulator last closed.
     pub windows: BTreeMap<String, WindowRect>,
     /// Display scale, as a multiple of the Spectrum's own pixels.
@@ -174,6 +179,7 @@ impl Prefs {
                 "rom_dir" => prefs.rom_dir = path,
                 "tape_dir" => prefs.tape_dir = path,
                 "snapshot_dir" => prefs.snapshot_dir = path,
+                "recording_dir" => prefs.recording_dir = path,
                 "display_scale" => prefs.display_scale = value.parse().ok(),
                 "overscan" => prefs.overscan = value.parse().ok(),
                 "open_windows" => {
@@ -216,6 +222,7 @@ impl Prefs {
         line(&mut s, "rom_dir", &self.rom_dir);
         line(&mut s, "tape_dir", &self.tape_dir);
         line(&mut s, "snapshot_dir", &self.snapshot_dir);
+        line(&mut s, "recording_dir", &self.recording_dir);
         if let Some(scale) = self.display_scale {
             s.push_str(&format!("display_scale = \"{scale}\"\n"));
         }
@@ -256,7 +263,8 @@ impl Prefs {
         match kind {
             FileKind::Rom => self.rom_dir = Some(dir),
             FileKind::Tape => self.tape_dir = Some(dir),
-            FileKind::Snapshot | FileKind::Recording => self.snapshot_dir = Some(dir),
+            FileKind::Snapshot => self.snapshot_dir = Some(dir),
+            FileKind::Recording => self.recording_dir = Some(dir),
         }
         self.save();
     }
@@ -275,7 +283,15 @@ impl Prefs {
         match kind {
             FileKind::Rom => self.rom_dir.as_ref(),
             FileKind::Tape => self.tape_dir.as_ref(),
-            FileKind::Snapshot | FileKind::Recording => self.snapshot_dir.as_ref(),
+            FileKind::Snapshot => self.snapshot_dir.as_ref(),
+            // Until one has been opened, wherever the games are is the best
+            // guess there is: a recording is of something, and that something
+            // came off a tape.
+            FileKind::Recording => self
+                .recording_dir
+                .as_ref()
+                .or(self.tape_dir.as_ref())
+                .or(self.snapshot_dir.as_ref()),
         }
     }
 }
@@ -285,8 +301,8 @@ pub enum FileKind {
     Rom,
     Tape,
     Snapshot,
-    /// An RZX recording, which is kept with the snapshots: they are opened
-    /// from much the same place.
+    /// An RZX recording. Kept where its game is rather than with the
+    /// snapshots, and remembered separately.
     Recording,
 }
 

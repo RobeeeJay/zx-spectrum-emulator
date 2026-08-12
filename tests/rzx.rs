@@ -324,3 +324,31 @@ fn every_string(h: &egui_kittest::Harness<'_, App>) -> Vec<String> {
     walk(&h.root(), &mut found);
     found
 }
+
+/// Opening a recording remembers where it came from, so the next one opens
+/// there. Nothing did, so the picker fell back to wherever a snapshot or a
+/// tape was last opened — which for most people is not where they keep
+/// recordings.
+#[test]
+fn loading_a_recording_remembers_its_directory() {
+    use zx_rustrum::prefs::FileKind;
+
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    assert_ne!(
+        app.prefs.dir_for(FileKind::Recording).map(|d| d.as_path()),
+        Some(std::path::Path::new("recordings")),
+        "the test would prove nothing if it were already set"
+    );
+
+    app.load_path(&path);
+    assert!(app.rzx.is_some(), "the recording should have loaded");
+    assert_eq!(
+        app.prefs.dir_for(FileKind::Recording).map(|d| d.as_path()),
+        Some(std::path::Path::new("recordings")),
+        "and the next Load recording should open where this one came from"
+    );
+}

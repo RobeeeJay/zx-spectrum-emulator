@@ -687,19 +687,32 @@ impl App {
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_else(|| "recording.rzx".to_string()),
         );
-        let dialog = match suggested.parent() {
-            Some(parent) if parent.is_dir() => dialog.set_directory(parent),
-            _ => dialog,
+        // Beside the tape if there is one, and otherwise wherever the last
+        // recording went.
+        let directory = suggested
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.prefs.dir_for(FileKind::Recording).cloned())
+            .filter(|dir| dir.is_dir());
+        let dialog = match directory {
+            Some(dir) => dialog.set_directory(dir),
+            None => dialog,
         };
         let Some(path) = dialog.save_file() else {
             self.set_status("Recording thrown away".to_string(), true);
             return;
         };
         match std::fs::write(&path, &bytes) {
-            Ok(()) => self.set_status(
-                format!("Wrote {} ({} bytes)", path.display(), bytes.len()),
-                false,
-            ),
+            Ok(()) => {
+                // Where recordings go, for the next time one is opened or
+                // written.
+                self.prefs.remember_file(FileKind::Recording, &path);
+                self.set_status(
+                    format!("Wrote {} ({} bytes)", path.display(), bytes.len()),
+                    false,
+                );
+            }
             Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
         }
     }
@@ -891,6 +904,10 @@ impl App {
             }
         };
         self.load_recording_bytes(path, &bytes);
+        // Where recordings are kept, for the next time one is opened. Only
+        // for a file that is really a recording on disk: an archive is
+        // remembered as whatever it was opened as.
+        self.prefs.remember_file(FileKind::Recording, path);
     }
 
     /// A recording from bytes rather than from a file, so one that arrived
