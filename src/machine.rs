@@ -819,7 +819,13 @@ impl SpectrumBus {
         // so the interrupt is raised there instead of here.
         self.irq_pending = self.playback.is_none();
         if self.irq_pending {
-            self.irq_raised = self.total_t();
+            // From the start of the frame, not from here. This is called once
+            // an instruction has carried the count past the frame's end, so
+            // the machine is already a few T-states into the new frame — and
+            // timing the ULA's window from that moment holds the line down for
+            // those few T-states longer than the hardware does, which lets an
+            // interrupt through that a real machine misses.
+            self.irq_raised = self.total_t() - self.tstates as u64;
         }
         if let Some(capture) = &mut self.capture {
             capture.end_frame(self.fetches);

@@ -407,3 +407,44 @@ fn a_caller_is_credited_with_what_its_callees_wrote() {
         "a routine with no callees has the same figure either way"
     );
 }
+
+/// When in the frame a routine ran is recorded in the frame's own T-states.
+///
+/// A 48K frame is 69,888 of them and a `u16` stops at 65,535, so anything
+/// entered in the last four and a half thousand — the bottom two character
+/// rows and the border under them — was recorded as having happened at 65,535.
+/// Every routine that ran down there looked as though it ran at the very end
+/// of the frame, which is where AutoDoc reads the beam from.
+#[test]
+fn when_in_the_frame_a_routine_ran_is_not_cut_off_at_65535() {
+    let mut spec = Spectrum::new();
+    for (at, bytes) in [
+        (0x8000u16, &[0xCD, 0x00, 0x90, 0x18, 0xFB][..]),
+        (0x9000, &[0x00, 0xC9][..]),
+    ] {
+        for (offset, byte) in bytes.iter().enumerate() {
+            spec.bus.poke(at + offset as u16, *byte);
+        }
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.bus.observer.enabled = true;
+
+    // Near the bottom of the picture, past where a u16 gives out.
+    spec.bus.tstates = 68_000;
+    spec.step_instruction();
+    spec.step_instruction();
+
+    let seen = spec
+        .bus
+        .observer
+        .routines
+        .get(&0x9000)
+        .expect("it was called");
+    assert!(
+        seen.entered_at.low > 65_535,
+        "it was called at T {}, and the frame is {} long",
+        seen.entered_at.low,
+        spec.bus.frame_t()
+    );
+}

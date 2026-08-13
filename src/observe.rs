@@ -47,6 +47,38 @@ pub struct Seen {
     pub high: u16,
 }
 
+/// The range of T-states within a frame a routine was seen to start at.
+///
+/// Its own type rather than [`Seen`], which holds registers and cannot hold a
+/// T-state: a 48K frame is 69,888 of them and a `u16` stops at 65,535, so
+/// anything entered in the last four and a half thousand — the bottom two
+/// character rows and the border below them — was recorded as having happened
+/// at 65,535. Every routine that ran down there looked as though it also ran
+/// at the very end of the frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Span {
+    pub low: u32,
+    pub high: u32,
+    seen: bool,
+}
+
+impl Span {
+    fn note(&mut self, at: u32) {
+        if self.seen {
+            self.low = self.low.min(at);
+            self.high = self.high.max(at);
+        } else {
+            self.low = at;
+            self.high = at;
+            self.seen = true;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.seen
+    }
+}
+
 impl Seen {
     fn note(&mut self, value: u16) {
         self.low = self.low.min(value);
@@ -140,7 +172,7 @@ pub struct Observed {
     /// relative to the beam. A routine that runs while the picture is being
     /// painted is timed against it; one that runs in the border above the
     /// picture is getting ready for the frame.
-    pub entered_at: Seen,
+    pub entered_at: Span,
     /// The handful of addresses it writes to, when there are few enough to be
     /// worth naming. A routine that always writes the same three bytes is
     /// keeping something.
@@ -763,9 +795,7 @@ impl Observer {
             {
                 stats.examples.push(registers);
             }
-            stats
-                .entered_at
-                .note(frame_t_now.min(u16::MAX as u32) as u16);
+            stats.entered_at.note(frame_t_now);
             if stats.frames == 0 || stats.last_frame != frame {
                 stats.frames += 1;
                 stats.last_frame = frame;

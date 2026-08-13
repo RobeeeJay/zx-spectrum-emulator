@@ -794,10 +794,10 @@ pub fn beam_phase(
     first_pixel_t: u32,
     frame_t: u32,
 ) -> &'static str {
-    if seen.calls == 0 || seen.entered_at.high == 0 {
+    if seen.calls == 0 || seen.entered_at.is_empty() {
         return "";
     }
-    let (low, high) = (seen.entered_at.low as u32, seen.entered_at.high as u32);
+    let (low, high) = (seen.entered_at.low, seen.entered_at.high);
     // 192 lines of 224 T-states is the picture on a 48K; near enough on the
     // others for the purpose of saying which third of the frame this is.
     let picture_ends = first_pixel_t + 192 * 224;
