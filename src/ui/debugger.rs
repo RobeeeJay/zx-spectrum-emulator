@@ -24,10 +24,6 @@ const INSN_W: f32 = 140.0;
 const COMMENT_W: f32 = 200.0;
 /// The gap between one column and the next.
 const COLUMN_GAP: f32 = 6.0;
-/// A row of the memory dump: address, eight bytes, eight characters. Fixed
-/// for the same reason the listing's columns are.
-const DUMP_W: f32 = 330.0;
-
 /// How wide the register panel is allowed to be, so what sits beside it has
 /// somewhere to be.
 const REGISTERS_W: f32 = 350.0;
@@ -85,6 +81,15 @@ fn row_height(ui: &egui::Ui) -> f32 {
     ui.spacing().interact_size.y
 }
 
+/// Which half of the memory dump a byte was clicked in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Column {
+    /// The two hex digits, which take hex digits.
+    Hex,
+    /// The characters beside them, which take characters.
+    Text,
+}
+
 pub struct DebuggerState {
     pub follow_pc: bool,
     /// Set when the machine stops at a breakpoint. The window asks to be
@@ -117,6 +122,12 @@ pub struct DebuggerState {
     pub goto_text: String,
     pub bp_text: String,
     pub mem_addr: u16,
+    /// The byte picked out in the memory dump, and which of its two columns
+    /// was clicked. Typing goes to it: hex digits in the numbers, characters
+    /// in the text beside them.
+    pub selected: Option<(u16, Column)>,
+    /// The first of the two hex digits, while only one has been typed.
+    pub half_typed: Option<u8>,
     pub mem_text: String,
 }
 
@@ -136,6 +147,8 @@ impl Default for DebuggerState {
             goto_text: String::new(),
             bp_text: String::new(),
             mem_addr: 0x4000,
+            selected: None,
+            half_typed: None,
             mem_text: String::new(),
         }
     }
@@ -1471,24 +1484,130 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             // Laid out row by row to the listing's height rather than left to
             // the label's own, so a line of the dump sits on the same pitch as
-            // a line of disassembly.
+            // a line of disassembly. A byte at a time rather than a line at a
+            // time, because each one can be clicked and typed over.
             let base = app.dbg.mem_addr & !0x7;
+            let mut clicked: Option<(u16, Column)> = None;
             for row in 0..16u16 {
                 let addr = base.wrapping_add(row * 8);
-                let mut line = format!("{addr:04X}  ");
-                for i in 0..8u16 {
-                    line.push_str(&format!("{:02X} ", app.peek(addr.wrapping_add(i))));
-                }
-                line.push(' ');
-                for i in 0..8u16 {
-                    let b = app.peek(addr.wrapping_add(i));
-                    line.push(if (0x20..0x7f).contains(&b) {
-                        b as char
-                    } else {
-                        '.'
-                    });
-                }
-                cell(ui, RichText::new(line).monospace(), DUMP_W);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    cell(ui, RichText::new(format!("{addr:04X}  ")).monospace(), 46.0);
+                    for i in 0..8u16 {
+                        let at = addr.wrapping_add(i);
+                        let byte = app.peek(at);
+                        if byte_cell(app, ui, at, Column::Hex, format!("{byte:02X} ")) {
+                            clicked = Some((at, Column::Hex));
+                        }
+                    }
+                    ui.add_space(6.0);
+                    for i in 0..8u16 {
+                        let at = addr.wrapping_add(i);
+                        let byte = app.peek(at);
+                        let glyph = if (0x20..0x7f).contains(&byte) {
+                            byte as char
+                        } else {
+                            '.'
+                        };
+                        if byte_cell(app, ui, at, Column::Text, glyph.to_string()) {
+                            clicked = Some((at, Column::Text));
+                        }
+                    }
+                });
+            }
+            if let Some((at, column)) = clicked {
+                app.dbg.selected = Some((at, column));
+                app.dbg.half_typed = None;
             }
         });
+
+    typing_into_memory(app, ui);
+}
+
+/// One byte of the dump: clickable, and marked when it is the one being typed
+/// into. Returns whether it was clicked.
+fn byte_cell(app: &App, ui: &mut egui::Ui, at: u16, column: Column, text: String) -> bool {
+    let chosen = app.dbg.selected == Some((at, column));
+    let mut rich = RichText::new(text).monospace();
+    if chosen {
+        rich = rich.color(Color32::BLACK).background_color(theme::AMBER);
+    } else if app.dbg.selected.map(|(a, _)| a) == Some(at) {
+        // The same byte in the other column, so the two halves of the dump
+        // agree about which byte is being looked at.
+        rich = rich.background_color(theme::MARK);
+    }
+    ui.add(
+        egui::Label::new(rich)
+            .sense(egui::Sense::click())
+            .selectable(false),
+    )
+    .clicked()
+}
+
+/// Type over the byte that was clicked.
+///
+/// Hex digits in the numbers, a digit at a time: the first is the top half of
+/// the byte and the second the bottom, and the second moves on to the next
+/// byte, which is how a hex editor has always worked. Characters in the text
+/// beside them, one byte each.
+fn typing_into_memory(app: &mut App, ui: &mut egui::Ui) {
+    let Some((at, column)) = app.dbg.selected else {
+        return;
+    };
+    // Nothing is typed over while a field has the keyboard: the address box
+    // and the listing's labels are full of characters that are also hex.
+    if ui.memory(|memory| memory.focused().is_some()) {
+        return;
+    }
+
+    // Every character of every text event, not the first of each: one event
+    // can carry more than one character, and a hex byte is two of them.
+    let typed: Vec<char> = ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::Text(text) => Some(text.chars()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    });
+    let mut at = at;
+    for c in typed {
+        match column {
+            Column::Hex => {
+                let Some(digit) = c.to_digit(16) else {
+                    continue;
+                };
+                match app.dbg.half_typed {
+                    None => {
+                        // Shown as it is typed: the top half goes in now, so
+                        // the byte on screen is what the next digit completes.
+                        let byte = (digit as u8) << 4 | (app.peek(at) & 0x0f);
+                        app.poke_byte(at, byte);
+                        app.dbg.half_typed = Some(digit as u8);
+                    }
+                    Some(high) => {
+                        app.poke_byte(at, high << 4 | digit as u8);
+                        app.dbg.half_typed = None;
+                        at = at.wrapping_add(1);
+                    }
+                }
+            }
+            Column::Text => {
+                if !c.is_control() {
+                    app.poke_byte(at, c as u8);
+                    at = at.wrapping_add(1);
+                }
+            }
+        }
+        app.dbg.selected = Some((at, column));
+    }
+
+    // Off the bottom of what is on show: bring the dump along with it.
+    let base = app.dbg.mem_addr & !0x7;
+    if at < base || at >= base.wrapping_add(16 * 8) {
+        app.dbg.mem_addr = at;
+        app.dbg.mem_text = format!("{at:04X}");
+    }
 }

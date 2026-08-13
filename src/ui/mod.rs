@@ -1439,6 +1439,41 @@ impl App {
         self.dbg.raise = true;
     }
 
+    /// Write a byte into the machine that is running, as the debugger does
+    /// when somebody types over one. The ROM ignores it, as the hardware does.
+    /// Show the byte behind a pixel of the picture in the memory dump.
+    ///
+    /// The coordinates are of the whole picture, border and all, so the border
+    /// is taken off before working out which cell of the display file the
+    /// pixel belongs to. A click on the border itself has no byte behind it
+    /// and is left alone.
+    pub fn show_pixel_in_memory(&mut self, px: usize, py: usize) {
+        let view = self.view();
+        let (Some(x), Some(y)) = (
+            px.checked_sub(view.border_x),
+            py.checked_sub(view.border_top),
+        ) else {
+            return;
+        };
+        if x >= 256 || y >= 192 {
+            return;
+        }
+        let addr = crate::machine::screen_bitmap_addr(y as u16, (x / 8) as u16);
+        self.dbg.mem_addr = addr;
+        self.dbg.mem_text = format!("{addr:04X}");
+        self.dbg.selected = Some((addr, crate::ui::debugger::Column::Hex));
+        self.dbg.half_typed = None;
+        self.show_debugger = true;
+        self.dbg.raise = true;
+    }
+
+    pub fn poke_byte(&mut self, addr: u16, value: u8) {
+        match &mut self.zx81 {
+            Some(zx) => zx.bus.poke(addr, value),
+            None => self.spec.bus.poke(addr, value),
+        }
+    }
+
     pub fn peek(&self, addr: u16) -> u8 {
         match &self.zx81 {
             Some(zx) => zx.bus.peek_raw(addr),
@@ -2243,7 +2278,7 @@ impl App {
                 // Take the whole panel and put the picture in the middle of it,
                 // so the space around the display is equal on all four sides.
                 let (area, response) =
-                    ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+                    ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
                 let painter = ui.painter_at(area);
                 // The picture sits in a bevelled surround rather than on bare
                 // black, as a set does in its case.
@@ -2269,6 +2304,20 @@ impl App {
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+
+                // Clicking a pixel picks out the byte behind it in the
+                // debugger's dump: "what draws this?" starts with knowing
+                // which byte it is, and counting rows and thirds by hand to
+                // work out a display address is a job nobody should be doing.
+                if response.clicked() {
+                    if let Some(at) = response.interact_pointer_pos() {
+                        if picture.contains(at) {
+                            let px = ((at.x - picture.left()) / self.scale) as usize;
+                            let py = ((at.y - picture.top()) / self.scale) as usize;
+                            self.show_pixel_in_memory(px, py);
+                        }
+                    }
+                }
 
                 // Where is the beam? Wherever the cursor is over the picture.
                 // The ZX81 draws with the CPU, so there is no beam to race.
