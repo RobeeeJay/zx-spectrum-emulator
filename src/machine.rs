@@ -182,8 +182,9 @@ pub struct SpectrumBus {
     pub undo: Option<Vec<(u16, u8)>>,
 
     /// When the interrupt line went down, in T-states since the machine
-    /// started. The ULA lets it go again after a few dozen, and that has to be
-    /// counted from when it went down.
+    /// started, while a recording is playing. The ULA lets it go again after a
+    /// few dozen, and a recording's frame boundary is not the T-state frame's,
+    /// so there it has to be counted from the moment it was asked for.
     pub irq_raised: u64,
 
     /// The recording being made, if one is. A frame of an RZX is a number of
@@ -818,15 +819,6 @@ impl SpectrumBus {
         // recording says it is — an instruction count, not a T-state count —
         // so the interrupt is raised there instead of here.
         self.irq_pending = self.playback.is_none();
-        if self.irq_pending {
-            // From the start of the frame, not from here. This is called once
-            // an instruction has carried the count past the frame's end, so
-            // the machine is already a few T-states into the new frame — and
-            // timing the ULA's window from that moment holds the line down for
-            // those few T-states longer than the hardware does, which lets an
-            // interrupt through that a real machine misses.
-            self.irq_raised = self.total_t() - self.tstates as u64;
-        }
         if let Some(capture) = &mut self.capture {
             capture.end_frame(self.fetches);
         }
@@ -1253,14 +1245,23 @@ impl Spectrum {
             // and then lets it go, so a program with interrupts disabled
             // across the top of the frame misses that one entirely.
             //
-            // Timed from when the line went down rather than from the start of
-            // a frame of T-states. The two are the same thing while the
-            // machine is running on its own, but a recording's frames are
-            // counted in opcode fetches and wander away from the T-state
-            // frame: measuring from the frame start threw the recording's
-            // interrupt away as missed, and holding it until it was taken ran
-            // the handler at the wrong moment instead.
-            let missed = self.bus.total_t().saturating_sub(self.bus.irq_raised) >= IRQ_LEN as u64;
+            // Measured against the frame while the machine runs on its own,
+            // which is where the ULA measures it from. A recording's frames
+            // are counted in opcode fetches and wander away from the T-state
+            // frame, so there the window runs from the moment the recording
+            // asked for the interrupt.
+            //
+            // Two rules rather than one clock for both. Timing the ordinary
+            // case from a stored T-state as well left that number behind after
+            // a reset — which is what loading a tape does — with the counter
+            // back at zero and the stored moment in the future, so the
+            // subtraction saturated, nothing was ever missed, and every
+            // interrupt was taken wherever in the frame the program happened
+            // to enable them.
+            let missed = match self.bus.playback {
+                None => self.bus.tstates >= IRQ_LEN,
+                Some(_) => self.bus.total_t().saturating_sub(self.bus.irq_raised) >= IRQ_LEN as u64,
+            };
             if missed {
                 self.bus.irq_pending = false;
             } else if self.cpu.interrupt(&mut self.bus) {

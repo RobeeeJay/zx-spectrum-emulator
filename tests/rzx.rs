@@ -353,15 +353,17 @@ fn loading_a_recording_remembers_its_directory() {
     );
 }
 
-/// The interrupt a recording asks for is taken, and one nobody takes in time
-/// is dropped.
+/// The interrupt a recording asks for is taken, and one the machine misses on
+/// its own is dropped.
 ///
 /// The ULA holds the interrupt line down for a few dozen T-states and then
 /// lets it go, so a program with interrupts disabled across the top of a frame
-/// misses that one. That window was timed from the start of a frame of
-/// T-states — but a recording's frames are counted in opcode fetches and
-/// wander away from the T-state frame, so the interrupt it asked for was
-/// thrown away as "missed" and the machine ran on without ever taking one.
+/// misses that one. That window is measured against the frame while the
+/// machine runs on its own — but a recording's frames are counted in opcode
+/// fetches and wander away from the T-state frame, so there it runs from the
+/// moment the recording asked. Measured against the frame in both worlds, the
+/// interrupt a recording asked for was thrown away as missed and the machine
+/// ran on without ever taking one.
 #[test]
 fn the_interrupt_window_is_timed_from_when_the_line_goes_down() {
     use zx_rustrum::machine::{Spectrum, IRQ_LEN};
@@ -382,6 +384,7 @@ fn the_interrupt_window_is_timed_from_when_the_line_goes_down() {
     while spec.bus.tstates < IRQ_LEN * 4 {
         spec.step_instruction();
     }
+    spec.bus.playback = Some(zx_rustrum::machine::Playback::default());
     spec.bus.raise_interrupt();
     spec.run_fetches(1);
     assert_eq!(
@@ -389,7 +392,7 @@ fn the_interrupt_window_is_timed_from_when_the_line_goes_down() {
         "the interrupt was asked for here and should have been taken here"
     );
 
-    // And one that nobody takes in time is let go, as the ULA lets it go.
+    // And one the machine misses on its own is let go, as the ULA lets it go.
     let mut spec = Spectrum::new();
     for at in 0x8000..0x8100u16 {
         spec.bus.poke(at, 0x00);
@@ -399,8 +402,7 @@ fn the_interrupt_window_is_timed_from_when_the_line_goes_down() {
     spec.cpu.im = 1;
     spec.cpu.iff1 = false;
     spec.bus.raise_interrupt();
-    let before = spec.bus.total_t();
-    while spec.bus.total_t() - before < IRQ_LEN as u64 * 2 {
+    while spec.bus.tstates < IRQ_LEN * 2 {
         spec.run_fetches(1);
     }
     spec.cpu.iff1 = true;
@@ -473,4 +475,55 @@ fn the_recordings_play_back_without_coming_adrift() {
             "{name} left the recorded input unread in {unused} of {played} frames"
         );
     }
+}
+
+/// A reset puts the T-state counter back to nothing, and the interrupt window
+/// has to go with it.
+///
+/// Timing the ordinary case from a stored moment left that number behind after
+/// a reset — which is what loading a tape does — with the counter back at zero
+/// and the stored moment in the future. The subtraction saturated, nothing was
+/// ever missed, and every interrupt was taken wherever in the frame the
+/// program happened to enable them: a game drawn against the interrupt then
+/// draws against nothing, which looks like the picture tearing itself apart.
+#[test]
+fn a_reset_does_not_leave_the_interrupt_window_open() {
+    use zx_rustrum::machine::{Spectrum, FRAME_T, IRQ_LEN};
+
+    let mut spec = Spectrum::new();
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+
+    // Run for a while, so anything remembered about the interrupt is from a
+    // frame far in the past, and then reset as loading a tape does.
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    for _ in 0..8 {
+        spec.run(FRAME_T);
+    }
+    spec.reset();
+
+    // A program that enables interrupts in the middle of a frame, long after
+    // the ULA would have let the line go.
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.cpu.iff1 = true;
+    // Well past the top of the frame first: an interrupt asked for up there is
+    // taken, and rightly.
+    while spec.bus.tstates < IRQ_LEN * 8 {
+        spec.run_fetches(1);
+    }
+    spec.bus.irq_pending = true;
+    spec.run_fetches(2);
+
+    assert_ne!(
+        spec.cpu.pc, 0x0038,
+        "the line was let go thousands of T-states ago and this interrupt \
+         should have gone with it"
+    );
 }
