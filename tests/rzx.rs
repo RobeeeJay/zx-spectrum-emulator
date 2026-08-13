@@ -527,3 +527,52 @@ fn a_reset_does_not_leave_the_interrupt_window_open() {
          should have gone with it"
     );
 }
+
+/// Playing back a recording of a real machine puts nothing on the screen that
+/// comes and goes.
+///
+/// A byte that alternates between two values frame after frame is text or a
+/// sprite being drawn and rubbed out again, which is what flickering looks
+/// like from the inside. SPIN's recording of Space Harrier on real hardware
+/// has none of it, so neither should our replay of it.
+#[test]
+fn a_recording_of_real_hardware_does_not_flicker_on_replay() {
+    let path = std::path::PathBuf::from("recordings/spaceharrier.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    if let Some(rom) = app.roms.rom48.clone() {
+        app.spec.load_rom(&rom);
+    }
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+
+    // Well inside the stretch that replays exactly, and in the game rather
+    // than on a menu.
+    while app.rzx.as_ref().map(|rzx| rzx.frame).unwrap_or(0) < 5000 {
+        app.advance(1.0 / 50.0);
+    }
+
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..10 {
+        app.advance(1.0 / 50.0);
+        frames.push((0x4000..0x5B00u32).map(|at| app.peek(at as u16)).collect());
+    }
+    let flickering = (0..frames[0].len())
+        .filter(|at| {
+            let values: Vec<u8> = frames.iter().map(|frame| frame[*at]).collect();
+            values
+                .windows(3)
+                .all(|three| three[0] == three[2] && three[0] != three[1])
+        })
+        .count();
+
+    assert_eq!(
+        flickering, 0,
+        "{flickering} bytes of the screen went back and forth every frame, and \
+         on the machine this was recorded from none did"
+    );
+}
