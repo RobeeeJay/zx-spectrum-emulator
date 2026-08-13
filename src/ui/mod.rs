@@ -201,8 +201,12 @@ pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("50%", 0.5),
     ("100%", 1.0),
     ("200%", 2.0),
-    ("Max", 20.0),
+    ("Max", MAX_SPEED),
 ];
+
+/// As fast as the emulator will go. The work per host frame is capped as well,
+/// so this is a ceiling rather than a promise.
+pub const MAX_SPEED: f32 = 20.0;
 
 /// Putting a window back where it was left takes a few frames, and sometimes
 /// does not take at all.
@@ -1600,6 +1604,18 @@ impl App {
         self.tape_ref().is_some_and(|t| t.playing)
     }
 
+    /// Whether the tape is actually loading something, as against sitting in
+    /// the silence at the end of a block.
+    ///
+    /// What the hurry-up is for is the loading; the pause at the end of a
+    /// block is where the program does something worth watching, and where the
+    /// tape stops if the block was the one that stops it. Running that at
+    /// twenty times speed goes past it before it can be seen.
+    pub fn tape_is_loading(&self) -> bool {
+        self.tape_ref()
+            .is_some_and(|t| t.playing && !t.in_block_pause())
+    }
+
     /// Clock of the running machine: tape times are in its T-states, and the
     /// ZX81's is not the Spectrum's.
     pub fn cpu_hz(&self) -> f64 {
@@ -1671,8 +1687,8 @@ impl App {
         if self.zx81.is_some() {
             // A ZX81 loads at about fifty bytes a second, so the boost matters
             // even more here than it does on a Spectrum.
-            let boost = if self.tape_boost() && self.tape_is_playing() {
-                8.0
+            let boost = if self.tape_boost() && self.tape_is_loading() {
+                MAX_SPEED
             } else {
                 1.0
             };
@@ -1712,9 +1728,10 @@ impl App {
             self.spec.bus.audio.flush();
             return;
         }
-        // Loading a real tape takes minutes; run faster while it moves.
-        let boost = if self.tape_boost() && self.tape_is_playing() {
-            8.0
+        // Loading a real tape takes minutes; run as fast as the emulator will
+        // go while it moves.
+        let boost = if self.tape_boost() && self.tape_is_loading() {
+            MAX_SPEED
         } else {
             1.0
         };

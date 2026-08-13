@@ -124,7 +124,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) -> Rect {
     app.tape.spun_at = now;
     let (left_pack, right_pack) = reel_scales(progress);
     let boosted = app.tape_boost();
-    if playing {
+    // Only while the tape is actually moving. A paused machine passes no
+    // T-states, so the deck stands still — and hubs that keep turning over a
+    // stopped tape say the opposite of what has happened.
+    if playing && app.running {
         app.tape.left_spin += dt * spin_rate(left_pack, boosted);
         app.tape.right_spin += dt * spin_rate(right_pack, boosted);
     }

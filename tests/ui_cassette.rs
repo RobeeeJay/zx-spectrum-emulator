@@ -156,7 +156,10 @@ fn app_with_tape() -> App {
 
 #[test]
 fn the_hubs_only_turn_while_the_tape_is_moving() {
-    let app = app_with_tape();
+    let mut app = app_with_tape();
+    // The machine has to be running as well as the tape threaded up: a paused
+    // machine passes no T-states, so the deck stands still.
+    app.running = true;
     let mut h = Harness::builder()
         .with_size([900.0, 900.0])
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
@@ -257,6 +260,7 @@ fn the_hubs_wind_on_once_per_frame_however_often_the_window_is_laid_out() {
     // do depends only on how much time has gone by.
     let mut app = app_with_tape();
     *app.tape_boost_mut() = false;
+    app.running = true;
     let mut h = Harness::builder()
         .with_size([900.0, 900.0])
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app);

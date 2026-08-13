@@ -764,6 +764,21 @@ impl Tape {
         Ok(Tape::from_blocks(file_name.to_string(), blocks))
     }
 
+    /// Whether the tape is sitting in the silence at the end of a block.
+    ///
+    /// Nothing is being loaded here: the pulses have stopped and the program
+    /// is doing whatever it does between blocks, which is usually drawing the
+    /// screen it has just loaded.
+    ///
+    /// Asked of the span rather than the phase. The pause is played as one
+    /// long silent pulse and the phase moves on the moment it is handed over,
+    /// so `Phase::BlockPause` is true for no time at all while the silence
+    /// itself lasts a second.
+    pub fn in_block_pause(&self) -> bool {
+        self.pause_span
+            .is_some_and(|(from, to)| self.clock >= from && self.clock < to)
+    }
+
     pub fn from_blocks(name: String, blocks: Vec<Block>) -> Tape {
         Tape {
             name,
