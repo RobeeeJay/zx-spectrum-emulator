@@ -1025,14 +1025,22 @@ impl App {
             max_speed: false,
         });
         self.spec.bus.playback = Some(crate::machine::Playback::default());
-        self.running = true;
+        // A machine that was paused stays paused: somebody who stopped it to
+        // look at something has not asked for a recording to start running the
+        // moment it is loaded, and the first frame of one is worth looking at.
+        let waiting = !self.running;
         // The notes belong beside the recording now: it is what is being read.
         self.reload_notes();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
         self.set_status(
-            format!(
-                "Playing {}{by}: {frames} frames. The keyboard is the recording's, not yours.",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ),
+            if waiting {
+                format!("Loaded {name}{by}: {frames} frames, paused. Press Run to play it.")
+            } else {
+                format!(
+                    "Playing {name}{by}: {frames} frames. The keyboard is the \
+                     recording's, not yours."
+                )
+            },
             false,
         );
     }

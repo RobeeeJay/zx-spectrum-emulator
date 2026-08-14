@@ -576,3 +576,58 @@ fn a_recording_of_real_hardware_does_not_flicker_on_replay() {
          on the machine this was recorded from none did"
     );
 }
+
+/// A machine that was paused stays paused when a recording is loaded into it.
+///
+/// Somebody who stopped the machine to look at something has not asked for a
+/// recording to start running the moment it arrives — and the frame it starts
+/// on is worth looking at. A machine that was running plays it straight away,
+/// as before.
+#[test]
+fn a_paused_machine_stays_paused_when_a_recording_is_loaded() {
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+
+    let mut paused = app();
+    paused.running = false;
+    paused.load_path(&path);
+    assert!(paused.rzx.is_some(), "the recording should have loaded");
+    assert!(
+        !paused.running,
+        "it was paused before, so it should still be paused"
+    );
+    assert!(
+        paused.status.contains("paused"),
+        "and say so: {:?}",
+        paused.status
+    );
+
+    // The machine is ready: the snapshot is in and the first frame is waiting.
+    assert_eq!(
+        paused.rzx.as_ref().map(|rzx| rzx.frame),
+        Some(0),
+        "at the first frame of the recording"
+    );
+    assert!(
+        paused.spec.bus.playback.is_some(),
+        "with the recording's input ready to be handed out"
+    );
+
+    // And pressing Run plays it.
+    paused.running = true;
+    for _ in 0..10 {
+        paused.advance(1.0 / 50.0);
+    }
+    assert!(
+        paused.rzx.as_ref().is_some_and(|rzx| rzx.frame > 0),
+        "once started, it should play"
+    );
+
+    // A machine that was running does not stop to ask.
+    let mut running = app();
+    running.running = true;
+    running.load_path(&path);
+    assert!(running.running, "it was running, so it plays straight away");
+}

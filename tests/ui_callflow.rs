@@ -49,6 +49,8 @@ fn it_finds_the_loop_in_a_recording() {
     if app.rzx.is_none() {
         return; // no ROMs on this machine
     }
+    // Loading leaves a paused machine paused; this test wants it playing.
+    app.running = true;
     app.callflow.looking = true;
     app.spec.bus.observer.enabled = true;
     if let Some(rzx) = app.rzx.as_mut() {
@@ -143,6 +145,7 @@ fn nothing_is_written_down_until_it_is_confirmed() {
     if app.rzx.is_none() {
         return;
     }
+    app.running = true;
     app.show_callflow = true;
     app.callflow.looking = true;
     app.spec.bus.observer.enabled = true;
@@ -238,6 +241,7 @@ fn clicking_a_loop_marks_its_row_in_the_debugger() {
     if app.rzx.is_none() {
         return;
     }
+    app.running = true;
     app.show_callflow = true;
     app.show_debugger = false;
     app.callflow.looking = true;
@@ -304,6 +308,7 @@ fn each_question_has_its_own_button() {
     if app.rzx.is_none() {
         return;
     }
+    app.running = true;
     app.show_callflow = true;
 
     // Notes of this test's own: the real ones beside the recording are the
@@ -391,6 +396,7 @@ fn the_keyboard_question_finds_and_labels_a_routine() {
     if app.rzx.is_none() {
         return;
     }
+    app.running = true;
     app.show_callflow = true;
     let scratch = std::env::temp_dir().join(format!("zxrs-keys-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).unwrap();
