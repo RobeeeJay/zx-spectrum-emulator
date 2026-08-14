@@ -26,6 +26,56 @@ fn beam_at(bus: &crate::machine::SpectrumBus, view: screen::View, px: usize, py:
     t.clamp(0, bus.frame_t() as i64 - 1) as u32
 }
 
+/// Draw the ULA's beam over the picture: a line along what it is painting now
+/// and a bright point where it has got to.
+///
+/// The line rather than only the point, because a point moving two pixels a
+/// T-state is a speck nobody can follow; the line says which raster line the
+/// machine is working on, which is what somebody watching a screen being
+/// drawn wants to know.
+fn draw_beam(
+    painter: &egui::Painter,
+    bus: &crate::machine::SpectrumBus,
+    view: screen::View,
+    picture: egui::Rect,
+    scale: f32,
+) {
+    let (x, y) = screen::pixel_at_t(
+        view,
+        bus.first_pixel_t(),
+        bus.model.t_per_line(),
+        bus.tstates,
+    );
+    let (width, height) = (
+        (view.border_x * 2 + 256) as i64,
+        (view.border_top + 192 + view.border_bottom) as i64,
+    );
+    // Off the picture is where the beam really is during the flyback, and
+    // drawing it at the edge would say it was somewhere it is not.
+    if y < 0 || y >= height {
+        return;
+    }
+    let at = |px: f32, py: f32| picture.min + egui::vec2(px * scale, py * scale);
+    let row = egui::Rect::from_min_max(at(0.0, y as f32), at(width as f32, y as f32 + 1.0));
+    painter.rect_filled(
+        row,
+        0.0,
+        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 36),
+    );
+
+    if (0..width).contains(&x) {
+        // Two pixels wide: that is how much of the line goes out in one
+        // T-state, so it is as narrow as the beam can honestly be drawn.
+        let spot =
+            egui::Rect::from_min_max(at(x as f32, y as f32), at(x as f32 + 2.0, y as f32 + 1.0));
+        painter.rect_filled(
+            spot,
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(255, 240, 180, 220),
+        );
+    }
+}
+
 /// ROM images found at startup, used when switching machines.
 #[derive(Default, Clone)]
 pub struct Roms {
@@ -2378,6 +2428,18 @@ impl App {
                             self.show_pixel_in_memory(px, py);
                         }
                     }
+                }
+
+                // The ULA's own beam, drawn where it has actually reached.
+                //
+                // Only worth showing while the machine is going slowly enough
+                // to see it: at full speed a frame of work is done between one
+                // repaint and the next, so the beam would sit at the top of
+                // the frame looking broken. The ZX81 has no ULA drawing a
+                // picture — the CPU does it — so there is no beam to show.
+                let crawling = self.speed < 1.0 || self.spec.bus.slow.enabled;
+                if crawling && self.zx81.is_none() {
+                    draw_beam(&painter, &self.spec.bus, self.view(), picture, self.scale);
                 }
 
                 // Where is the beam? Wherever the cursor is over the picture.

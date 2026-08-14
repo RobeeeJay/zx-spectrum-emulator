@@ -149,6 +149,25 @@ pub fn t_at_pixel(view: View, first_pixel_t: u32, t_per_line: u32, px: usize, py
     first_pixel_t as i64 + line * t_per_line as i64 + x.div_euclid(2) + DISPLAY_LEAD_T
 }
 
+/// Where the beam is at a given T-state: the other way round from
+/// [`t_at_pixel`].
+///
+/// In the picture's own coordinates, border included, so it can be drawn
+/// straight onto what is on screen. Two pixels go out per T-state, so a
+/// T-state is half a pixel of accuracy and the beam is a pair of pixels wide.
+/// The answer can be off the picture — during the top border the line is
+/// negative, and during the flyback it is past the bottom — which is a fact
+/// about where the beam is rather than something to clamp away.
+pub fn pixel_at_t(view: View, first_pixel_t: u32, t_per_line: u32, t: u32) -> (i64, i64) {
+    let since = t as i64 - first_pixel_t as i64 - DISPLAY_LEAD_T;
+    let line = since.div_euclid(t_per_line as i64);
+    let along = since.rem_euclid(t_per_line as i64);
+    (
+        along * 2 + view.border_x as i64,
+        line + view.border_top as i64,
+    )
+}
+
 /// Render 6912 bytes starting at logical address `base` as if they were video
 /// RAM. Used for previewing a detected back buffer.
 pub fn render_from(

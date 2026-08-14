@@ -267,3 +267,91 @@ fn racing_works_while_paused() {
         "moving the beam should change what is shown, with nothing running"
     );
 }
+
+/// Where the beam is at a T-state, and which T-state a pixel is drawn at, are
+/// the same question asked in opposite directions.
+#[test]
+fn the_beam_position_and_the_pixel_time_agree() {
+    use zx_rustrum::screen::{pixel_at_t, t_at_pixel, View};
+
+    let view = View::CROPPED;
+    let (first, per_line) = (14335u32, 224u32);
+
+    // Every other pixel across the display area, since two go out per T-state,
+    // and a spread of lines down it. Only the display area: the border to the
+    // left of a line is emitted before that line's pixels and belongs to the
+    // T-states of the line above, so asking where the beam is at that moment
+    // rightly answers with the line above.
+    for py in [
+        view.border_top,
+        view.border_top + 1,
+        view.border_top + 100,
+        view.border_top + 191,
+    ] {
+        for px in (view.border_x..view.border_x + 256).step_by(2) {
+            let t = t_at_pixel(view, first, per_line, px, py);
+            if t < 0 {
+                continue;
+            }
+            let (bx, by) = pixel_at_t(view, first, per_line, t as u32);
+            assert_eq!(
+                (bx, by),
+                (px as i64, py as i64),
+                "pixel ({px}, {py}) is drawn at T {t}, which puts the beam at \
+                 ({bx}, {by})"
+            );
+        }
+    }
+}
+
+/// The beam is where the machine has actually reached, and it travels down the
+/// picture as the frame goes on.
+///
+/// It is only worth drawing while the machine is going slowly enough to see:
+/// at full speed a frame of work happens between one repaint and the next, so
+/// the beam would sit at the top of the frame saying nothing. Slow draw, and
+/// any speed under a hundred per cent, leave it part-way through a frame.
+#[test]
+fn the_beam_travels_down_the_picture_as_the_frame_goes_on() {
+    use zx_rustrum::screen::{pixel_at_t, View};
+
+    let view = View::CROPPED;
+    let spec = zx_rustrum::machine::Spectrum::new();
+    let (first, per_line) = (spec.bus.first_pixel_t(), spec.bus.model.t_per_line());
+    let beam = |t: u32| pixel_at_t(view, first, per_line, t);
+
+    // At the start of a frame it is above the picture: the border at the top
+    // is drawn before the first pixel of the display.
+    let (_, top) = beam(0);
+    assert!(
+        top < view.border_top as i64,
+        "the frame starts above the picture, and the beam is at line {top}"
+    );
+
+    // And it works its way down, a line at a time, from wherever the first
+    // pixel of the display puts it.
+    let (_, mut last) = beam(first);
+    for line in 1..192i64 {
+        let (_, y) = beam(first + (line as u32) * per_line);
+        assert_eq!(y, last + 1, "line {line} should be one below the last");
+        last = y;
+    }
+    assert!(
+        last >= view.border_top as i64,
+        "by the end it should be well inside the picture, not at line {last}"
+    );
+
+    // Across a line it moves left to right, two pixels a T-state. Taken from
+    // the middle of a line, so ten T-states later is still the same line.
+    let middle = zx_rustrum::screen::t_at_pixel(
+        view,
+        first,
+        per_line,
+        view.border_x + 100,
+        view.border_top + 50,
+    ) as u32;
+    let (x0, y0) = beam(middle);
+    let (x1, y1) = beam(middle + 10);
+    assert_eq!(y1, y0, "ten T-states later is still the same line");
+    assert_eq!(x1 - x0, 20, "and ten T-states is twenty pixels");
+}
