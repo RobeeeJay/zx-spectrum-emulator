@@ -1112,8 +1112,13 @@ impl App {
                 }
             }
             if ended {
-                // The frame boundary is the recording's, so the interrupt is
-                // raised here rather than by the T-state count.
+                // The frame boundary is the recording's, so the video frame
+                // ends here and the interrupt is raised here — not wherever
+                // the T-state count happens to have reached. On the machine
+                // the recording was made on these were the same moment, and
+                // letting them drift apart puts every screen effect at the
+                // wrong height.
+                self.spec.bus.end_frame_here();
                 self.spec.bus.raise_interrupt();
                 due -= 1;
             }

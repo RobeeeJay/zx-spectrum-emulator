@@ -812,8 +812,28 @@ impl SpectrumBus {
         self.irq_raised = self.total_t();
     }
 
+    /// End the video frame here, wherever the T-state count has got to.
+    ///
+    /// For a recording, whose frames are counted in opcode fetches: on the
+    /// machine it was made on, that boundary *was* the start of a video frame,
+    /// because that is where the ULA's interrupt came from. Letting the
+    /// T-state frame run on its own beside it lets the two drift apart, and
+    /// then everything timed against the picture — which is most of what a
+    /// game does with the border and the display file — happens at the wrong
+    /// place on screen.
+    pub fn end_frame_here(&mut self) {
+        // Whatever is left of this T-state frame is the start of the next one.
+        self.tstates = 0;
+        self.finish_frame();
+    }
+
     pub fn end_frame(&mut self) {
         self.tstates -= self.model.frame_t();
+        self.finish_frame();
+    }
+
+    /// The housekeeping a finished frame needs, however it ended.
+    fn finish_frame(&mut self) {
         self.frame += 1;
         // While a recording is playing, the frame boundary is where the
         // recording says it is — an instruction count, not a T-state count —

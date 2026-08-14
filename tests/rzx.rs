@@ -631,3 +631,54 @@ fn a_paused_machine_stays_paused_when_a_recording_is_loaded() {
     running.load_path(&path);
     assert!(running.running, "it was running, so it plays straight away");
 }
+
+/// While a recording plays, its frames are the machine's frames.
+///
+/// A recording counts a frame in opcode fetches, and on the machine it was made
+/// on that boundary was the start of a video frame — that is where the ULA's
+/// interrupt came from. Letting the T-state frame run on beside it lets the two
+/// drift apart, and then everything timed against the picture happens at the
+/// wrong height: the interrupt was going off with the beam two hundred lines
+/// down, part-way through the screen it was meant to be starting.
+#[test]
+fn the_recordings_frame_is_the_video_frame() {
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    if let Some(rom) = app.roms.rom48.clone() {
+        app.spec.load_rom(&rom);
+    }
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+    app.running = true;
+
+    // A frame of the recording per call, so each one ends on a boundary the
+    // recording set. The video frame should have started again there.
+    let view = app.view();
+    for n in 0..40 {
+        app.advance(1.0 / 50.0);
+        let t = app.spec.bus.tstates;
+        assert!(
+            t < app.spec.bus.model.t_per_line(),
+            "frame {n} of the recording ended at T {t}, which is {} lines into \
+             a video frame that should have just begun",
+            t / app.spec.bus.model.t_per_line()
+        );
+        let (_, y) = zx_rustrum::screen::pixel_at_t(
+            view,
+            app.spec.bus.first_pixel_t(),
+            app.spec.bus.model.t_per_line(),
+            t,
+        );
+        let line = y - view.border_top as i64;
+        assert!(
+            line < -50,
+            "and the beam should be up in the border above the picture, not on \
+             line {line}"
+        );
+    }
+}
