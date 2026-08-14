@@ -779,6 +779,24 @@ impl Tape {
             .is_some_and(|(from, to)| self.clock >= from && self.clock < to)
     }
 
+    /// Whether the tape stops at the end of the pause it is in.
+    ///
+    /// The silence between two blocks of a multi-load is the loader getting
+    /// ready for the next one and nobody is watching it; the silence at the
+    /// end of the tape, or before a block that stops it, is where the program
+    /// takes over and where somebody has asked to be. Only the second is worth
+    /// coming back to normal speed for.
+    pub fn pause_ends_the_tape(&self) -> bool {
+        if !self.in_block_pause() {
+            return false;
+        }
+        match self.blocks.get(self.block + 1) {
+            None => true,
+            Some(Block::Pause(0)) | Some(Block::StopIf48k) => true,
+            Some(_) => false,
+        }
+    }
+
     pub fn from_blocks(name: String, blocks: Vec<Block>) -> Tape {
         Tape {
             name,

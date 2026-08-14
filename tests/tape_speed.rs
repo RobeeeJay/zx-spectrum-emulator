@@ -80,12 +80,11 @@ fn hurrying_the_tape_runs_at_the_emulators_top_speed() {
     );
 }
 
-/// The hurry-up is for the loading, not for the silence after it. The pause at
-/// the end of a block is where the program does something worth watching — and
-/// where the tape stops, if that block was the one that stops it — so the
-/// speed comes back to normal as the pause starts rather than after it.
+/// The hurry-up is for the loading, not for the silence the program is meant
+/// to be watched through. The last pause of a tape is where the loader hands
+/// over, so the speed comes back as that pause starts rather than after it.
 #[test]
-fn the_speed_comes_back_at_the_pause_after_a_block() {
+fn the_speed_comes_back_at_the_pause_the_tape_ends_on() {
     let Some(mut app) = app_with_tape() else {
         return;
     };
@@ -95,16 +94,19 @@ fn the_speed_comes_back_at_the_pause_after_a_block() {
         tape.playing = true;
     }
 
-    // Run until the block ends and the tape sits in its pause.
+    // Run until the tape reaches the silence it ends on.
     let mut reached = false;
-    for _ in 0..4000 {
+    for _ in 0..8000 {
         app.advance(1.0 / 60.0);
-        if app.tape_ref().is_some_and(|tape| tape.in_block_pause()) {
+        if app
+            .tape_ref()
+            .is_some_and(|tape| tape.pause_ends_the_tape())
+        {
             reached = true;
             break;
         }
     }
-    assert!(reached, "the tape should have reached the end of its block");
+    assert!(reached, "the tape should have reached its last pause");
 
     assert!(
         app.tape_is_playing(),
@@ -112,7 +114,8 @@ fn the_speed_comes_back_at_the_pause_after_a_block() {
     );
     assert!(
         !app.tape_is_loading(),
-        "but nothing is being loaded in the silence, so the hurry-up stops here"
+        "but nothing is being loaded in the silence it ends on, so the \
+         hurry-up stops here"
     );
 }
 
@@ -162,4 +165,107 @@ fn the_hubs_stand_still_while_the_machine_is_paused() {
         running,
         "but the hubs should not have moved while the machine was paused"
     );
+}
+
+/// The hurry-up only lets go for a pause that ends the tape.
+///
+/// The silence between two blocks of a multi-load is the loader getting ready
+/// for the next one and nobody is watching it. Coming back to normal speed
+/// through every one of them makes a hurried tape barely quicker than an
+/// unhurried one; the silence worth watching is the last one, or one before a
+/// block that stops the tape.
+#[test]
+fn only_the_pause_that_ends_the_tape_slows_down() {
+    use zx_rustrum::tape::Block;
+
+    let block = |bytes: usize| Block::Standard {
+        pause_ms: 1000,
+        data: vec![0xFF; bytes],
+    };
+
+    // Two blocks of data, so the first pause is a gap in the middle.
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.show_ram_map = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = true;
+    *app.tape_boost_mut() = true;
+    app.set_tape(Some(Tape::from_blocks(
+        "two.tap".into(),
+        vec![block(600), block(600)],
+    )));
+    if let Some(tape) = app.tape_mut() {
+        tape.playing = true;
+    }
+
+    let mut middle = false;
+    let mut last = false;
+    for _ in 0..8000 {
+        app.advance(1.0 / 60.0);
+        let Some(tape) = app.tape_ref() else { break };
+        if tape.in_block_pause() {
+            if tape.pause_ends_the_tape() {
+                last = true;
+                assert!(
+                    !app.tape_is_loading(),
+                    "the pause at the end of the tape is where the program \
+                     takes over, and is worth watching at normal speed"
+                );
+            } else {
+                middle = true;
+                assert!(
+                    app.tape_is_loading(),
+                    "a gap between two blocks is the loader getting ready, and \
+                     should stay hurried"
+                );
+            }
+        }
+        if !tape.playing {
+            break;
+        }
+    }
+    assert!(middle, "the tape should have had a gap between its blocks");
+    assert!(last, "and a pause at the end of it");
+}
+
+/// A pause before a block that stops the tape is the same thing as the last
+/// one: the loader is about to hand over.
+#[test]
+fn a_pause_before_a_stop_block_slows_down_too() {
+    use zx_rustrum::tape::Block;
+
+    let mut tape = Tape::from_blocks(
+        "stop.tap".into(),
+        vec![
+            Block::Standard {
+                pause_ms: 1000,
+                data: vec![0xFF; 400],
+            },
+            Block::Pause(0),
+            Block::Standard {
+                pause_ms: 1000,
+                data: vec![0xFF; 400],
+            },
+        ],
+    );
+    tape.playing = true;
+
+    let mut reached = false;
+    let mut now = 0u64;
+    for _ in 0..400_000 {
+        now += 200;
+        tape.level_at(now);
+        if tape.in_block_pause() {
+            reached = true;
+            assert!(
+                tape.pause_ends_the_tape(),
+                "the block after this pause stops the tape, so the pause ends it"
+            );
+            break;
+        }
+        if !tape.playing {
+            break;
+        }
+    }
+    assert!(reached, "the tape should have reached its first pause");
 }

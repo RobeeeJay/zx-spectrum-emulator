@@ -36,7 +36,6 @@ fn type_text(h: &mut Harness<'_, App>, text: &str) {
 #[test]
 fn clicking_the_picture_picks_out_the_byte_behind_it() {
     let mut app = app();
-    app.show_debugger = false;
     let view = app.view();
 
     // The top left of the picture proper, past the border.
@@ -46,7 +45,7 @@ fn clicking_the_picture_picks_out_the_byte_behind_it() {
         "the first byte of the display file"
     );
     assert_eq!(app.dbg.selected, Some((0x4000, Column::Hex)));
-    assert!(app.show_debugger, "and the debugger should come up with it");
+    assert!(app.dbg.raise, "and the debugger should be brought forward");
 
     // A pixel three rows down and ten cells along, which the display file's
     // thirds-and-rows order puts nowhere near the start.
@@ -203,4 +202,86 @@ fn typing_off_the_end_brings_the_dump_along() {
         0x8080,
         "the dump should have followed it"
     );
+}
+
+/// A click on the picture only means "where is this byte?" when the machine is
+/// stopped and the debugger is open to answer. A click on a running picture is
+/// somebody playing a game.
+#[test]
+fn the_picture_is_only_a_map_while_the_machine_is_stopped() {
+    let ask = |running: bool, debugger: bool| -> Option<(u16, Column)> {
+        let mut app = app();
+        app.running = running;
+        app.show_debugger = debugger;
+        app.dbg.selected = None;
+        let view = app.view();
+        app.show_pixel_in_memory(view.border_x + 16, view.border_top + 16);
+        app.dbg.selected
+    };
+
+    assert!(
+        ask(true, true).is_none(),
+        "the machine was running, so the click belongs to the game"
+    );
+    assert!(
+        ask(false, false).is_none(),
+        "the debugger was not open, so there is nowhere to show the answer"
+    );
+    assert!(
+        ask(false, true).is_some(),
+        "stopped with the debugger open, the click should pick a byte out"
+    );
+}
+
+/// Next frame runs to the end of the frame the machine is part-way through, so
+/// what is on screen is a picture the ULA has finished painting.
+#[test]
+fn next_frame_runs_to_the_end_of_the_frame() {
+    let mut app = app();
+    app.running = false;
+    // Part-way through a frame.
+    for _ in 0..40 {
+        app.step_machine();
+    }
+    let frame = app.frame_count();
+    let t = app.spec.bus.tstates;
+    assert!(t > 0, "it should be in the middle of a frame, at T {t}");
+
+    app.next_frame();
+
+    assert_eq!(
+        app.frame_count(),
+        frame + 1,
+        "it should have finished the frame it was in and stopped"
+    );
+    assert!(!app.running, "and stayed stopped");
+    assert!(
+        app.spec.bus.tstates < 2000,
+        "at the top of the next frame, not somewhere in the middle of it: T {}",
+        app.spec.bus.tstates
+    );
+}
+
+/// The button is there while the machine is stopped, and not while it runs.
+#[test]
+fn next_frame_is_offered_only_while_stopped() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    for running in [false, true] {
+        let mut app = app();
+        app.running = running;
+        let h = harness(app);
+        let enabled = h
+            .get_all_by_label("Next frame")
+            .next()
+            .map(|node| !node.accesskit_node().is_disabled())
+            .expect("the button should be in the video controls either way");
+        assert_eq!(
+            enabled,
+            !running,
+            "with the machine {}, the button should be {}",
+            if running { "running" } else { "stopped" },
+            if running { "greyed" } else { "live" }
+        );
+    }
 }

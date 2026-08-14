@@ -1441,6 +1441,44 @@ impl App {
 
     /// Write a byte into the machine that is running, as the debugger does
     /// when somebody types over one. The ROM ignores it, as the hardware does.
+    /// Run to the end of the frame the machine is part-way through.
+    ///
+    /// What is wanted is a picture the ULA has finished painting: stopping
+    /// wherever the machine happens to be leaves half a frame drawn and the
+    /// rest of it left over from before. So it runs to the frame boundary,
+    /// which is where the beam has finished the screen and gone back to the
+    /// top, and stops there.
+    pub fn next_frame(&mut self) {
+        self.running = false;
+        // Whatever it takes: this is one frame of work, and the point of it is
+        // to arrive at the boundary rather than to keep to real time.
+        let was = self.frame_count();
+        for _ in 0..32 {
+            match &mut self.zx81 {
+                Some(zx) => {
+                    let frame = zx.frame_t();
+                    zx.run(frame);
+                }
+                None => {
+                    self.spec.run(self.spec.bus.frame_t());
+                }
+            }
+            if self.frame_count() != was {
+                break;
+            }
+        }
+        self.dbg.follow_pc = true;
+        self.status = format!("Frame {}", self.frame_count());
+    }
+
+    /// Frames the machine has finished, whichever machine is running.
+    pub fn frame_count(&self) -> u64 {
+        match &self.zx81 {
+            Some(zx) => zx.bus.frame,
+            None => self.spec.bus.frame,
+        }
+    }
+
     /// Show the byte behind a pixel of the picture in the memory dump.
     ///
     /// The coordinates are of the whole picture, border and all, so the border
@@ -1448,6 +1486,12 @@ impl App {
     /// pixel belongs to. A click on the border itself has no byte behind it
     /// and is left alone.
     pub fn show_pixel_in_memory(&mut self, px: usize, py: usize) {
+        // Only while the machine is stopped and the debugger is open to show
+        // the answer. A click on a running picture is somebody playing a game,
+        // not somebody asking where a byte is.
+        if self.running || !self.show_debugger {
+            return;
+        }
         let view = self.view();
         let (Some(x), Some(y)) = (
             px.checked_sub(view.border_x),
@@ -1640,15 +1684,17 @@ impl App {
     }
 
     /// Whether the tape is actually loading something, as against sitting in
-    /// the silence at the end of a block.
+    /// the silence the program is meant to be watched through.
     ///
-    /// What the hurry-up is for is the loading; the pause at the end of a
-    /// block is where the program does something worth watching, and where the
-    /// tape stops if the block was the one that stops it. Running that at
-    /// twenty times speed goes past it before it can be seen.
+    /// Only the last pause of a tape, or one before a block that stops the
+    /// tape, is worth coming back to normal speed for: that is where the
+    /// loading ends and the program takes over. The silences between the
+    /// blocks of a multi-load are the loader getting ready for the next one,
+    /// and dropping to normal speed through every one of them makes a hurried
+    /// tape barely quicker than an unhurried one.
     pub fn tape_is_loading(&self) -> bool {
         self.tape_ref()
-            .is_some_and(|t| t.playing && !t.in_block_pause())
+            .is_some_and(|t| t.playing && !t.pause_ends_the_tape())
     }
 
     /// Clock of the running machine: tape times are in its T-states, and the
@@ -2006,6 +2052,21 @@ impl App {
             theme::toggle(ui, &mut self.overscan, "Overscan").on_hover_text(
                 "Show the whole border the ULA draws, not just a television's worth.",
             );
+
+            // One whole picture at a time, for watching a game draw itself.
+            // Only while it is stopped: a running machine is already doing
+            // this fifty times a second.
+            if ui
+                .add_enabled(!self.running, egui::Button::new("Next frame"))
+                .on_hover_text(
+                    "Run to the end of the frame the machine is in the middle \
+                     of, so the picture on screen is one the ULA has finished \
+                     painting. Only while it is paused.",
+                )
+                .clicked()
+            {
+                self.next_frame();
+            }
         });
     }
 
