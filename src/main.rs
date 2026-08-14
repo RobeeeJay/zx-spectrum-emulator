@@ -147,6 +147,51 @@ fn load_cli_files(
     (opened_tape, zx81_tape)
 }
 
+/// The window and dock icon: the artwork in `icon.png`, decoded at startup.
+///
+/// The drawn logo stands in if that cannot be read, so a corrupt or missing
+/// file costs an icon rather than the emulator.
+fn window_icon() -> eframe::egui::IconData {
+    const ART: &[u8] = include_bytes!("../icon.png");
+    match decode_png(ART) {
+        Some((rgba, width, height)) => eframe::egui::IconData {
+            rgba,
+            width,
+            height,
+        },
+        None => eframe::egui::IconData {
+            rgba: zx_rustrum::logo::rgba(256),
+            width: 256,
+            height: 256,
+        },
+    }
+}
+
+/// A PNG as RGBA, whatever it was stored as.
+fn decode_png(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(data));
+    let mut reader = decoder.read_info().ok()?;
+    let mut buffer = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    buffer.truncate(info.buffer_size());
+
+    // The icon has to be RGBA whatever the file holds; ours is RGB.
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buffer,
+        png::ColorType::Rgb => buffer
+            .chunks_exact(3)
+            .flat_map(|p| [p[0], p[1], p[2], 0xFF])
+            .collect(),
+        png::ColorType::Grayscale => buffer.iter().flat_map(|v| [*v, *v, *v, 0xFF]).collect(),
+        png::ColorType::GrayscaleAlpha => buffer
+            .chunks_exact(2)
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Indexed => return None,
+    };
+    Some((rgba, info.width, info.height))
+}
+
 fn main() -> eframe::Result<()> {
     // Created on first launch, so there is always a file to look at.
     let prefs = Prefs::load_or_create();
@@ -200,11 +245,7 @@ fn main() -> eframe::Result<()> {
     // Put the main window back where it was last time.
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(ui::APP_NAME)
-        .with_icon(eframe::egui::IconData {
-            rgba: zx_rustrum::logo::rgba(256),
-            width: 256,
-            height: 256,
-        });
+        .with_icon(window_icon());
     viewport = match prefs.window("main") {
         Some(r) => viewport
             .with_position([r.x, r.y])

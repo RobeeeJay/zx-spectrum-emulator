@@ -285,3 +285,39 @@ fn next_frame_is_offered_only_while_stopped() {
         );
     }
 }
+
+/// Next frame works every time it is pressed, not only the first.
+///
+/// Slow draw parks the CPU after a few writes, and its allowance is refilled
+/// only while the machine is running. Leaving it on for this meant the first
+/// press spent whatever allowance was left and every press after it did
+/// nothing at all — which is what somebody watching the beam, with slow draw
+/// on, would hit immediately.
+#[test]
+fn next_frame_works_every_time_it_is_pressed() {
+    let mut app = app();
+    app.running = false;
+    // A program that draws, or slow draw has nothing to park it for.
+    for (offset, byte) in [0x21u8, 0x00, 0x40, 0x77, 0x2C, 0x18, 0xFB]
+        .iter()
+        .enumerate()
+    {
+        app.spec.bus.poke(0x8000 + offset as u16, *byte);
+    }
+    app.spec.cpu.pc = 0x8000;
+    app.spec.bus.slow.enabled = true;
+
+    let mut frames = Vec::new();
+    for _ in 0..5 {
+        app.next_frame();
+        frames.push(app.frame_count());
+    }
+    for pair in frames.windows(2) {
+        assert_eq!(
+            pair[1],
+            pair[0] + 1,
+            "each press should finish one frame: {frames:?}"
+        );
+    }
+    assert!(app.spec.bus.slow.enabled, "and slow draw is left as it was");
+}

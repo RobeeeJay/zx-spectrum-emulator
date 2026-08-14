@@ -1585,8 +1585,15 @@ impl App {
     /// top, and stops there.
     pub fn next_frame(&mut self) {
         self.running = false;
-        // Whatever it takes: this is one frame of work, and the point of it is
-        // to arrive at the boundary rather than to keep to real time.
+        // At full speed, whatever else is set: the point is to arrive at the
+        // frame boundary. Slow draw parks the CPU after a few writes and its
+        // allowance is only refilled while the machine is running, so leaving
+        // it on meant this worked once — on whatever allowance was left — and
+        // then did nothing at all.
+        let slow = self.spec.bus.slow.enabled;
+        self.spec.bus.slow.enabled = false;
+        self.spec.bus.slow.begin_slice();
+
         let was = self.frame_count();
         for _ in 0..32 {
             match &mut self.zx81 {
@@ -1602,6 +1609,8 @@ impl App {
                 break;
             }
         }
+        self.spec.bus.slow.enabled = slow;
+        self.spec.bus.slow.begin_slice();
         self.dbg.follow_pc = true;
         self.status = format!("Frame {}", self.frame_count());
     }

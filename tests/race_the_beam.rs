@@ -472,3 +472,55 @@ fn the_picture_is_what_the_beam_painted() {
         );
     }
 }
+
+/// How the picture is paced: its contents change once per emulated frame, and
+/// it is presented at whatever rate the host repaints.
+///
+/// The window asks for a repaint every pass, so how often it is *drawn* is the
+/// desktop's business — sixty times a second, or a hundred and twenty. What is
+/// drawn changes only when the ULA finishes a frame, so no repaint can ever
+/// catch a half-painted picture, however the two rates line up.
+#[test]
+fn the_picture_changes_once_per_emulated_frame() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{App, Roms};
+
+    // A program that changes the screen every frame, so each finished picture
+    // is different from the last.
+    let mut spec = Spectrum::new();
+    for (offset, byte) in [0x3Cu8, 0x32, 0x00, 0x40, 0x18, 0xFA].iter().enumerate() {
+        spec.bus.poke(0x8000 + offset as u16, *byte);
+    }
+    spec.cpu.pc = 0x8000;
+    let mut app = App::with_roms(spec, String::new(), Roms::default(), None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = true;
+
+    for host in [60.0f32, 120.0] {
+        let start = app.frame_count();
+        let mut pictures = 0usize;
+        let mut last: Vec<u8> = Vec::new();
+        for _ in 0..120 {
+            app.advance(1.0 / host);
+            let now = app.spec.bus.screen_prev.clone();
+            if now != last {
+                pictures += 1;
+                last = now;
+            }
+        }
+        let frames = (app.frame_count() - start) as usize;
+        assert!(
+            pictures <= frames + 1,
+            "at {host} Hz, {pictures} different pictures came out of {frames} \
+             finished frames, so something was shown that no frame had finished"
+        );
+        assert!(
+            pictures + 1 >= frames,
+            "at {host} Hz, {frames} frames finished but only {pictures} pictures \
+             were shown, so finished frames went missing"
+        );
+    }
+}
