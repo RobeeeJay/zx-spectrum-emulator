@@ -32,3 +32,64 @@ fn the_icon_decodes_to_rgba() {
         "every pixel accounted for"
     );
 }
+
+/// The icon is shaped the way macOS shapes one: the artwork inside a rounded
+/// square with clear space around it, so it sits in the dock at the same
+/// visual size as every other icon rather than as a full-bleed square.
+#[test]
+fn the_icon_is_shaped_like_a_macos_icon() {
+    use zx_rustrum::appicon::shaped;
+
+    // A solid square of artwork, so anything transparent in the result is the
+    // shaping rather than the picture.
+    let (width, height) = (64u32, 64u32);
+    let art: Vec<u8> = (0..width * height)
+        .flat_map(|_| [0xC0, 0x40, 0x20])
+        .collect();
+    let size = 512u32;
+    let icon = shaped(&art, width, height, size);
+    assert_eq!(icon.len(), (size * size * 4) as usize);
+
+    let alpha = |x: u32, y: u32| icon[((y * size + x) * 4 + 3) as usize];
+    let colour = |x: u32, y: u32| {
+        let at = ((y * size + x) * 4) as usize;
+        [icon[at], icon[at + 1], icon[at + 2]]
+    };
+
+    // The middle is the artwork, solid.
+    assert_eq!(alpha(size / 2, size / 2), 255, "the middle should be solid");
+    assert_eq!(colour(size / 2, size / 2), [0xC0, 0x40, 0x20]);
+
+    // The corners are clear: both the margin Apple leaves and the rounding.
+    for (x, y) in [(0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)] {
+        assert_eq!(alpha(x, y), 0, "the corner at ({x}, {y}) should be clear");
+    }
+
+    // There is a margin all the way round, so the artwork does not reach the
+    // edge of the canvas.
+    let margin = (size as f32 * (1024.0 - 824.0) / 2.0 / 1024.0) as u32;
+    assert_eq!(
+        alpha(size / 2, margin / 2),
+        0,
+        "the space above the artwork should be clear"
+    );
+    assert_eq!(
+        alpha(size / 2, margin + 4),
+        255,
+        "and the artwork should start just inside it"
+    );
+
+    // The edge is drawn smoothly rather than as a staircase: all the way round
+    // the shape there are pixels that are neither in nor out.
+    let part = (0..size * size)
+        .filter(|i| {
+            let a = icon[(i * 4 + 3) as usize];
+            a > 0 && a < 255
+        })
+        .count();
+    assert!(
+        part > size as usize,
+        "the edge should be drawn smoothly, and only {part} pixels are part-way \
+         in"
+    );
+}

@@ -153,11 +153,15 @@ fn load_cli_files(
 /// file costs an icon rather than the emulator.
 fn window_icon() -> eframe::egui::IconData {
     const ART: &[u8] = include_bytes!("../icon.png");
+    const SIZE: u32 = 512;
     match decode_png(ART) {
-        Some((rgba, width, height)) => eframe::egui::IconData {
-            rgba,
-            width,
-            height,
+        Some((pixels, width, height)) => eframe::egui::IconData {
+            // Shaped the way macOS shapes an icon: the artwork inside a
+            // rounded square with clear space around it, so it sits in the
+            // dock at the same visual size as everything else.
+            rgba: zx_rustrum::appicon::shaped(&pixels, width, height, SIZE),
+            width: SIZE,
+            height: SIZE,
         },
         None => eframe::egui::IconData {
             rgba: zx_rustrum::logo::rgba(256),
@@ -175,7 +179,7 @@ fn decode_png(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     let info = reader.next_frame(&mut buffer).ok()?;
     buffer.truncate(info.buffer_size());
 
-    // The icon has to be RGBA whatever the file holds; ours is RGB.
+    // Kept as RGBA whatever the file holds; ours is RGB.
     let rgba = match info.color_type {
         png::ColorType::Rgba => buffer,
         png::ColorType::Rgb => buffer

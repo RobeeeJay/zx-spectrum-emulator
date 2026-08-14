@@ -1,6 +1,7 @@
 //! ZX Spectrum 48K emulator with cycle-accurate Z80 emulation and live
 //! debugging views.
 
+pub mod appicon;
 pub mod audio;
 pub mod audio_out;
 pub mod autodoc;
