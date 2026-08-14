@@ -448,3 +448,47 @@ fn when_in_the_frame_a_routine_ran_is_not_cut_off_at_65535() {
         spec.bus.frame_t()
     );
 }
+
+/// How much of a frame a program spends waiting for the interrupt.
+///
+/// A game that waits on HALT does no work while it waits, and the count of M1
+/// cycles spent there is the difference between a program that is short of
+/// time and one that is idling. Without it, a frame that runs 13,000
+/// instructions looks busy whether 8,000 of them were the CPU sitting still or
+/// not.
+#[test]
+fn time_spent_halted_is_counted() {
+    let mut spec = Spectrum::new();
+    // DI so nothing wakes it, then HALT for good.
+    spec.bus.poke(0x8000, 0xF3);
+    spec.bus.poke(0x8001, 0x76);
+    spec.cpu.pc = 0x8000;
+
+    let before = spec.cpu.halted_fetches;
+    for _ in 0..500 {
+        spec.step_instruction();
+    }
+    let halted = spec.cpu.halted_fetches - before;
+    assert!(
+        halted > 400,
+        "it halted almost immediately and should have spent the rest of those \
+         steps there, not {halted}"
+    );
+    assert!(spec.cpu.halted, "and it should still be halted");
+
+    // A program that is working counts none of it.
+    let mut spec = Spectrum::new();
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.cpu.pc = 0x8000;
+    let before = spec.cpu.halted_fetches;
+    for _ in 0..50 {
+        spec.step_instruction();
+    }
+    assert_eq!(
+        spec.cpu.halted_fetches - before,
+        0,
+        "a program running NOPs is not waiting for anything"
+    );
+}

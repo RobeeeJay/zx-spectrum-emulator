@@ -90,6 +90,9 @@ pub struct Z80 {
     pub iff2: bool,
     pub im: u8,
     pub halted: bool,
+    /// M1 cycles spent halted, for measuring how much of a frame a program
+    /// spends waiting for the interrupt.
+    pub halted_fetches: u64,
 
     /// MEMPTR / WZ, observable through `BIT n,(HL)` and block I/O.
     pub wz: u16,
@@ -142,6 +145,7 @@ impl Z80 {
             iff2: false,
             im: 0,
             halted: false,
+            halted_fetches: 0,
             wz: 0,
             q: 0,
             prev_q: 0,
@@ -304,6 +308,7 @@ impl Z80 {
         self.defer_int = false;
 
         if self.halted {
+            self.halted_fetches += 1;
             // The halt state is not a re-run of the HALT opcode: the CPU keeps
             // performing M1 cycles so refresh continues, with PC — the address
             // *after* the HALT — on the bus. That matters on a Spectrum, where
