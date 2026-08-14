@@ -871,7 +871,13 @@ impl SpectrumBus {
             1 => screen_attr_offset(line as u16, cell),
             2 => screen_bitmap_offset(line as u16, cell + 1),
             3 => screen_attr_offset(line as u16, cell + 1),
-            _ => return 0xff,
+            // The four T-states in eight when the ULA is not fetching. The bus
+            // is not driven then, and what is on it is the last byte the ULA
+            // put there — the attribute of the second cell of the pair. It
+            // does not read back as $FF: an IO read is stalled to a free slot
+            // before it samples, so every such read landed in here, and a game
+            // that waits for a particular byte to come back waited for ever.
+            _ => screen_attr_offset(line as u16, cell + 1),
         };
         self.video(offset)
     }
