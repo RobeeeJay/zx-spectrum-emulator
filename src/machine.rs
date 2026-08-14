@@ -222,8 +222,16 @@ pub struct SpectrumBus {
     /// display file at any one moment is not what a television showed. Reading
     /// it at whatever moment the window repaints makes such a line blink.
     pub painted: Vec<u8>,
-    /// How many raster lines of this frame have been copied into `painted`.
-    painted_lines: u32,
+    /// How many character cells of this frame have been copied into `painted`,
+    /// counting across each line and then down.
+    ///
+    /// A cell rather than a whole line: the ULA fetches a cell every four
+    /// T-states, and a game racing the beam writes to a cell the moment that
+    /// cell has been fetched — often several times within one line. Copying a
+    /// whole line the moment the beam entered it took the version from before
+    /// any of those writes, which is a frame late for every sprite drawn
+    /// behind the beam within a line.
+    painted_cells: u32,
     /// Keyboard matrix: one byte per half-row, bit clear = key down.
     pub keys: [u8; 8],
     pub ear: bool,
@@ -293,7 +301,7 @@ impl SpectrumBus {
             border_prev_start: 7,
             screen_prev: vec![0; 6912],
             painted: vec![0; 6912],
-            painted_lines: 0,
+            painted_cells: 0,
             keys: [0xff; 8],
             ear: false,
             speaker: false,
@@ -468,35 +476,42 @@ impl SpectrumBus {
     /// frame: between those two, nothing can change a line without the version
     /// the beam saw having been kept first.
     pub fn catch_up_painting(&mut self) {
-        let reached = self.line_reached();
-        self.paint_lines_to(reached);
+        let reached = self.cells_reached();
+        self.paint_cells_to(reached);
     }
 
-    /// Copy lines into the painted frame up to, but not including, `upto`.
-    fn paint_lines_to(&mut self, upto: u32) {
-        while self.painted_lines < upto {
-            let line = self.painted_lines as u16;
-            // The display file's thirds-and-rows order, and the attribute row
-            // that goes with the line.
+    /// Copy cells into the painted frame up to, but not including, `upto`.
+    fn paint_cells_to(&mut self, upto: u32) {
+        while self.painted_cells < upto {
+            let line = (self.painted_cells / 32) as u16;
+            let cell = (self.painted_cells % 32) as u16;
+            // The display file's thirds-and-rows order, and the attribute
+            // that goes with the cell.
             let from = ((line & 0xc0) << 5) | ((line & 0x07) << 8) | ((line & 0x38) << 2);
             let attr = 0x1800 + (line / 8) * 32;
-            for cell in 0..32u16 {
-                let byte = self.video(from + cell);
-                self.painted[(from + cell) as usize] = byte;
-                let colour = self.video(attr + cell);
-                self.painted[(attr + cell) as usize] = colour;
-            }
-            self.painted_lines += 1;
+            self.painted[(from + cell) as usize] = self.video(from + cell);
+            self.painted[(attr + cell) as usize] = self.video(attr + cell);
+            self.painted_cells += 1;
         }
     }
 
-    /// How many raster lines of the picture the beam has finished.
-    fn line_reached(&self) -> u32 {
+    /// How many character cells of the picture the ULA has fetched.
+    ///
+    /// One every four T-states along a line, thirty-two to a line, and the
+    /// fetch runs two T-states ahead of the pixels it puts out.
+    fn cells_reached(&self) -> u32 {
         let first = self.first_pixel_t();
-        if self.tstates < first {
+        if self.tstates + 2 < first {
             return 0;
         }
-        ((self.tstates - first) / self.model.t_per_line() + 1).min(192)
+        let since = self.tstates + 2 - first;
+        let per_line = self.model.t_per_line();
+        let line = since / per_line;
+        if line >= 192 {
+            return 192 * 32;
+        }
+        let along = (since % per_line) / 4;
+        (line * 32 + along.min(32)).min(192 * 32)
     }
 
     /// Read a byte of the frame as the ULA painted it.
@@ -893,7 +908,7 @@ impl SpectrumBus {
     fn finish_frame(&mut self) {
         // Whatever the beam had left to paint, so the frame handed on is a
         // whole one.
-        self.paint_lines_to(192);
+        self.paint_cells_to(192 * 32);
         self.frame += 1;
         // While a recording is playing, the frame boundary is where the
         // recording says it is — an instruction count, not a T-state count —
@@ -908,7 +923,7 @@ impl SpectrumBus {
         // than what the display file holds now. A game that races the beam has
         // already rubbed out the lines it drew before the beam reached them.
         self.screen_prev.copy_from_slice(&self.painted);
-        self.painted_lines = 0;
+        self.painted_cells = 0;
         std::mem::swap(&mut self.border_events, &mut self.border_prev);
         self.border_prev_start = self.border_start;
         self.border_start = self.border;

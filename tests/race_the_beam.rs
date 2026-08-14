@@ -524,3 +524,42 @@ fn the_picture_changes_once_per_emulated_frame() {
         );
     }
 }
+
+/// The beam is followed a character cell at a time, not a line at a time.
+///
+/// The ULA fetches a cell every four T-states, and a game racing the beam
+/// writes to a cell the moment that cell has been fetched — several times
+/// within one line. Copying a whole line the moment the beam entered it took
+/// the version from before all of those writes, so anything drawn behind the
+/// beam within a line was a frame late.
+#[test]
+fn the_painted_frame_follows_the_beam_cell_by_cell() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    let line = 100u16;
+    let at = 0x4000 | ((line & 0xc0) << 5) | ((line & 0x07) << 8) | ((line & 0x38) << 2);
+    let line_starts = spec.bus.first_pixel_t() + line as u32 * spec.bus.model.t_per_line();
+
+    // Part-way along the line: the ULA has fetched the first sixteen cells.
+    spec.bus.tstates = line_starts + 16 * 4;
+    // One cell behind the beam and one ahead of it.
+    spec.bus.write(at + 4, 0xAA);
+    spec.bus.write(at + 24, 0x55);
+
+    spec.bus.tstates = spec.bus.frame_t();
+    spec.bus.end_frame();
+
+    assert_eq!(
+        spec.bus.video_painted(at - 0x4000 + 4),
+        0x00,
+        "the beam had already fetched that cell, so what was written after it \
+         belongs to the next frame"
+    );
+    assert_eq!(
+        spec.bus.video_painted(at - 0x4000 + 24),
+        0x55,
+        "and it had not reached this one, so what was written reaches the screen"
+    );
+}
