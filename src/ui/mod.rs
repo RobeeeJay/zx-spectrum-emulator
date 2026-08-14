@@ -740,6 +740,63 @@ impl App {
         }
     }
 
+    /// Where a snapshot should go by default: beside the tape in the deck,
+    /// under the same name. A machine with nothing loaded has nothing to be
+    /// named after, so it gets a plain one.
+    pub fn snapshot_path(&self) -> std::path::PathBuf {
+        match &self.tape_path {
+            Some(path) => path.with_extension("sna"),
+            None => std::path::PathBuf::from("snapshot.sna"),
+        }
+    }
+
+    /// Write the machine as it stands out as a `.sna`.
+    ///
+    /// A snapshot is the machine's registers and its RAM, and nothing about
+    /// where the tape had reached or what the sound was doing: those are not
+    /// in the format, and a snapshot that claimed to hold them would be
+    /// lying about what comes back.
+    pub fn save_snapshot(&mut self) {
+        if self.on_zx81() {
+            self.set_status("The ZX81 has no snapshot format here".to_string(), true);
+            return;
+        }
+        let bytes = snapshot::save_sna(&self.spec);
+        let suggested = self.snapshot_path();
+        let dialog = rfd::FileDialog::new()
+            .add_filter("Snapshot", &["sna"])
+            .set_file_name(
+                suggested
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "snapshot.sna".to_string()),
+            );
+        let directory = suggested
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.prefs.dir_for(FileKind::Snapshot).cloned())
+            .filter(|dir| dir.is_dir());
+        let dialog = match directory {
+            Some(dir) => dialog.set_directory(dir),
+            None => dialog,
+        };
+        let Some(path) = dialog.save_file() else {
+            self.set_status("Snapshot not saved".to_string(), false);
+            return;
+        };
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => {
+                self.prefs.remember_file(FileKind::Snapshot, &path);
+                self.set_status(
+                    format!("Wrote {} ({} bytes)", path.display(), bytes.len()),
+                    false,
+                );
+            }
+            Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
+        }
+    }
+
     /// Stop recording and ask where to put it.
     ///
     /// The dialog opens beside the tape in the deck, under the same name with
@@ -2045,6 +2102,18 @@ impl App {
                             Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
                         }
                     }
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(!self.on_zx81(), egui::Button::new("Save snapshot…"))
+                    .on_hover_text(
+                        "Write the machine as it stands to a .sna, to be loaded \
+                         back later or carried to another emulator.",
+                    )
+                    .clicked()
+                {
+                    self.save_snapshot();
                     ui.close();
                 }
                 ui.separator();

@@ -465,3 +465,23 @@ fn closing_a_window_lets_it_be_placed_again_when_it_comes_back() {
         "and reopening should position it once more"
     );
 }
+
+/// Save snapshot is in the File menu, and not offered on a ZX81 — there is no
+/// snapshot format for it here.
+#[test]
+fn the_file_menu_offers_to_save_a_snapshot() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let mut h = harness();
+    h.get_by_label("File").click();
+    h.run_steps(3);
+
+    let save = h
+        .get_all_by_label_contains("Save snapshot")
+        .next()
+        .expect("the File menu should offer to save one");
+    assert!(
+        !save.accesskit_node().is_disabled(),
+        "and it should be live on a Spectrum"
+    );
+}

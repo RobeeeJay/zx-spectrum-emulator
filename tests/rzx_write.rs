@@ -160,3 +160,74 @@ fn a_recording_is_named_after_the_tape_in_the_deck() {
         "and with a tape in the deck, beside it under the same name"
     );
 }
+
+/// A snapshot saved from a running machine loads back into the same machine.
+///
+/// The whole point of one: stop where you are, come back to it later. What it
+/// does not carry is where the tape had reached or what the sound was doing —
+/// the format has no room for them, and a snapshot that claimed to hold them
+/// would be lying about what comes back.
+#[test]
+fn a_snapshot_saved_from_a_running_machine_comes_back() {
+    use zx_rustrum::ui::{App, Roms};
+
+    // A program that counts in memory, so the machine has state worth keeping.
+    let mut spec = Spectrum::new();
+    for (offset, byte) in [0x21u8, 0x00, 0x90, 0x34, 0x18, 0xFC].iter().enumerate() {
+        spec.bus.poke(0x8000 + offset as u16, *byte);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+
+    let mut app = App::with_roms(spec, String::new(), Roms::default(), None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = true;
+    for _ in 0..5 {
+        app.advance(1.0 / 50.0);
+    }
+
+    let counted = app.peek(0x9000);
+    assert!(counted > 0, "the program should have counted something");
+    let (pc, sp, hl) = (app.spec.cpu.pc, app.spec.cpu.sp, app.spec.cpu.hl());
+    let bytes = snapshot::save_sna(&app.spec);
+
+    let mut back = Spectrum::new();
+    snapshot::load_sna(&mut back, &bytes).expect("it should load");
+    assert_eq!(back.cpu.pc, pc, "the program counter comes back");
+    assert_eq!(back.cpu.sp, sp, "and the stack pointer");
+    assert_eq!(back.cpu.hl(), hl);
+    assert_eq!(
+        back.bus.peek_raw(0x9000),
+        counted,
+        "and what it had counted so far"
+    );
+    assert_eq!(
+        back.bus.peek_raw(0x8000),
+        0x21,
+        "with the program still in place"
+    );
+}
+
+/// A snapshot goes beside the tape it is of, under the same name — where
+/// somebody looking for a saved game of it would look.
+#[test]
+fn a_snapshot_is_named_after_the_tape_in_the_deck() {
+    use zx_rustrum::ui::{App, Roms};
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    assert_eq!(
+        app.snapshot_path(),
+        std::path::PathBuf::from("snapshot.sna"),
+        "with nothing loaded there is nothing to be named after"
+    );
+
+    app.tape_path = Some(std::path::PathBuf::from("/games/jetpac.tzx"));
+    assert_eq!(
+        app.snapshot_path(),
+        std::path::PathBuf::from("/games/jetpac.sna"),
+        "and with a tape in the deck, beside it under the same name"
+    );
+}
