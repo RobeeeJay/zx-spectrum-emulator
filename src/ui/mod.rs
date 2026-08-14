@@ -361,6 +361,10 @@ pub struct App {
     pub race_the_beam: bool,
     /// Beam position under the cursor last frame, in T-states.
     pub beam_t: Option<u32>,
+    /// The frame being raced: a copy of the machine taken at the interrupt,
+    /// run forward to wherever the cursor is. Only ever set while the machine
+    /// is stopped.
+    pub race: Option<crate::race::Race>,
 
     pub ram: ram_map::RamMapState,
     pub dbg: debugger::DebuggerState,
@@ -446,6 +450,7 @@ impl App {
             scale: 2.0,
             overscan: true,
             race_the_beam: false,
+            race: None,
             beam_t: None,
             ram: ram_map::RamMapState::default(),
             dbg: debugger::DebuggerState::default(),
@@ -1894,6 +1899,22 @@ impl App {
         &self.screen_pixels
     }
 
+    /// The machine as it stood `t` T-states into the frame being raced.
+    ///
+    /// The snapshot is taken the first time it is asked for, and again
+    /// whenever the machine has moved since — stepping an instruction makes
+    /// the frame that was being raced somebody else's.
+    fn raced_to(&mut self, t: u32) -> &Spectrum {
+        let stale = self
+            .race
+            .as_ref()
+            .is_none_or(|race| !race.is_of(&self.spec));
+        if stale {
+            self.race = Some(crate::race::Race::start(&self.spec));
+        }
+        self.race.as_mut().expect("just made one").at(t)
+    }
+
     /// Is the machine going slowly enough to watch the picture being drawn?
     ///
     /// The beam is shown and the picture is drawn as it is painted under the
@@ -1924,6 +1945,11 @@ impl App {
         if !self.running {
             return;
         }
+        // Racing the beam is a way of looking at a stopped machine: it replays
+        // one frame from its interrupt, and a machine that is running has
+        // moved on to another frame before the cursor has been read.
+        self.race_the_beam = false;
+        self.race = None;
         if self.zx81.is_some() {
             // A ZX81 loads at about fifty bytes a second, so the boost matters
             // even more here than it does on a Spectrum.
@@ -2073,18 +2099,23 @@ impl App {
         // machine stopped between two writes would show the last of them as
         // the beam's position rather than where the beam actually is.
         self.spec.bus.catch_up_painting();
-        match self.beam_t.filter(|_| self.race_the_beam) {
+        // Racing replays a frame rather than reading the machine, so the
+        // pixels are borrowed out of the way of the copy being run.
+        let mut pixels = std::mem::take(&mut self.screen_pixels);
+        match self.beam_t.filter(|_| self.race_the_beam && !self.running) {
             Some(beam) => {
-                screen::render_racing(&self.spec.bus, view, &mut self.screen_pixels, flash, beam)
+                let raced = self.raced_to(beam);
+                screen::render_racing(&raced.bus, view, &mut pixels, flash, beam);
             }
             // While the machine is crawling, the picture is the one being
             // painted, so that it builds under the beam rather than sitting
             // still until the frame ends.
             None if self.crawling() => {
-                screen::render_painting(&self.spec.bus, view, &mut self.screen_pixels, flash)
+                screen::render_painting(&self.spec.bus, view, &mut pixels, flash)
             }
-            None => screen::render(&self.spec.bus, view, &mut self.screen_pixels, flash),
+            None => screen::render(&self.spec.bus, view, &mut pixels, flash),
         }
+        self.screen_pixels = pixels;
         let img =
             ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels);
         match &mut self.screen_tex {
@@ -2226,11 +2257,19 @@ impl App {
 
             theme::divider(ui);
             theme::group_label(ui, "Video");
-            theme::toggle(ui, &mut self.race_the_beam, "Race the beam").on_hover_text(
-                "Hover the picture to see the frame half-drawn: everything up to \
-                     the cursor is what the ULA has put out so far, the rest is the \
-                     previous frame, dimmed. Works while paused too.",
-            );
+            // Only while stopped: the frame is replayed from its interrupt,
+            // which means being able to hold the machine still and run a copy
+            // of it instead.
+            ui.add_enabled_ui(!self.running, |ui| {
+                theme::toggle(ui, &mut self.race_the_beam, "Race the beam").on_hover_text(
+                    "Replay the next frame from its interrupt. Hover the picture and \
+                     everything above the cursor is the screen as the machine had it \
+                     by the time the beam reached that point — every instruction up to \
+                     there executed, and no more. Below it is what the display file \
+                     holds at that moment, dimmed, since the ULA has not put it out \
+                     yet. Stopped machines only.",
+                );
+            });
             theme::toggle(ui, &mut self.overscan, "Overscan").on_hover_text(
                 "Show the whole border the ULA draws, not just a television's worth.",
             );

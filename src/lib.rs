@@ -18,6 +18,7 @@ pub mod notes;
 pub mod observe;
 pub mod prefs;
 pub mod profiler;
+pub mod race;
 pub mod resources;
 pub mod rzx;
 pub mod screen;

@@ -691,6 +691,7 @@ struct Pulse {
     level: Option<bool>,
 }
 
+#[derive(Clone)]
 pub struct Tape {
     pub name: String,
     pub blocks: Vec<Block>,

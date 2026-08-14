@@ -215,6 +215,7 @@ impl Ay {
 }
 
 /// Mixes the beeper and the AY into a stream of samples.
+#[derive(Clone)]
 pub struct Audio {
     pub enabled: bool,
     pub volume: f32,
@@ -286,6 +287,14 @@ impl Audio {
         self.t_per_sample = self.cpu_hz / sample_rate;
         self.queue_cap = (sample_rate * 0.25) as usize;
         self.queue = Some(queue);
+    }
+
+    /// Stop sending samples anywhere.
+    ///
+    /// The queue is shared with the sound device, so a copy of a machine holds
+    /// the same one and would play its own sound over the real machine's.
+    pub fn detach(&mut self) {
+        self.queue = None;
     }
 
     pub fn set_cpu_hz(&mut self, hz: f64) {

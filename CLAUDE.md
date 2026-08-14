@@ -57,14 +57,31 @@ watches the bus; an opcode fetched above `$8000` with bit 6 clear is fed to the
 CPU as a NOP while the ULA turns it into eight pixels. Emulating it at that
 level is what makes hi-res programs work without special cases.
 
-**Racing the beam shows two different things either side of it.** Behind the
-beam is what the ULA actually painted — the border and attributes as they were
-at each T-state, which is where a raster effect lives. Ahead of it is what the
-display file holds *now*, drawn plainly with one border colour, and dimmed to
-say it has not been painted yet. So the screen carries the machine's execution
-on one side and the program's intention on the other. It used to show the
-previous frame ahead of the beam, which is what a television does and tells you
-nothing about the program.
+**Racing the beam replays a frame; it does not read the picture.** A copy of
+the machine is taken at the interrupt that starts a frame and run forward to
+wherever the cursor is (`src/race.rs`), so what is on screen is the machine as
+it stood after every instruction up to that T-state and none after it: the
+display file part-written, the border wherever it had been set, the registers
+where they had got to. Behind the cursor is what the ULA painted on the way
+there; ahead of it is what the display file holds at that moment, dimmed,
+because the ULA has not put it out yet. Reading the live picture instead — what
+this used to do — shows a single moment of the machine either way, which
+answers nothing about when within the frame anything happened.
+
+It only works on a stopped machine, and starting one switches it off: a running
+machine is somewhere else by the time the cursor has been read. The copy is
+silent and records nothing (a copy shares the sound queue, and would play its
+own frame over the real one). Going down the screen runs the copy on from where
+it is; going back up starts the frame again, because nothing can be
+un-executed. A downward sweep of all 192 lines costs 59µs and an upward one
+13ms, so no cleverness is needed.
+
+**The picture is the frame being painted while the machine crawls**, and the
+last finished frame otherwise. Holding the finished frame is what stops a
+repaint catching a picture half drawn at full speed; under slow draw it would
+freeze the picture for the seconds an emulated frame takes while the beam
+crawled over it. Both are what the ULA put out, never the display file as it
+stands.
 
 **Sync is treated the way a television treats it.** A pulse held for at least a
 line is a vertical sync and pulls the picture back to the top; a shorter one is

@@ -115,6 +115,7 @@ const TABLE_LEN: usize = (FRAME_T_128 + 512) as usize;
 
 /// Slow-motion drawing: stop the CPU after a fixed number of writes to the
 /// watched area so the screen visibly fills in over several host frames.
+#[derive(Clone)]
 pub struct SlowDraw {
     pub enabled: bool,
     /// Writes allowed per host frame before the CPU is parked.
@@ -156,6 +157,7 @@ pub enum Slot {
     Ram(usize),
 }
 
+#[derive(Clone)]
 pub struct SpectrumBus {
     pub model: Model,
     /// 16K (48K machine) or 32K (128K machine) of ROM.
@@ -1263,6 +1265,7 @@ pub struct Undo {
     pub frames_completed: u32,
 }
 
+#[derive(Clone)]
 pub struct Spectrum {
     pub cpu: Z80,
     pub bus: SpectrumBus,

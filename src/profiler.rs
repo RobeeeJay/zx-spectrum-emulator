@@ -108,6 +108,7 @@ struct Frame {
     child_t: u64,
 }
 
+#[derive(Clone)]
 pub struct Profiler {
     pub running: bool,
     pub runs: Vec<ProfileRun>,
