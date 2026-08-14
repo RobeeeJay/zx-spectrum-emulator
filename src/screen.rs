@@ -115,13 +115,18 @@ pub const STALE_BRIGHTNESS: f32 = 2.0 / 3.0;
 /// it draws whichever bank the ULA is showing. `flash_on` alternates every 16
 /// frames, as the ULA does.
 pub fn render(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool) {
+    // What the ULA painted, line by line, rather than what the display file
+    // holds at this instant. A game that races the beam draws a line ahead of
+    // the beam and rubs it out behind, so the display file at any one moment
+    // is missing whatever it has just rubbed out — and reading it then makes
+    // that line blink on and off.
     draw(
         out,
         view,
         flash_on,
         true,
         bus,
-        &|offset| bus.video(offset),
+        &|offset| bus.video_painted(offset),
         None,
     );
 }

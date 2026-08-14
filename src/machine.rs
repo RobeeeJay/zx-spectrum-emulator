@@ -214,6 +214,16 @@ pub struct SpectrumBus {
     /// of the screen the beam has not reached yet can show what is still on
     /// the glass rather than what the CPU has since written.
     pub screen_prev: Vec<u8>,
+    /// The frame as the ULA has painted it so far: each line copied out of the
+    /// display file at the moment the beam reached it.
+    ///
+    /// A game that races the beam writes to a line just after the beam has
+    /// passed it and puts it back before the beam comes round again, so the
+    /// display file at any one moment is not what a television showed. Reading
+    /// it at whatever moment the window repaints makes such a line blink.
+    pub painted: Vec<u8>,
+    /// How many raster lines of this frame have been copied into `painted`.
+    painted_lines: u32,
     /// Keyboard matrix: one byte per half-row, bit clear = key down.
     pub keys: [u8; 8],
     pub ear: bool,
@@ -282,6 +292,8 @@ impl SpectrumBus {
             border_prev: Vec::with_capacity(4096),
             border_prev_start: 7,
             screen_prev: vec![0; 6912],
+            painted: vec![0; 6912],
+            painted_lines: 0,
             keys: [0xff; 8],
             ear: false,
             speaker: false,
@@ -444,6 +456,51 @@ impl SpectrumBus {
     /// A byte of the display file as it was at the end of the last frame.
     #[inline]
     pub fn video_prev(&self, offset: u16) -> u8 {
+        self.screen_prev
+            .get(offset as usize & 0x1fff)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Copy out every line the beam has passed since this was last asked.
+    ///
+    /// Called before anything writes to the screen, and again at the end of the
+    /// frame: between those two, nothing can change a line without the version
+    /// the beam saw having been kept first.
+    pub fn catch_up_painting(&mut self) {
+        let reached = self.line_reached();
+        self.paint_lines_to(reached);
+    }
+
+    /// Copy lines into the painted frame up to, but not including, `upto`.
+    fn paint_lines_to(&mut self, upto: u32) {
+        while self.painted_lines < upto {
+            let line = self.painted_lines as u16;
+            // The display file's thirds-and-rows order, and the attribute row
+            // that goes with the line.
+            let from = ((line & 0xc0) << 5) | ((line & 0x07) << 8) | ((line & 0x38) << 2);
+            let attr = 0x1800 + (line / 8) * 32;
+            for cell in 0..32u16 {
+                let byte = self.video(from + cell);
+                self.painted[(from + cell) as usize] = byte;
+                let colour = self.video(attr + cell);
+                self.painted[(attr + cell) as usize] = colour;
+            }
+            self.painted_lines += 1;
+        }
+    }
+
+    /// How many raster lines of the picture the beam has finished.
+    fn line_reached(&self) -> u32 {
+        let first = self.first_pixel_t();
+        if self.tstates < first {
+            return 0;
+        }
+        ((self.tstates - first) / self.model.t_per_line() + 1).min(192)
+    }
+
+    /// Read a byte of the frame as the ULA painted it.
+    pub fn video_painted(&self, offset: u16) -> u8 {
         self.screen_prev
             .get(offset as usize & 0x1fff)
             .copied()
@@ -834,6 +891,9 @@ impl SpectrumBus {
 
     /// The housekeeping a finished frame needs, however it ended.
     fn finish_frame(&mut self) {
+        // Whatever the beam had left to paint, so the frame handed on is a
+        // whole one.
+        self.paint_lines_to(192);
         self.frame += 1;
         // While a recording is playing, the frame boundary is where the
         // recording says it is — an instruction count, not a T-state count —
@@ -844,11 +904,11 @@ impl SpectrumBus {
         }
         self.screen_writes = self.screen_writes_acc;
         self.screen_writes_acc = 0;
-        // Keep the finished frame; the renderer needs it for the part of the
-        // screen the ULA has not redrawn yet.
-        let bank = self.screen_bank() * 0x4000;
-        self.screen_prev
-            .copy_from_slice(&self.ram[bank..bank + 6912]);
+        // Keep the finished frame: what the ULA painted, line by line, rather
+        // than what the display file holds now. A game that races the beam has
+        // already rubbed out the lines it drew before the beam reached them.
+        self.screen_prev.copy_from_slice(&self.painted);
+        self.painted_lines = 0;
         std::mem::swap(&mut self.border_events, &mut self.border_prev);
         self.border_prev_start = self.border_start;
         self.border_start = self.border;
@@ -929,6 +989,10 @@ impl Bus for SpectrumBus {
             }
         }
         if (SCREEN_START..SCREEN_END).contains(&addr) {
+            // Whatever the beam has already put out is kept before this write
+            // can change it: a game racing the beam rubs a line out the moment
+            // it has been painted.
+            self.catch_up_painting();
             self.screen_writes_acc += 1;
             if self.breaks.screen {
                 self.break_hit.get_or_insert(Event::Screen(addr));

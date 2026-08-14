@@ -408,3 +408,67 @@ fn the_beam_is_above_the_picture_when_the_interrupt_fires() {
         );
     }
 }
+
+/// What the screen shows is what the ULA painted, line by line — not what the
+/// display file holds at the moment somebody looks at it.
+///
+/// A game that races the beam draws a line just before the beam reaches it and
+/// rubs it out just after the beam has passed, so the line is on the screen for
+/// the whole frame and in the display file for only part of it. Reading the
+/// display file to draw the picture makes such a line blink on and off, which
+/// is what Space Harrier's text was doing.
+#[test]
+fn the_picture_is_what_the_beam_painted() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    let line = 74u16;
+    // Where that line lives in the display file, and when the ULA paints it.
+    let at = 0x4000 | ((line & 0xc0) << 5) | ((line & 0x07) << 8) | ((line & 0x38) << 2);
+    let paints_at = spec.bus.first_pixel_t() + line as u32 * spec.bus.model.t_per_line();
+
+    for _ in 0..3 {
+        // Ahead of the beam: draw, in white on black so there is something to
+        // see.
+        let attr = 0x5800 + (line / 8) * 32;
+        spec.bus.tstates = paints_at - 4000;
+        for cell in 0..8u16 {
+            spec.bus.write(at + cell, 0xFF);
+            spec.bus.write(attr + cell, 0x07);
+        }
+        // Behind it: rub out.
+        spec.bus.tstates = paints_at + 4000;
+        for cell in 0..8u16 {
+            spec.bus.write(at + cell, 0x00);
+        }
+        spec.bus.tstates = spec.bus.frame_t();
+        spec.bus.end_frame();
+
+        // The display file has nothing there, and the picture has the line.
+        assert_eq!(
+            spec.bus.video(at - 0x4000),
+            0x00,
+            "the program rubbed it out, so the display file holds nothing"
+        );
+        assert_eq!(
+            spec.bus.video_painted(at - 0x4000),
+            0xFF,
+            "but the beam had already painted it, so the picture keeps it"
+        );
+
+        // And the picture that is actually drawn shows it, which is the half
+        // of this that the screen depends on.
+        let view = zx_rustrum::screen::View::CROPPED;
+        let mut out = vec![0u8; view.width() * view.height() * 4];
+        zx_rustrum::screen::render(&spec.bus, view, &mut out, false);
+        let py = view.border_top + line as usize;
+        let px = view.border_x + 4;
+        let pixel = &out[(py * view.width() + px) * 4..][..3];
+        assert_ne!(
+            pixel,
+            [0, 0, 0],
+            "the line the beam painted should be lit on the rendered screen"
+        );
+    }
+}
