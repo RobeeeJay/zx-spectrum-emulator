@@ -566,10 +566,14 @@ pub fn parse_tzx(data: &[u8]) -> Result<Vec<Block>, String> {
                 blocks.push(Block::Info("hardware type".into()));
             }
             0x35 => {
-                let id = r.text(10)?;
+                // Sixteen bytes of name, then the length. Reading ten of them
+                // took the length from the last four characters of the name,
+                // which are spaces: a block claiming 0x20202020 bytes, and a
+                // tape that would not load.
+                let id = r.text(16)?;
                 let len = r.u32()? as usize;
                 r.bytes(len)?;
-                blocks.push(Block::Info(format!("custom info: {id}")));
+                blocks.push(Block::Info(format!("custom info: {}", id.trim())));
             }
             0x5a => {
                 r.bytes(9)?;

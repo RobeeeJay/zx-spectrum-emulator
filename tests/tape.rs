@@ -430,3 +430,47 @@ fn a_blocks_progress_runs_through_the_pause_it_ends_with() {
         "and reach the end of the block: {readings:?}"
     );
 }
+
+/// A TZX custom info block names itself in sixteen bytes, not ten.
+///
+/// Reading ten took the block's length from the last four characters of its
+/// name — spaces, which is a block claiming 0x20202020 bytes — and the rest of
+/// the tape was unreadable behind it. Sidewize carries one, holding its POKEs,
+/// and would not load at all.
+#[test]
+fn a_custom_info_block_is_stepped_over_whole() {
+    use zx_rustrum::tape::{parse_tzx, Block};
+
+    let mut tzx: Vec<u8> = Vec::new();
+    tzx.extend_from_slice(b"ZXTape!\x1a");
+    tzx.extend_from_slice(&[1, 20]);
+
+    // A custom info block: sixteen bytes of name, a length, then the info.
+    let info = b"POKE 40000,0";
+    tzx.push(0x35);
+    tzx.extend_from_slice(b"POKEs           ");
+    tzx.extend_from_slice(&(info.len() as u32).to_le_bytes());
+    tzx.extend_from_slice(info);
+
+    // And a standard block after it, which is what goes missing when the
+    // block before is not stepped over properly.
+    let data = vec![0xFFu8, 0x01, 0x02, 0xFC];
+    tzx.push(0x10);
+    tzx.extend_from_slice(&1000u16.to_le_bytes());
+    tzx.extend_from_slice(&(data.len() as u16).to_le_bytes());
+    tzx.extend_from_slice(&data);
+
+    let blocks = parse_tzx(&tzx).expect("it should read");
+    assert_eq!(blocks.len(), 2, "the custom info and the block after it");
+    match &blocks[0] {
+        Block::Info(text) => assert!(
+            text.contains("POKEs"),
+            "the block should be named by all sixteen bytes: {text:?}"
+        ),
+        other => panic!("expected the custom info, got {other:?}"),
+    }
+    match &blocks[1] {
+        Block::Standard { data: found, .. } => assert_eq!(found, &data),
+        other => panic!("expected the standard block, got {other:?}"),
+    }
+}
