@@ -50,12 +50,27 @@ fn draw_beam(
         (view.border_x * 2 + 256) as i64,
         (view.border_top + 192 + view.border_bottom) as i64,
     );
-    // Off the picture is where the beam really is during the flyback, and
-    // drawing it at the edge would say it was somewhere it is not.
+    let at = |px: f32, py: f32| picture.min + egui::vec2(px * scale, py * scale);
+
+    // Where it is, in the machine's own terms, so it can be read rather than
+    // judged by eye. The line is counted from the first line of the display,
+    // so the top border is negative — which is where the beam is when the
+    // frame interrupt goes off.
+    let line = y - view.border_top as i64;
+    painter.text(
+        picture.min + egui::vec2(4.0, 4.0),
+        egui::Align2::LEFT_TOP,
+        format!("T {} · line {line}", bus.tstates),
+        egui::FontId::monospace(11.0),
+        egui::Color32::from_rgba_unmultiplied(255, 240, 180, 200),
+    );
+
+    // Off the picture is where the beam really is during the flyback and the
+    // top border a cropped view does not show, and drawing it at the edge
+    // would say it was somewhere it is not.
     if y < 0 || y >= height {
         return;
     }
-    let at = |px: f32, py: f32| picture.min + egui::vec2(px * scale, py * scale);
     let row = egui::Rect::from_min_max(at(0.0, y as f32), at(width as f32, y as f32 + 1.0));
     painter.rect_filled(
         row,

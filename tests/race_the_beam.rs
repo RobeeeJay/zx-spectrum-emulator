@@ -355,3 +355,56 @@ fn the_beam_travels_down_the_picture_as_the_frame_goes_on() {
     assert_eq!(y1, y0, "ten T-states later is still the same line");
     assert_eq!(x1 - x0, 20, "and ten T-states is twenty pixels");
 }
+
+/// When the frame interrupt goes off, the beam is at the top of the frame —
+/// above the picture, in the border the ULA draws before the first line.
+///
+/// A television-sized view crops most of that border away, so at that moment
+/// there is no beam to draw at all. The readout says where it is regardless,
+/// because "no beam anywhere" and "the beam is up in the border" look the same
+/// on screen and are not the same thing.
+#[test]
+fn the_beam_is_above_the_picture_when_the_interrupt_fires() {
+    use zx_rustrum::machine::{Event, Spectrum, Stop, FRAME_T};
+    use zx_rustrum::screen::{pixel_at_t, View};
+
+    // A program that sits in HALT, so the interrupt is taken the moment it is
+    // offered rather than at the end of some long instruction.
+    let mut spec = Spectrum::new();
+    spec.bus.poke(0x8000, 0xFB);
+    spec.bus.poke(0x8001, 0x76);
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.bus.breaks.interrupt = true;
+
+    let mut stopped = false;
+    for _ in 0..8 {
+        if let Stop::Watched(Event::Interrupt, _) = spec.run(FRAME_T) {
+            stopped = true;
+            break;
+        }
+    }
+    assert!(stopped, "the interrupt watch should have stopped it");
+
+    let t = spec.bus.tstates;
+    assert!(
+        t < 64,
+        "the interrupt goes off at the top of the frame, not at T {t}"
+    );
+
+    for view in [View::CROPPED, View::OVERSCAN] {
+        let (_, y) = pixel_at_t(
+            view,
+            spec.bus.first_pixel_t(),
+            spec.bus.model.t_per_line(),
+            t,
+        );
+        let line = y - view.border_top as i64;
+        assert!(
+            line < -60,
+            "the beam should be sixty-odd lines above the first line of the \
+             display, not {line}"
+        );
+    }
+}
