@@ -126,7 +126,27 @@ pub fn render(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool) {
         flash_on,
         true,
         bus,
-        &|offset| bus.video_painted(offset),
+        &|offset, _| bus.video_painted(offset),
+        None,
+    );
+}
+
+/// Draw the frame the ULA is painting now: this frame above the beam, the one
+/// before below it, which is what a television shows.
+///
+/// [`render`] holds the last finished frame instead, so that a repaint landing
+/// half way through one never catches a picture half drawn. That is right at
+/// full speed and wrong while the machine is crawling: the whole point of slow
+/// draw is to watch the picture being built, and holding the finished frame
+/// freezes it for as long as the frame takes.
+pub fn render_painting(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool) {
+    draw(
+        out,
+        view,
+        flash_on,
+        true,
+        bus,
+        &|offset, _| bus.video_painting(offset),
         None,
     );
 }
@@ -140,7 +160,17 @@ pub fn render_racing(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bo
         flash_on,
         true,
         bus,
-        &|offset| bus.video(offset),
+        // Behind the beam, what the ULA actually put out — the bytes as they
+        // were when it fetched them, which is where a raster effect lives.
+        // Ahead of it, what the display file holds now: the picture as the
+        // program has built it, which it has not been asked to show yet.
+        &|offset, ahead| {
+            if ahead {
+                bus.video(offset)
+            } else {
+                bus.video_painting(offset)
+            }
+        },
         Some(beam),
     );
 }
@@ -189,7 +219,7 @@ pub fn render_from(
         flash_on,
         borders,
         bus,
-        &|offset| bus.peek_raw(base.wrapping_add(offset)),
+        &|offset, _| bus.peek_raw(base.wrapping_add(offset)),
         None,
     );
 }
@@ -218,7 +248,9 @@ fn draw(
     flash_on: bool,
     borders: bool,
     bus: &SpectrumBus,
-    byte: &dyn Fn(u16) -> u8,
+    // What to draw. Told whether it is being asked for a point ahead of the
+    // beam or behind it, which are two different pictures.
+    byte: &dyn Fn(u16, bool) -> u8,
     beam: Option<u32>,
 ) {
     let (width, height) = (view.width(), view.height());
@@ -275,7 +307,7 @@ fn draw(
                     // changes and all, which is what makes a raster effect
                     // visible: the two halves of the screen are the program's
                     // intention and the machine's execution of it.
-                    let read = |o: u16| byte(o);
+                    let read = |o: u16| byte(o, stale);
                     cell_bits = read(row_off | cell);
                     let attr = read(attr_row + cell);
                     let bright = (attr & 0x40) >> 3;

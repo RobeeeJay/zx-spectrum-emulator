@@ -514,6 +514,20 @@ impl SpectrumBus {
         (line * 32 + along.min(32)).min(192 * 32)
     }
 
+    /// Read a byte of the frame the ULA is painting now.
+    ///
+    /// Up to where the beam has reached this is this frame; past it, it is
+    /// still the frame before, because the buffer is painted over rather than
+    /// cleared. That is what racing the beam wants behind the cursor: the
+    /// raster effect as it is being built, running into what it looked like
+    /// last time round.
+    pub fn video_painting(&self, offset: u16) -> u8 {
+        self.painted
+            .get(offset as usize & 0x1fff)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Read a byte of the frame as the ULA painted it.
     pub fn video_painted(&self, offset: u16) -> u8 {
         self.screen_prev

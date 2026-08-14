@@ -20,7 +20,9 @@ fn colour_at(buf: &[u8], x: usize, y: usize) -> [u8; 3] {
 
 /// A machine whose last frame was all white paper, and whose memory now holds
 /// all black paper, so the two frames are easy to tell apart.
-fn two_frames() -> Spectrum {
+/// A machine at the start of a frame, with a whole frame of white behind it
+/// and black in the display file, so the two are told apart.
+fn fresh_frame() -> Spectrum {
     let mut spec = Spectrum::with_model(Model::Spectrum48);
     spec.bus.rom.iter_mut().for_each(|b| *b = 0x00); // NOPs
     spec.cpu.pc = 0;
@@ -36,12 +38,26 @@ fn two_frames() -> Spectrum {
         spec.step_instruction();
     }
 
-    // Frame two: the CPU has since blacked everything out.
+    // Frame two: the CPU has since blacked everything out. Poking memory is
+    // not enough to make it show behind the beam — that is what the ULA put
+    // out — so the machine has to run far enough for it to have put it out.
     for o in 0x1800..0x1b00u16 {
         spec.bus.poke(0x4000 + o, 0x00); // black on black
     }
     spec.bus.border = 0;
     spec.bus.border_start = 0;
+    spec
+}
+
+/// The same, run on until the ULA has painted the whole of the black frame.
+fn two_frames() -> Spectrum {
+    let mut spec = fresh_frame();
+    let display_ends = spec.bus.first_pixel_t() + 192 * spec.bus.model.t_per_line();
+    let frame = spec.bus.frame;
+    while spec.bus.frame == frame && spec.bus.tstates < display_ends {
+        spec.step_instruction();
+    }
+    spec.bus.catch_up_painting();
     spec
 }
 
@@ -146,6 +162,46 @@ fn the_split_happens_part_way_along_a_line() {
     );
 }
 
+/// Behind the beam the racing view and the crawling view are the same picture.
+///
+/// Both are the frame the ULA is painting, so hovering over the picture should
+/// only dim what is ahead of the cursor — it should not change what is behind
+/// it. It used to: the plain view was what the ULA painted and the racing view
+/// read the display file, so moving the mouse on to the picture swapped every
+/// pixel of it for a different one, and moving it off swapped them back.
+#[test]
+fn behind_the_beam_is_the_same_picture_as_the_plain_view() {
+    let mut spec = two_frames();
+    // Memory now differs from what was painted: the program has written a
+    // white screen that the ULA has not yet put out.
+    for o in 0x1800..0x1b00u16 {
+        spec.bus.poke(0x4000 + o, 0x38);
+    }
+
+    let mut plain = vec![0u8; VIEW.buffer_len()];
+    let mut racing = vec![0u8; VIEW.buffer_len()];
+    screen::render_painting(&spec.bus, VIEW, &mut plain, false);
+    let split_y = VIEW.border_top + screen::SCREEN_H / 2;
+    let beam = screen::t_at_pixel(
+        VIEW,
+        spec.bus.first_pixel_t(),
+        spec.bus.model.t_per_line(),
+        VIEW.border_x,
+        split_y,
+    ) as u32;
+    screen::render_racing(&spec.bus, VIEW, &mut racing, false, beam);
+
+    for y in VIEW.border_top..split_y - 1 {
+        for x in VIEW.border_x..VIEW.border_x + screen::SCREEN_W {
+            assert_eq!(
+                colour_at(&racing, x, y),
+                colour_at(&plain, x, y),
+                "pixel ({x},{y}) behind the beam differs between the two views"
+            );
+        }
+    }
+}
+
 /// A border effect is a colour change part-way down the frame. Behind the beam
 /// it is there, because that is what the ULA painted; ahead of it there is
 /// only the colour the program has set, because nothing has been painted with
@@ -154,7 +210,7 @@ fn the_split_happens_part_way_along_a_line() {
 fn a_border_effect_shows_behind_the_beam_and_not_ahead_of_it() {
     use zx_rustrum::z80::Bus;
 
-    let mut spec = two_frames();
+    let mut spec = fresh_frame();
     // Part-way down this frame, the program turns the border red.
     while spec.bus.tstates < spec.bus.first_pixel_t() + 40 * 224 {
         spec.step_instruction();
@@ -523,6 +579,100 @@ fn the_picture_changes_once_per_emulated_frame() {
              were shown, so finished frames went missing"
         );
     }
+}
+
+/// While the machine crawls, the picture builds down the screen under the beam.
+///
+/// The picture normally holds the last finished frame, so that no repaint ever
+/// catches one half drawn. Under slow draw that is wrong: an emulated frame
+/// takes seconds, and holding the finished one freezes the picture for all of
+/// them while the beam crawls over it saying work is being done.
+#[test]
+fn the_picture_builds_under_the_beam_while_the_machine_crawls() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{App, Roms};
+
+    let mut spec = Spectrum::with_model(Model::Spectrum48);
+    spec.bus.rom.iter_mut().for_each(|b| *b = 0x00); // NOPs
+    spec.cpu.pc = 0;
+    // One frame of nothing, so what was finished is blank.
+    let frame = spec.bus.frame;
+    while spec.bus.frame == frame {
+        spec.step_instruction();
+    }
+
+    // Now a screenful of white, and the machine half way down painting it.
+    for o in 0..0x1800u16 {
+        spec.bus.poke(0x4000 + o, 0xFF);
+    }
+    for o in 0x1800..0x1b00u16 {
+        spec.bus.poke(0x4000 + o, 0x07); // white ink on black paper
+    }
+    let half = spec.bus.first_pixel_t() + 96 * spec.bus.model.t_per_line();
+    while spec.bus.tstates < half {
+        spec.step_instruction();
+    }
+    spec.bus.catch_up_painting();
+
+    let (top, bottom) = (VIEW.border_top + 40, VIEW.border_top + 150);
+    let mut building = vec![0u8; VIEW.buffer_len()];
+    screen::render_painting(&spec.bus, VIEW, &mut building, false);
+    assert_eq!(
+        colour_at(&building, VIEW.border_x + 8, top),
+        screen::PALETTE[7],
+        "the beam has passed line {top}, so the picture should have it"
+    );
+    assert_eq!(
+        colour_at(&building, VIEW.border_x + 8, bottom),
+        [0, 0, 0],
+        "and it has not reached line {bottom}, which is still the last frame"
+    );
+
+    // The finished-frame picture is the one that would sit still: nothing of
+    // this frame is in it, however far down the beam has got.
+    let mut finished = vec![0u8; VIEW.buffer_len()];
+    screen::render(&spec.bus, VIEW, &mut finished, false);
+    assert_eq!(
+        colour_at(&finished, VIEW.border_x + 8, top),
+        [0, 0, 0],
+        "the finished frame holds none of this one, which is why it is not          what is shown while the machine crawls"
+    );
+
+    // And that is what the window draws when slow draw is on: the picture the
+    // beam is drawn over, not the one from the frame before.
+    let mut app = App::with_roms(spec, String::new(), Roms::default(), None);
+    app.show_ram_map = false;
+    app.show_back_buffer = false;
+    app.show_debugger = false;
+    app.show_tape = false;
+    app.running = false;
+    assert!(!app.crawling(), "a machine at full speed is not crawling");
+    app.spec.bus.slow.enabled = true;
+    assert!(
+        app.crawling(),
+        "slow draw is watching the picture being drawn"
+    );
+
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size([1500.0, 1200.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    harness.run_steps(3);
+    let view = harness.state().view();
+    let drawn = harness.state().picture();
+    let at = |y: usize| {
+        let i = (y * view.width() + view.border_x + 8) * 4;
+        [drawn[i], drawn[i + 1], drawn[i + 2]]
+    };
+    assert_eq!(
+        at(top),
+        screen::PALETTE[7],
+        "the window should draw the frame being painted while slow draw is on"
+    );
+    assert_eq!(
+        at(bottom),
+        [0, 0, 0],
+        "and not what has not been painted yet"
+    );
 }
 
 /// The beam is followed a character cell at a time, not a line at a time.

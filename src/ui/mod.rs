@@ -1889,6 +1889,21 @@ impl App {
         self.set_status(format!("Switched to a {}", ram.name()), false);
     }
 
+    /// The picture as it was last drawn: RGBA, the size of [`App::view`].
+    pub fn picture(&self) -> &[u8] {
+        &self.screen_pixels
+    }
+
+    /// Is the machine going slowly enough to watch the picture being drawn?
+    ///
+    /// The beam is shown and the picture is drawn as it is painted under the
+    /// same condition, so the two always agree: a beam crawling over a picture
+    /// that only changes when the frame ends would be telling a lie about
+    /// where the machine is.
+    pub fn crawling(&self) -> bool {
+        self.speed < 1.0 || self.spec.bus.slow.enabled
+    }
+
     /// How much border to draw.
     pub fn view(&self) -> screen::View {
         if self.overscan {
@@ -2053,9 +2068,20 @@ impl App {
             self.screen_pixels = vec![0; view.buffer_len()];
             self.screen_tex = None; // the texture has to be remade at the new size
         }
+        // Bring the painted frame up to where the beam has got to. It is
+        // otherwise only caught up when the program writes to the screen, so a
+        // machine stopped between two writes would show the last of them as
+        // the beam's position rather than where the beam actually is.
+        self.spec.bus.catch_up_painting();
         match self.beam_t.filter(|_| self.race_the_beam) {
             Some(beam) => {
                 screen::render_racing(&self.spec.bus, view, &mut self.screen_pixels, flash, beam)
+            }
+            // While the machine is crawling, the picture is the one being
+            // painted, so that it builds under the beam rather than sitting
+            // still until the frame ends.
+            None if self.crawling() => {
+                screen::render_painting(&self.spec.bus, view, &mut self.screen_pixels, flash)
             }
             None => screen::render(&self.spec.bus, view, &mut self.screen_pixels, flash),
         }
@@ -2543,8 +2569,7 @@ impl App {
                 // repaint and the next, so the beam would sit at the top of
                 // the frame looking broken. The ZX81 has no ULA drawing a
                 // picture — the CPU does it — so there is no beam to show.
-                let crawling = self.speed < 1.0 || self.spec.bus.slow.enabled;
-                if crawling && self.zx81.is_none() {
+                if self.crawling() && self.zx81.is_none() {
                     draw_beam(&painter, &self.spec.bus, self.view(), picture, self.scale);
                 }
 
