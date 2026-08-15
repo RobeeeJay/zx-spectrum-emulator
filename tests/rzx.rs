@@ -61,6 +61,28 @@ fn something_that_is_not_a_recording_is_refused() {
     assert!(error.contains("not an RZX"), "{error}");
 }
 
+/// What it ran, not what it was asked for.
+///
+/// Instructions are run whole, so asking for one fetch and getting a prefixed
+/// instruction runs two. A caller playing a recorded frame in several goes
+/// takes the count off what is left of the frame, and a count that stops at
+/// what was asked for loses the overshoot every time — so the frame is thought
+/// to have further to run than it has, and runs on into input that was never
+/// recorded.
+#[test]
+fn a_fetch_count_says_what_was_run() {
+    let mut spec = Spectrum::new();
+    spec.bus.poke(0x8000, 0xED); // LD A,R: the prefix and the opcode
+    spec.bus.poke(0x8001, 0x5F);
+    spec.cpu.pc = 0x8000;
+
+    let (_, ran) = spec.run_fetches(1);
+    assert_eq!(
+        ran, 2,
+        "one fetch was asked for and a two-fetch instruction was run, which is          two fetches however many were wanted"
+    );
+}
+
 /// Playing one back runs the machine along the path it took when it was
 /// recorded, which is what makes it worth having.
 #[test]

@@ -1155,44 +1155,91 @@ impl App {
             return;
         }
 
-        // A recording is a frame at a time, so the speed control counts frames
-        // rather than T-states. At maximum speed it runs as many as the cap
+        // A recording is measured in frames rather than T-states, so the speed
+        // control counts frames. At maximum speed it runs as many as the cap
         // allows every host frame instead of counting at all.
-        let mut due = if rzx.max_speed {
-            MAX_RECORDED_FRAMES as u32
+        //
+        // The budget is kept as a fraction of a frame rather than a whole
+        // number of them: below one frame per host frame — which is where
+        // Race the Beam lives, at five seconds a frame — a whole number is
+        // zero nearly always and one now and then, so the picture jumps a
+        // frame at a time instead of the beam crawling down it.
+        let mut budget = if rzx.max_speed {
+            MAX_RECORDED_FRAMES
         } else {
             let rate = crate::machine::CPU_HZ as f32 / self.spec.bus.model.frame_t() as f32;
-            let owed = rzx.owed + dt * rate * self.speed * boost;
-            let due = owed.min(MAX_RECORDED_FRAMES) as u32;
-            if let Some(rzx) = &mut self.rzx {
-                rzx.owed = owed - due as f32;
-            }
-            due
+            (rzx.owed + dt * rate * self.speed * boost).min(MAX_RECORDED_FRAMES)
         };
 
-        while due > 0 {
+        // In slow motion the frame is run in pieces, so the picture moves
+        // under the beam instead of jumping a frame at a time; at normal
+        // speed and above, whole frames, with the fraction carried over.
+        //
+        // From the speed the user asked for, not from the budget: a frame of
+        // a 128K recording is a little longer than the fiftieth of a second a
+        // host frame takes, so at full speed the budget is 0.99 frames a call
+        // and every frame would be split for no reason.
+        let crawling = self.speed < 1.0 && !rzx.max_speed;
+        while budget > 0.0 {
             let Some(rzx) = &mut self.rzx else { return };
             if rzx.finished() {
                 return;
             }
+            let whole_frame = rzx.recording.frames[rzx.frame].fetches.max(1) as u32;
+            // What the budget will pay for, of the frame the recording is on.
+            // A budget too small to buy a single fetch buys nothing and is
+            // carried over: rounding it up to one would run a sliver of the
+            // next frame after every whole one, and leave the machine a few
+            // dozen instructions into a frame it has not been asked to begin.
+            let started = rzx.remaining > 0;
+            let ask = if budget >= 1.0 {
+                if started {
+                    rzx.remaining
+                } else {
+                    whole_frame
+                }
+            } else if crawling || started {
+                let piece = (budget * whole_frame as f32) as u32;
+                if started {
+                    rzx.remaining.min(piece)
+                } else {
+                    piece
+                }
+            } else {
+                0
+            };
+            if ask == 0 {
+                break;
+            }
             // A frame that was interrupted part-way through is picked up where
-            // it stopped, with the input it had already been handed.
-            if rzx.remaining == 0 {
+            // it stopped, with the input it had already been handed. A frame
+            // is not begun — and its input not put in front of the machine —
+            // until there is budget to run some of it.
+            if !started {
                 let frame = &rzx.recording.frames[rzx.frame];
-                rzx.remaining = frame.fetches as u32;
+                let fetches = frame.fetches as u32;
                 let inputs = frame.inputs.clone();
+                if let Some(rzx) = &mut self.rzx {
+                    rzx.remaining = fetches;
+                }
                 if let Some(playback) = &mut self.spec.bus.playback {
                     playback.inputs = inputs;
                     playback.cursor = 0;
                 }
             }
-            let remaining = self.rzx.as_ref().map_or(0, |rzx| rzx.remaining);
-            let (stop, ran) = self.spec.run_fetches(remaining);
+            let (stop, ran) = self.spec.run_fetches(ask);
+            budget -= ran as f32 / whole_frame as f32;
             let pc = self.spec.cpu.pc;
 
             let mut ended = false;
             if let Some(rzx) = &mut self.rzx {
-                rzx.remaining -= ran;
+                // A prefixed instruction is two fetches or more, so the last
+                // one can carry past what was asked for. Saturating rather
+                // than wrapping: the frame is over either way, and taking the
+                // difference off an unsigned count leaves it enormous, which
+                // ran the frame to the end of the recording and read input
+                // that was never recorded.
+                rzx.remaining = rzx.remaining.saturating_sub(ran);
                 if rzx.remaining == 0 {
                     rzx.frame += 1;
                     // Where the recording actually got to: AutoDoc reads this
@@ -1212,13 +1259,17 @@ impl App {
                 // wrong height.
                 self.spec.bus.end_frame_here();
                 self.spec.bus.raise_interrupt();
-                due -= 1;
             }
             self.last_stop = Some(stop);
             if !matches!(stop, Stop::Budget) {
                 self.handle_stop(stop);
                 return;
             }
+        }
+        // What is left over is owed to the next host frame, so a pace of a
+        // fifth of a frame a second adds up to a frame every five seconds.
+        if let Some(rzx) = &mut self.rzx {
+            rzx.owed = budget.max(0.0);
         }
     }
 

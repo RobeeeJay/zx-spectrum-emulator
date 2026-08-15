@@ -123,7 +123,15 @@ more — and every IN takes the next byte the recording holds instead of reading
 the hardware. Counting whole instructions instead runs past the end of every
 frame and reads input that was never recorded; that showed up as thousands of
 "short reads" until it was fixed. The frame interrupt is raised at the
-recording's frame boundary rather than by the T-state count. A recording that
+recording's frame boundary rather than by the T-state count. In slow motion a
+frame is played in pieces — Race the Beam runs at five seconds a frame, and
+whole frames at a time would stand still for five seconds and then jump — but
+only in slow motion: a 128K frame is a shade longer than a host frame, so a
+budget-based rule split every frame at full speed for nothing. A frame is not
+begun, and its input not put in front of the machine, until there is budget to
+run some of it. `run_fetches` reports what it ran rather than what was asked
+for: instructions run whole, so a prefixed one overshoots, and clamping the
+count to the budget loses the overshoot on every piece. A recording that
 asks for more input than it holds has come adrift, and the toolbar says so
 rather than letting the picture look authentic. `recordings/` is gitignored for
 the same reason as `tapes/`.

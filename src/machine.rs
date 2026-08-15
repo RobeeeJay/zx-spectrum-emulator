@@ -1712,7 +1712,13 @@ impl Spectrum {
                 return (Stop::Breakpoint(pc), done);
             }
         }
-        (Stop::Budget, done_now(&self.bus).min(fetches))
+        // The true count, which can be more than was asked for: instructions
+        // are run whole, and a prefixed one is two fetches or more. Reporting
+        // the budget instead loses the overshoot, and a caller running a
+        // recorded frame in several goes then thinks the frame has further to
+        // run than it has — so it runs on and reads input that was never
+        // recorded.
+        (Stop::Budget, done_now(&self.bus))
     }
 
     /// True when the instruction at `pc` is one that "step over" should run to
