@@ -110,6 +110,25 @@ freeze the picture for the seconds an emulated frame takes while the beam
 crawled over it. Both are what the ULA put out, never the display file as it
 stands.
 
+**The ULA snows when I points at the screen.** After every opcode fetch the
+CPU puts I:R on the address bus; with I in $40..$7F that address is in the RAM
+the ULA is reading, and it takes the refresh for the CPU asking to read the
+screen again and again. It cannot keep up, loses the fetch it was making, and
+puts the byte it read before out again — which is the snow. Modelled at that
+level: `Bus::refresh` tells the bus what the CPU has on the address bus,
+`SpectrumBus::refresh` works out which cell fetch that spoils, and the painted
+frame repeats the last byte off the bus for it. The CPU only makes the call
+when I is in range, since it is on the busiest path there is — with the check
+a screenful of NOPs runs a fifth slower, and real code about seven per cent.
+The +2A/+3 drive the bus themselves and do not snow.
+
+`tests/reference_48k.rs` holds the
+[48K reference](https://worldofspectrum.org/faq/reference/48kreference.htm)'s
+own numbers: the 69888-T frame, the 224-T line, the contention table T-state by
+T-state from 14335, the four I/O patterns worked through by hand, and which
+addresses are contended. All of them already matched; the file is there so they
+go on matching.
+
 **Sync is treated the way a television treats it.** A pulse held for at least a
 line is a vertical sync and pulls the picture back to the top; a shorter one is
 a line sync; one that arrives far too early is not a sync at all, so the beam

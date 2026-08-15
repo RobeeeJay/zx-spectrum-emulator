@@ -44,6 +44,11 @@ pub trait Bus {
     fn io_read(&mut self, port: u16) -> u8;
     /// OUT to a port: 4 T-states with the same pattern.
     fn io_write(&mut self, port: u16, value: u8);
+    /// The refresh half of an M1 cycle: the CPU puts I:R on the address bus
+    /// while the opcode is decoded. Nothing is read, and on most machines
+    /// nothing watches — but the Spectrum's ULA does, and an address pointing
+    /// into the screen's own RAM is what makes it snow.
+    fn refresh(&mut self, _addr: u16) {}
     /// Peek without timing or access tracking; used by the debugger.
     fn peek(&self, addr: u16) -> u8;
 }
@@ -247,8 +252,25 @@ impl Z80 {
     pub fn fetch(&mut self, bus: &mut impl Bus) -> u8 {
         let op = bus.fetch_op(self.pc);
         self.pc = self.pc.wrapping_add(1);
+        self.refresh(bus);
         self.inc_r();
         op
+    }
+
+    /// Tell the bus what is on the address bus while the opcode is decoded:
+    /// the I register as the high byte and R as the low one, before R is
+    /// stepped on.
+    ///
+    /// Only when I points into the lower 16K, which is the only case any bus
+    /// here cares about — a Spectrum's ULA sharing that RAM. The test is a
+    /// register compare against a call and a division on every instruction
+    /// the machine executes; without it a screenful of NOPs runs a fifth
+    /// slower for a thing that almost never happens.
+    #[inline]
+    fn refresh(&self, bus: &mut impl Bus) {
+        if self.i & 0xc0 == 0x40 {
+            bus.refresh(((self.i as u16) << 8) | self.r as u16);
+        }
     }
 
     #[inline]
@@ -315,6 +337,7 @@ impl Z80 {
             // a HALT at $7FFF refreshes from the uncontended $8000 while one at
             // $4000 is contended on every cycle.
             bus.fetch_op(self.pc);
+            self.refresh(bus);
             self.inc_r();
             self.instructions = self.instructions.wrapping_add(1);
             return;
