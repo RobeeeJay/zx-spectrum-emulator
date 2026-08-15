@@ -31,18 +31,14 @@ fn harness_for<'a>(app: App) -> Harness<'a, App> {
 fn the_button_does_nothing_while_the_machine_runs() {
     let mut h = harness_for(test_app());
     assert!(
-        !h.get_by_label("Race the beam")
-            .accesskit_node()
-            .is_disabled(),
+        !h.get_by_label("Cursor Beam").accesskit_node().is_disabled(),
         "a stopped machine should offer it"
     );
 
     h.state_mut().running = true;
     h.run_steps(2);
     assert!(
-        h.get_by_label("Race the beam")
-            .accesskit_node()
-            .is_disabled(),
+        h.get_by_label("Cursor Beam").accesskit_node().is_disabled(),
         "the button was still offered while the machine was running"
     );
 }
@@ -52,15 +48,15 @@ fn the_button_does_nothing_while_the_machine_runs() {
 #[test]
 fn running_the_machine_switches_racing_off() {
     let mut app = test_app();
-    app.race_the_beam = true;
+    app.cursor_beam = true;
     let mut h = harness_for(app);
-    assert!(h.state().race_the_beam, "it should be on to begin with");
+    assert!(h.state().cursor_beam, "it should be on to begin with");
 
     h.state_mut().running = true;
     h.run_steps(2);
 
     assert!(
-        !h.state().race_the_beam,
+        !h.state().cursor_beam,
         "the machine was started and racing stayed on"
     );
     assert!(
@@ -74,7 +70,7 @@ fn running_the_machine_switches_racing_off() {
 #[test]
 fn hovering_a_stopped_machine_replays_its_next_frame() {
     let mut app = test_app();
-    app.race_the_beam = true;
+    app.cursor_beam = true;
     let before = (app.spec.bus.frame, app.spec.bus.tstates);
     let mut h = harness_for(app);
 

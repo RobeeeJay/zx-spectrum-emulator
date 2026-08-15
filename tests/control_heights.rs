@@ -65,19 +65,25 @@ fn the_main_windows_controls_are_all_one_height() {
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
     harness.run_steps(4);
 
-    same_height(
-        &heights(
-            &harness,
-            &[
-                "File",
-                "▶ Run",
-                "Late timing",
-                "Reset",
-                "Race the beam",
-                "Overscan",
-            ],
-        ),
-        "main window",
+    // The machine row and the video row beneath it: each sits on one line,
+    // and every control in both is the same height, whichever line it is on.
+    let machine = heights(&harness, &["File", "▶ Run", "Late timing", "Reset"]);
+    let video = heights(
+        &harness,
+        &["Race the Beam", "Cursor Beam", "Overscan", "Next frame"],
+    );
+    same_height(&machine, "main window's machine row");
+    same_height(&video, "main window's video row");
+    assert!(
+        (machine[0].1 - video[0].1).abs() < 0.5,
+        "the two rows of the main window are {} and {} tall",
+        machine[0].1,
+        video[0].1
+    );
+    assert!(
+        video[0].2 > machine[0].2,
+        "the video row should be under the machine row, not at y {}",
+        video[0].2
     );
 }
 

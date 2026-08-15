@@ -76,6 +76,16 @@ it is; going back up starts the frame again, because nothing can be
 un-executed. A downward sweep of all 192 lines costs 59µs and an upward one
 13ms, so no cleverness is needed.
 
+**Race the Beam runs at five seconds a frame and fades the picture behind the
+beam.** A pixel is at full brightness the moment the beam draws it and at the
+slider's floor — half, by default — just before the beam comes round to draw it
+again, so the trail down the screen says how long ago each part was drawn. At
+fifty frames a second that would be a flicker nobody can see, which is why it
+comes with the speed rather than as a switch of its own. The oldest part of the
+picture is the line just *below* the beam, not the bottom of the screen: a
+quarter of the frame is spent below the display in the border and the sync.
+Hovering with the cursor is a different thing and is called Cursor Beam.
+
 **The picture is the frame being painted while the machine crawls**, and the
 last finished frame otherwise. Holding the finished frame is what stops a
 repaint catching a picture half drawn at full speed; under slow draw it would

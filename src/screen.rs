@@ -126,8 +126,31 @@ pub fn render(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool) {
         flash_on,
         true,
         bus,
-        &|offset, _| bus.video_painted(offset),
-        None,
+        Source {
+            byte: &|offset, _| bus.video_painted(offset),
+            beam: None,
+            fade: None,
+        },
+    );
+}
+
+/// Draw the frame being painted, fading as a phosphor does behind the beam.
+///
+/// The same picture [`render_painting`] draws, with every pixel dimmed by how
+/// long ago the beam drew it. At full speed this would be a flicker nobody can
+/// see; at five seconds a frame it is the beam's whole trail down the screen.
+pub fn render_fading(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool, fade: Fade) {
+    draw(
+        out,
+        view,
+        flash_on,
+        true,
+        bus,
+        Source {
+            byte: &|offset, _| bus.video_painting(offset),
+            beam: None,
+            fade: Some(fade),
+        },
     );
 }
 
@@ -146,8 +169,11 @@ pub fn render_painting(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: 
         flash_on,
         true,
         bus,
-        &|offset, _| bus.video_painting(offset),
-        None,
+        Source {
+            byte: &|offset, _| bus.video_painting(offset),
+            beam: None,
+            fade: None,
+        },
     );
 }
 
@@ -164,14 +190,17 @@ pub fn render_racing(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bo
         // were when it fetched them, which is where a raster effect lives.
         // Ahead of it, what the display file holds now: the picture as the
         // program has built it, which it has not been asked to show yet.
-        &|offset, ahead| {
-            if ahead {
-                bus.video(offset)
-            } else {
-                bus.video_painting(offset)
-            }
+        Source {
+            byte: &|offset, ahead| {
+                if ahead {
+                    bus.video(offset)
+                } else {
+                    bus.video_painting(offset)
+                }
+            },
+            beam: Some(beam),
+            fade: None,
         },
-        Some(beam),
     );
 }
 
@@ -219,9 +248,37 @@ pub fn render_from(
         flash_on,
         borders,
         bus,
-        &|offset, _| bus.peek_raw(base.wrapping_add(offset)),
-        None,
+        Source {
+            byte: &|offset, _| bus.peek_raw(base.wrapping_add(offset)),
+            beam: None,
+            fade: None,
+        },
     );
+}
+
+/// The picture fading the way a phosphor does.
+///
+/// A television's picture starts to go out the moment the beam has passed, and
+/// is at its dimmest just before the beam comes round to light it again. That
+/// is a fiftieth of a second on a real machine and invisible; run the machine
+/// at five seconds a frame and it is the clearest possible answer to "where is
+/// the beam, and how long ago was this part of the picture drawn?".
+#[derive(Clone, Copy, Debug)]
+pub struct Fade {
+    /// Where the beam is, in T-states into the frame.
+    pub now: u32,
+    /// How bright a pixel is by the time the beam comes back to it, as a
+    /// fraction of how bright it was when it was drawn.
+    pub floor: f32,
+}
+
+#[inline]
+fn scaled(c: [u8; 3], by: f32) -> [u8; 3] {
+    [
+        (c[0] as f32 * by) as u8,
+        (c[1] as f32 * by) as u8,
+        (c[2] as f32 * by) as u8,
+    ]
 }
 
 #[inline]
@@ -242,17 +299,26 @@ pub const DISPLAY_LEAD_T: i64 = 2;
 ///
 /// The raster is walked in the order the ULA emits it, so the border colour
 /// can be tracked with a single cursor through the frame's list of writes.
+/// Where the picture comes from and what is done to it on the way out.
+struct Source<'a> {
+    /// The display file, offset 0..6911. Told whether it is being asked for a
+    /// point ahead of the beam or behind it, which are two different pictures.
+    byte: &'a dyn Fn(u16, bool) -> u8,
+    /// Where to split this frame from the last, when racing.
+    beam: Option<u32>,
+    /// How the picture fades behind the beam, if it does.
+    fade: Option<Fade>,
+}
+
 fn draw(
     out: &mut [u8],
     view: View,
     flash_on: bool,
     borders: bool,
     bus: &SpectrumBus,
-    // What to draw. Told whether it is being asked for a point ahead of the
-    // beam or behind it, which are two different pictures.
-    byte: &dyn Fn(u16, bool) -> u8,
-    beam: Option<u32>,
+    source: Source<'_>,
 ) {
+    let Source { byte, beam, fade } = source;
     let (width, height) = (view.width(), view.height());
     let first = bus.first_pixel_t() as i64;
     let per_line = bus.model.t_per_line() as i64;
@@ -293,6 +359,16 @@ fn draw(
         for px in 0..width {
             let x = px as i64 - view.border_x as i64;
             let t = line_start + x.div_euclid(2) + DISPLAY_LEAD_T;
+            // How far this pixel has faded since the beam drew it: none at
+            // all where the beam has just been, all the way to the floor a
+            // frame later, just before it is drawn again.
+            let lit = |rgb: [u8; 3]| match fade {
+                Some(f) => {
+                    let age = (f.now as i64 - t).rem_euclid(frame_t) as f32;
+                    scaled(rgb, 1.0 - (1.0 - f.floor) * (age / frame_t as f32))
+                }
+                None => rgb,
+            };
             // Past the beam, the screen still shows the frame before this one.
             let stale = beam.is_some_and(|b| t > b as i64);
 
@@ -324,7 +400,7 @@ fn draw(
                     }
                 }
                 let on = cell_bits & (0x80 >> (x % 8)) != 0;
-                put(out, width, px, py, if on { ink_c } else { paper_c });
+                put(out, width, px, py, lit(if on { ink_c } else { paper_c }));
                 continue;
             }
 
@@ -341,7 +417,7 @@ fn draw(
                 raster[t.rem_euclid(frame_t) as usize]
             };
             let rgb = PALETTE[(colour & 7) as usize];
-            put(out, width, px, py, if stale { dim(rgb) } else { rgb });
+            put(out, width, px, py, lit(if stale { dim(rgb) } else { rgb }));
         }
     }
 }

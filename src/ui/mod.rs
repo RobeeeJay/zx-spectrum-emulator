@@ -214,7 +214,16 @@ pub fn speed_dropdown(speed: &mut f32, ui: &mut egui::Ui) {
         .iter()
         .find(|(_, mult)| (*speed - mult).abs() < f32::EPSILON)
         .map(|(name, _)| (*name).to_string())
-        .unwrap_or_else(|| format!("{:.0}%", *speed * 100.0));
+        // Racing runs at four thousandths of speed, which rounds to "0%".
+        .unwrap_or_else(|| {
+            if (*speed - RACE_SPEED).abs() < f32::EPSILON {
+                "5s/frame".to_string()
+            } else if *speed < 0.01 {
+                format!("{:.1}%", *speed * 100.0)
+            } else {
+                format!("{:.0}%", *speed * 100.0)
+            }
+        });
     theme::dropdown(ui, 74.0, selected, |ui| {
         for (name, mult) in SPEED_PRESETS {
             if ui
@@ -268,6 +277,11 @@ pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("200%", 2.0),
     ("Max", MAX_SPEED),
 ];
+
+/// Five seconds to a frame: 0.02s of machine time in 5s of ours. Slow enough
+/// that a frame's drawing can be followed by eye, which is the only speed at
+/// which watching the beam tells anybody anything.
+pub const RACE_SPEED: f32 = 0.02 / 5.0;
 
 /// As fast as the emulator will go. The work per host frame is capped as well,
 /// so this is a ceiling rather than a promise.
@@ -356,11 +370,19 @@ pub struct App {
     pub scale: f32,
     /// Show the whole overscan area, or crop the border to television size.
     pub overscan: bool,
-    /// Follow the raster with the mouse: everything up to the cursor is this
-    /// frame, the rest is what was on screen before.
-    pub race_the_beam: bool,
+    /// Follow the raster with the mouse: the frame is replayed from its
+    /// interrupt to wherever the cursor is.
+    pub cursor_beam: bool,
     /// Beam position under the cursor last frame, in T-states.
     pub beam_t: Option<u32>,
+    /// Run at five seconds a frame with the picture fading behind the beam,
+    /// so a frame can be watched being drawn.
+    pub racing: bool,
+    /// How bright a pixel is left by the time the beam comes round to it
+    /// again, as a fraction of how bright it was drawn.
+    pub fade_floor: f32,
+    /// The speed to go back to when racing is switched off.
+    speed_before_race: f32,
     /// The frame being raced: a copy of the machine taken at the interrupt,
     /// run forward to wherever the cursor is. Only ever set while the machine
     /// is stopped.
@@ -449,7 +471,10 @@ impl App {
             screen_tex: None,
             scale: 2.0,
             overscan: true,
-            race_the_beam: false,
+            cursor_beam: false,
+            racing: false,
+            fade_floor: 0.5,
+            speed_before_race: 1.0,
             race: None,
             beam_t: None,
             ram: ram_map::RamMapState::default(),
@@ -1948,7 +1973,7 @@ impl App {
         // Racing the beam is a way of looking at a stopped machine: it replays
         // one frame from its interrupt, and a machine that is running has
         // moved on to another frame before the cursor has been read.
-        self.race_the_beam = false;
+        self.cursor_beam = false;
         self.race = None;
         if self.zx81.is_some() {
             // A ZX81 loads at about fifty bytes a second, so the boost matters
@@ -2102,7 +2127,7 @@ impl App {
         // Racing replays a frame rather than reading the machine, so the
         // pixels are borrowed out of the way of the copy being run.
         let mut pixels = std::mem::take(&mut self.screen_pixels);
-        match self.beam_t.filter(|_| self.race_the_beam && !self.running) {
+        match self.beam_t.filter(|_| self.cursor_beam && !self.running) {
             Some(beam) => {
                 let raced = self.raced_to(beam);
                 screen::render_racing(&raced.bus, view, &mut pixels, flash, beam);
@@ -2110,6 +2135,14 @@ impl App {
             // While the machine is crawling, the picture is the one being
             // painted, so that it builds under the beam rather than sitting
             // still until the frame ends.
+            // Racing: the frame being painted, fading behind the beam.
+            None if self.racing => {
+                let fade = screen::Fade {
+                    now: self.spec.bus.tstates,
+                    floor: self.fade_floor,
+                };
+                screen::render_fading(&self.spec.bus, view, &mut pixels, flash, fade);
+            }
             None if self.crawling() => {
                 screen::render_painting(&self.spec.bus, view, &mut pixels, flash)
             }
@@ -2231,7 +2264,11 @@ impl App {
 
             theme::divider(ui);
             theme::group_label(ui, "Speed");
+            // Choosing a speed by hand is choosing not to race.
             speed_dropdown(&mut self.speed, ui);
+            if self.racing && self.speed != RACE_SPEED {
+                self.racing = false;
+            }
 
             theme::divider(ui);
             theme::group_label(ui, "Machine");
@@ -2250,18 +2287,56 @@ impl App {
                     }
                 }
             }
+        });
+    }
 
-            theme::divider(ui);
+    /// Zoom and the ways of watching the picture, on a line of their own: the
+    /// machine row is long enough without them, and these belong together.
+    fn video_row(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            // Claim the height of the tallest thing in the row before
+            // anything is placed. egui centres each control in the row as it
+            // stands when the control is added, so a slider half way along an
+            // otherwise short row leaves everything before it sitting three
+            // pixels higher than everything after it.
+            ui.set_min_height(theme::ROW_H);
             theme::group_label(ui, "Zoom");
             zoom_dropdown(&mut self.scale, ui);
 
             theme::divider(ui);
             theme::group_label(ui, "Video");
+
+            // Five seconds a frame, with the picture fading behind the beam:
+            // one frame's drawing, slowed down until it can be read.
+            if theme::toggle(ui, &mut self.racing, "Race the Beam")
+                .on_hover_text(
+                    "Run at five seconds a frame and watch the beam go down the \
+                     screen. The picture fades behind it, so how long ago each \
+                     part was drawn is visible at a glance.",
+                )
+                .changed()
+            {
+                self.set_racing(self.racing);
+            }
+            ui.add_enabled_ui(self.racing, |ui| {
+                theme::slider(
+                    ui,
+                    egui::Slider::new(&mut self.fade_floor, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .text("fades to"),
+                )
+                .on_hover_text(
+                    "How much of its brightness a pixel is left with by the \
+                     time the beam comes round to draw it again.",
+                );
+            });
+
+            theme::divider(ui);
             // Only while stopped: the frame is replayed from its interrupt,
             // which means being able to hold the machine still and run a copy
             // of it instead.
             ui.add_enabled_ui(!self.running, |ui| {
-                theme::toggle(ui, &mut self.race_the_beam, "Race the beam").on_hover_text(
+                theme::toggle(ui, &mut self.cursor_beam, "Cursor Beam").on_hover_text(
                     "Replay the next frame from its interrupt. Hover the picture and \
                      everything above the cursor is the screen as the machine had it \
                      by the time the beam reached that point — every instruction up to \
@@ -2289,6 +2364,22 @@ impl App {
                 self.next_frame();
             }
         });
+    }
+
+    /// Switch the slowed-down, fading picture on or off.
+    ///
+    /// Switching it on takes the speed down to five seconds a frame and starts
+    /// the machine — there is nothing to watch otherwise — and switching it
+    /// off puts the speed back where it was.
+    pub fn set_racing(&mut self, on: bool) {
+        if on {
+            self.speed_before_race = self.speed;
+            self.speed = RACE_SPEED;
+            self.running = true;
+        } else {
+            self.speed = self.speed_before_race;
+        }
+        self.racing = on;
     }
 
     /// The 48K's two timings, which only it has.
@@ -2530,6 +2621,7 @@ impl App {
         egui::Panel::top("menu").show(ui, |ui| {
             self.menu(ui);
             self.machine_row(ui);
+            self.video_row(ui);
         });
         egui::Panel::bottom("status").show(ui, |ui| {
             self.controls_row(ui);

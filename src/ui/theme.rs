@@ -36,6 +36,10 @@ pub const MARK: Color32 = Color32::from_rgb(0x16, 0x3c, 0x52);
 /// How tall every control is, and so how tall a row of the listing is.
 pub const CONTROL_H: f32 = 22.0;
 
+/// How tall a row of controls is: enough for a slider, which carries a sunken
+/// frame around it and so stands taller than a button.
+pub const ROW_H: f32 = CONTROL_H + 6.0;
+
 pub const CODE_BANDS: [Color32; 2] = [
     Color32::from_rgb(0x16, 0x33, 0x26),
     Color32::from_rgb(0x14, 0x2c, 0x40),
