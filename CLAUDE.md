@@ -158,7 +158,19 @@ more — and every IN takes the next byte the recording holds instead of reading
 the hardware. Counting whole instructions instead runs past the end of every
 frame and reads input that was never recorded; that showed up as thousands of
 "short reads" until it was fixed. The frame interrupt is raised at the
-recording's frame boundary rather than by the T-state count. In slow motion a
+recording's frame boundary rather than by the T-state count, and the video
+frame ends there too — nowhere else. The T-state clock used to end one as well,
+so a recorded frame holding more instructions than fit in a frame of the
+machine's own time painted the screen twice: once on the clock, once at the
+boundary. Space Harrier's recording does that from about frame 1,100 on — its
+frames hold 9,400 to 11,600 fetches where a video frame at the ~11 T-states a
+fetch this game runs at holds about 6,300 — and at five seconds a frame the
+second painting reads as flicker. Manic Miner's recording never does: its
+boundaries land within a dozen T-states of the clock. What is not settled is
+why those frames are so long — whether the game misses interrupts on real
+hardware, in which case the ULA really did paint twice, or the recording was
+made on something whose clock ran differently. The lengths are not near whole
+multiples of a frame, which fits neither story exactly. In slow motion a
 frame is played in pieces — Race the Beam runs at five seconds a frame, and
 whole frames at a time would stand still for five seconds and then jump — but
 only in slow motion: a 128K frame is a shade longer than a host frame, so a

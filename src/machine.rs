@@ -811,8 +811,14 @@ impl SpectrumBus {
         let t = self.tstates as usize;
         if t < self.contention.len() {
             self.contention[t]
-        } else {
+        } else if self.contention.is_empty() {
             0
+        } else {
+            // Past the end of the frame, which only happens while a recording
+            // is playing and its frame is running long. The ULA has gone round
+            // again and is contending the next frame's display, so the pattern
+            // repeats rather than stopping.
+            self.contention[t % self.contention.len()]
         }
     }
 
@@ -1730,7 +1736,13 @@ impl Spectrum {
             self.bus.break_hit.get_or_insert(Event::Rom(pc0));
         }
 
-        if self.bus.tstates >= self.bus.frame_t() {
+        // A recording's frame is the video frame, so while one is playing the
+        // frame ends where the recording says and nowhere else. Ending it on
+        // the T-state count as well paints the screen twice inside one
+        // recorded frame whenever the machine takes longer over the recorded
+        // instructions than the machine that recorded them did — which is
+        // what the flicker in Space Harrier's recording was.
+        if self.bus.playback.is_none() && self.bus.tstates >= self.bus.frame_t() {
             self.bus.end_frame();
             self.frames_completed += 1;
         }

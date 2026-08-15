@@ -8,6 +8,10 @@ use zx_rustrum::ui::{App, Roms, RzxPlayback, RACE_SPEED};
 /// An app playing a made-up recording of NOPs: nothing to see, but every frame
 /// is a known number of fetches, which is what the pacing is counted in.
 fn playing(speed: f32) -> App {
+    playing_frames_of(speed, 10_000)
+}
+
+fn playing_frames_of(speed: f32, fetches: u16) -> App {
     let mut spec = Spectrum::new();
     spec.bus.rom.iter_mut().for_each(|b| *b = 0x00); // NOPs
     spec.cpu.pc = 0;
@@ -29,7 +33,7 @@ fn playing(speed: f32) -> App {
             // is how much of one frame a host frame buys.
             frames: (0..60)
                 .map(|_| Frame {
-                    fetches: 10_000,
+                    fetches,
                     inputs: Vec::new(),
                 })
                 .collect(),
@@ -44,6 +48,38 @@ fn playing(speed: f32) -> App {
     });
     app.spec.bus.playback = Some(zx_rustrum::machine::Playback::default());
     app
+}
+
+/// A recording's frame is the video frame, however long it runs.
+///
+/// A recorded frame can hold more instructions than fit in a frame of the
+/// machine's own time — Space Harrier's recording holds about half as many
+/// again — and the T-state clock would then end a frame of its own before the
+/// recording's boundary did. The screen was painted twice inside one recorded
+/// frame, which at five seconds a frame reads as the picture flickering.
+#[test]
+fn a_recorded_frame_paints_the_screen_once_however_long_it_is() {
+    // Twenty thousand NOPs is 80,000 T-states, which is longer than the
+    // 69,888 a 48K frame takes.
+    let mut app = playing_frames_of(1.0, 20_000);
+    assert!(
+        20_000 * 4 > app.spec.bus.frame_t(),
+        "the point of the test is a recorded frame longer than a video frame"
+    );
+
+    for _ in 0..6 {
+        let before = app.spec.bus.frame;
+        let recorded = app.rzx.as_ref().unwrap().frame;
+        while app.rzx.as_ref().map_or(recorded + 1, |r| r.frame) == recorded {
+            app.advance(1.0 / 50.0);
+        }
+        assert_eq!(
+            app.spec.bus.frame - before,
+            1,
+            "one recorded frame should finish one picture, not {}",
+            app.spec.bus.frame - before
+        );
+    }
 }
 
 /// Race the Beam runs at five seconds a frame, and a recording has to be able
