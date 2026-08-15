@@ -259,6 +259,11 @@ pub struct SpectrumBus {
     /// Opcode fetches since the machine started, which is how a recording
     /// measures the length of a frame.
     pub fetches: u32,
+    /// Which parts of the picture were written behind the beam and which
+    /// ahead of it, while anybody is watching. `None` is not watching, which
+    /// is every case but Race the Beam: marking every write costs a branch and
+    /// a couple of stores on the busiest path there is.
+    pub tints: Option<Tints>,
     /// What each routine is seen to do, while it is switched on.
     pub observer: crate::observe::Observer,
     /// What the debugger is watching for, and what it caught. The bus is
@@ -290,6 +295,7 @@ impl SpectrumBus {
             late_timing: false,
             slots: [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)],
             tracker: Tracker::new(),
+            tints: None,
             undo: None,
             capture: None,
             irq_raised: 0,
@@ -493,8 +499,32 @@ impl SpectrumBus {
             let attr = 0x1800 + (line / 8) * 32;
             self.painted[(from + cell) as usize] = self.video(from + cell);
             self.painted[(attr + cell) as usize] = self.video(attr + cell);
+            // The beam has now put this byte out, so whatever was written
+            // there has been shown and there is nothing left to say about it.
+            if let Some(tints) = self.tints.as_mut() {
+                tints.clear(from + cell);
+                if line.is_multiple_of(8) {
+                    tints.clear(attr + cell);
+                }
+            }
             self.painted_cells += 1;
         }
+    }
+
+    /// Has the beam already put this byte of the display file out this frame?
+    ///
+    /// An attribute byte covers eight lines and is fetched again on every one
+    /// of them, so it counts as passed once the beam has started the row: a
+    /// write after that point is late for at least part of what it governs.
+    fn beam_has_passed(&self, offset: u16) -> bool {
+        let cell = (offset & 31) as u32;
+        let line = if offset < 0x1800 {
+            // Undo the display file's thirds-and-rows order.
+            ((offset >> 8) & 0x07) | ((offset >> 2) & 0x38) | ((offset >> 5) & 0xc0)
+        } else {
+            (offset - 0x1800) / 32 * 8
+        } as u32;
+        self.painted_cells > line * 32 + cell
     }
 
     /// How many character cells of the picture the ULA has fetched.
@@ -1030,6 +1060,18 @@ impl Bus for SpectrumBus {
             // can change it: a game racing the beam rubs a line out the moment
             // it has been painted.
             self.catch_up_painting();
+            if self.tints.is_some() {
+                let offset = addr - SCREEN_START;
+                let kind = if self.beam_has_passed(offset) {
+                    Tint::Late
+                } else {
+                    Tint::Early
+                };
+                let now = self.total_t();
+                if let Some(tints) = self.tints.as_mut() {
+                    tints.mark(offset, kind, now);
+                }
+            }
             self.screen_writes_acc += 1;
             if self.breaks.screen {
                 self.break_hit.get_or_insert(Event::Screen(addr));
@@ -1281,6 +1323,67 @@ pub struct Spectrum {
 impl Default for Spectrum {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// When a byte of the display file was written, relative to the beam.
+///
+/// Writing to a part of the picture the ULA has already put out means the
+/// change will not be seen until the next frame; writing to a part it has not
+/// reached yet means it will be seen in this one. Which of the two a game is
+/// doing is the difference between a sprite that appears and a sprite that
+/// flickers, and neither shows up in a finished picture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Tint {
+    /// Nothing has been written here, or the beam has since been over it.
+    #[default]
+    None,
+    /// Written after the beam had passed: too late for this frame.
+    Late,
+    /// Written before the beam got there: it will be shown this frame.
+    Early,
+}
+
+/// The marks on the display file, one per byte of it.
+#[derive(Clone, Debug)]
+pub struct Tints {
+    kind: Vec<Tint>,
+    /// When each was written, in T-states since the machine started.
+    when: Vec<u64>,
+}
+
+impl Default for Tints {
+    fn default() -> Self {
+        Tints {
+            kind: vec![Tint::None; 0x1b00],
+            when: vec![0; 0x1b00],
+        }
+    }
+}
+
+impl Tints {
+    /// The mark on a byte of the display file, and when it was made.
+    pub fn at(&self, offset: u16) -> (Tint, u64) {
+        let at = offset as usize & 0x1fff;
+        match (self.kind.get(at), self.when.get(at)) {
+            (Some(kind), Some(when)) => (*kind, *when),
+            _ => (Tint::None, 0),
+        }
+    }
+
+    fn mark(&mut self, offset: u16, kind: Tint, when: u64) {
+        let at = offset as usize & 0x1fff;
+        if at < self.kind.len() {
+            self.kind[at] = kind;
+            self.when[at] = when;
+        }
+    }
+
+    fn clear(&mut self, offset: u16) {
+        let at = offset as usize & 0x1fff;
+        if at < self.kind.len() {
+            self.kind[at] = Tint::None;
+        }
     }
 }
 

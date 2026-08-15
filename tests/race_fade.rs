@@ -38,7 +38,7 @@ fn white_screen() -> Spectrum {
 /// How bright a line is drawn, as a fraction of full white.
 fn brightness(spec: &Spectrum, fade: Fade, line: usize) -> f32 {
     let mut out = vec![0u8; VIEW.buffer_len()];
-    screen::render_fading(&spec.bus, VIEW, &mut out, false, fade);
+    screen::render_fading(&spec.bus, VIEW, &mut out, false, fade, None);
     let lit = colour_at(&out, VIEW.border_x + 8, VIEW.border_top + line);
     lit[0] as f32 / screen::PALETTE[7][0] as f32
 }

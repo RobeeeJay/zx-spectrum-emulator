@@ -86,6 +86,23 @@ picture is the line just *below* the beam, not the bottom of the screen: a
 quarter of the frame is spent below the display in the border and the sync.
 Hovering with the cursor is a different thing and is called Cursor Beam.
 
+**Writes are marked by which side of the beam they landed on**, while Race the
+Beam is on. Red says the beam had already been over that byte, so the change
+will not be seen until the next frame — which is what a flickering sprite is;
+green says it will be shown this frame. The colour blends into the colour the
+write is going to show over two seconds of the user's time, which is worked out
+in T-states from the speed the machine is being run at, so it is the same
+number of instructions however the speed is changed.
+
+A marked cell is drawn from the display file rather than from what the beam put
+out: the mark is on its way to the colour the write will show, and for a late
+write there is nothing on the screen yet. The mark itself lasts until the beam
+goes over the byte — not until its colour has finished blending, or the picture
+would pop back to the old content two seconds after every late write. The beam
+crossing clears it, and by then the painted frame holds the same bytes anyway,
+so nothing moves. Marking costs a branch on every write to the display file,
+which is why `bus.tints` is `None` at every other time.
+
 **The picture is the frame being painted while the machine crawls**, and the
 last finished frame otherwise. Holding the finished frame is what stops a
 repaint catching a picture half drawn at full speed; under slow draw it would

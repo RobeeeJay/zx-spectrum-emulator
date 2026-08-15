@@ -7,7 +7,7 @@
 
 use eframe::egui;
 
-use crate::machine::SpectrumBus;
+use crate::machine::{SpectrumBus, Tint, Tints};
 
 pub const SCREEN_W: usize = 256;
 pub const SCREEN_H: usize = 192;
@@ -130,6 +130,7 @@ pub fn render(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool) {
             byte: &|offset, _| bus.video_painted(offset),
             beam: None,
             fade: None,
+            tint: None,
         },
     );
 }
@@ -139,7 +140,14 @@ pub fn render(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool) {
 /// The same picture [`render_painting`] draws, with every pixel dimmed by how
 /// long ago the beam drew it. At full speed this would be a flicker nobody can
 /// see; at five seconds a frame it is the beam's whole trail down the screen.
-pub fn render_fading(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bool, fade: Fade) {
+pub fn render_fading(
+    bus: &SpectrumBus,
+    view: View,
+    out: &mut [u8],
+    flash_on: bool,
+    fade: Fade,
+    tint: Option<Tinting<'_>>,
+) {
     draw(
         out,
         view,
@@ -147,9 +155,19 @@ pub fn render_fading(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bo
         true,
         bus,
         Source {
-            byte: &|offset, _| bus.video_painting(offset),
+            // What the beam put out, except where a write has been marked:
+            // there, what the display file holds, since the mark is on its way
+            // to the colour that write is going to show.
+            byte: &|offset, live| {
+                if live {
+                    bus.video(offset)
+                } else {
+                    bus.video_painting(offset)
+                }
+            },
             beam: None,
             fade: Some(fade),
+            tint,
         },
     );
 }
@@ -173,6 +191,7 @@ pub fn render_painting(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: 
             byte: &|offset, _| bus.video_painting(offset),
             beam: None,
             fade: None,
+            tint: None,
         },
     );
 }
@@ -200,6 +219,7 @@ pub fn render_racing(bus: &SpectrumBus, view: View, out: &mut [u8], flash_on: bo
             },
             beam: Some(beam),
             fade: None,
+            tint: None,
         },
     );
 }
@@ -252,6 +272,7 @@ pub fn render_from(
             byte: &|offset, _| bus.peek_raw(base.wrapping_add(offset)),
             beam: None,
             fade: None,
+            tint: None,
         },
     );
 }
@@ -270,6 +291,74 @@ pub struct Fade {
     /// How bright a pixel is by the time the beam comes back to it, as a
     /// fraction of how bright it was when it was drawn.
     pub floor: f32,
+}
+
+/// The marks on the picture saying where each write landed relative to the
+/// beam, and how far they have blended away.
+#[derive(Clone, Copy)]
+pub struct Tinting<'a> {
+    pub tints: &'a Tints,
+    /// Now, in T-states since the machine started.
+    pub now: u64,
+    /// How long a mark takes to blend away into the colour it should be, in
+    /// T-states. The user is given it in seconds of their own time; how many
+    /// T-states that is depends on how slowly the machine is being run.
+    pub over: u64,
+}
+
+/// Written too late for this frame: it will not be seen until the next one.
+pub const LATE: [u8; 3] = PALETTE[10];
+/// Written in time to be shown this frame.
+pub const EARLY: [u8; 3] = PALETTE[12];
+
+impl Tinting<'_> {
+    /// The mark on a byte: its colour and how far it has blended away, or
+    /// nothing if there is none or it has had its time.
+    fn mark(&self, offset: u16) -> Option<([u8; 3], f32)> {
+        let (kind, when) = self.tints.at(offset);
+        let colour = match kind {
+            Tint::None => return None,
+            Tint::Late => LATE,
+            Tint::Early => EARLY,
+        };
+        // A mark lasts until the beam goes over it, however long that is; it
+        // is only its colour that is on a two-second timer. Ending the mark
+        // when the colour has finished blending would take the cell back to
+        // what the beam put out — which for a write the beam has passed is
+        // what was there before it — so the picture would pop back to the old
+        // content two seconds after every late write.
+        let age = self.now.saturating_sub(when);
+        let done = if self.over == 0 {
+            1.0
+        } else {
+            (age as f32 / self.over as f32).min(1.0)
+        };
+        Some((colour, done))
+    }
+
+    /// The mark on a cell: the later of its bitmap byte and its attribute,
+    /// since whichever was written last is the change being watched.
+    fn cell_mark(&self, bitmap: u16, attribute: u16) -> Option<([u8; 3], f32)> {
+        match (self.mark(bitmap), self.mark(attribute)) {
+            (Some(a), Some(b)) => {
+                if self.tints.at(bitmap).1 >= self.tints.at(attribute).1 {
+                    Some(a)
+                } else {
+                    Some(b)
+                }
+            }
+            (a, b) => a.or(b),
+        }
+    }
+}
+
+/// Blend `rgb` `done` of the way out of `mark`.
+fn blend(mark: [u8; 3], rgb: [u8; 3], done: f32) -> [u8; 3] {
+    [
+        (mark[0] as f32 * (1.0 - done) + rgb[0] as f32 * done) as u8,
+        (mark[1] as f32 * (1.0 - done) + rgb[1] as f32 * done) as u8,
+        (mark[2] as f32 * (1.0 - done) + rgb[2] as f32 * done) as u8,
+    ]
 }
 
 #[inline]
@@ -308,6 +397,8 @@ struct Source<'a> {
     beam: Option<u32>,
     /// How the picture fades behind the beam, if it does.
     fade: Option<Fade>,
+    /// The marks on the writes, if they are being shown.
+    tint: Option<Tinting<'a>>,
 }
 
 fn draw(
@@ -318,7 +409,12 @@ fn draw(
     bus: &SpectrumBus,
     source: Source<'_>,
 ) {
-    let Source { byte, beam, fade } = source;
+    let Source {
+        byte,
+        beam,
+        fade,
+        tint,
+    } = source;
     let (width, height) = (view.width(), view.height());
     let first = bus.first_pixel_t() as i64;
     let per_line = bus.model.t_per_line() as i64;
@@ -374,6 +470,12 @@ fn draw(
 
             if on_display_line && (0..SCREEN_W as i64).contains(&x) {
                 let cell = (x / 8) as u16;
+                // A marked cell is drawn from the display file rather than
+                // from what the beam put out: the mark is there to say what
+                // the write did, and it blends into the colour the write is
+                // going to show — which for a write the beam has passed is
+                // nothing that is on the screen yet.
+                let mark = tint.and_then(|t| t.cell_mark(row_off | cell, attr_row + cell));
                 if x % 8 == 0 || stale != cell_stale {
                     cell_stale = stale;
                     // Ahead of the beam, what is shown is what the display
@@ -383,7 +485,7 @@ fn draw(
                     // changes and all, which is what makes a raster effect
                     // visible: the two halves of the screen are the program's
                     // intention and the machine's execution of it.
-                    let read = |o: u16| byte(o, stale);
+                    let read = |o: u16| byte(o, stale || mark.is_some());
                     cell_bits = read(row_off | cell);
                     let attr = read(attr_row + cell);
                     let bright = (attr & 0x40) >> 3;
@@ -394,6 +496,12 @@ fn draw(
                     }
                     ink_c = PALETTE[ink as usize];
                     paper_c = PALETTE[paper as usize];
+                    // A byte just written shows as red or green and blends
+                    // into the colour it is going to be.
+                    if let Some((colour, done)) = mark {
+                        ink_c = blend(colour, ink_c, done);
+                        paper_c = blend(colour, paper_c, done);
+                    }
                     if stale {
                         ink_c = dim(ink_c);
                         paper_c = dim(paper_c);

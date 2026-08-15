@@ -14,7 +14,7 @@ use eframe::egui;
 use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportId};
 
 use crate::audio_out::AudioOut;
-use crate::machine::{Model, Spectrum, Stop};
+use crate::machine::{self, Model, Spectrum, Stop};
 use crate::prefs::{FileKind, Prefs, WindowRect};
 use crate::screen;
 use crate::snapshot;
@@ -277,6 +277,11 @@ pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("200%", 2.0),
     ("Max", MAX_SPEED),
 ];
+
+/// How long a write stays marked before it has blended into the colour it
+/// should be, in seconds of the user's time. Long enough to see where a write
+/// landed while the frame it landed in is still on screen.
+pub const TINT_SECONDS: f32 = 2.0;
 
 /// Five seconds to a frame: 0.02s of machine time in 5s of ours. Slow enough
 /// that a frame's drawing can be followed by eye, which is the only speed at
@@ -2135,13 +2140,23 @@ impl App {
             // While the machine is crawling, the picture is the one being
             // painted, so that it builds under the beam rather than sitting
             // still until the frame ends.
-            // Racing: the frame being painted, fading behind the beam.
+            // Racing: the frame being painted, fading behind the beam, with
+            // the writes since marked by which side of the beam they landed.
             None if self.racing => {
                 let fade = screen::Fade {
                     now: self.spec.bus.tstates,
                     floor: self.fade_floor,
                 };
-                screen::render_fading(&self.spec.bus, view, &mut pixels, flash, fade);
+                // The user is given the blend in seconds of their own time;
+                // how much of the machine's time that is depends on how
+                // slowly it is being run.
+                let over = (TINT_SECONDS * self.speed * self.spec.bus.model.cpu_hz() as f32) as u64;
+                let tint = self.spec.bus.tints.as_ref().map(|tints| screen::Tinting {
+                    tints,
+                    now: self.spec.bus.total_t(),
+                    over,
+                });
+                screen::render_fading(&self.spec.bus, view, &mut pixels, flash, fade, tint);
             }
             None if self.crawling() => {
                 screen::render_painting(&self.spec.bus, view, &mut pixels, flash)
@@ -2372,6 +2387,9 @@ impl App {
     /// the machine — there is nothing to watch otherwise — and switching it
     /// off puts the speed back where it was.
     pub fn set_racing(&mut self, on: bool) {
+        // Marking every write costs a branch on the busiest path in the
+        // emulator, so it is only done while somebody is looking at the marks.
+        self.spec.bus.tints = on.then(machine::Tints::default);
         if on {
             self.speed_before_race = self.speed;
             self.speed = RACE_SPEED;
