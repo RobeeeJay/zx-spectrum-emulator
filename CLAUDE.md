@@ -110,17 +110,33 @@ freeze the picture for the seconds an emulated frame takes while the beam
 crawled over it. Both are what the ULA put out, never the display file as it
 stands.
 
-**The ULA snows when I points at the screen.** After every opcode fetch the
-CPU puts I:R on the address bus; with I in $40..$7F that address is in the RAM
-the ULA is reading, and it takes the refresh for the CPU asking to read the
-screen again and again. It cannot keep up, loses the fetch it was making, and
-puts the byte it read before out again — which is the snow. Modelled at that
-level: `Bus::refresh` tells the bus what the CPU has on the address bus,
-`SpectrumBus::refresh` works out which cell fetch that spoils, and the painted
-frame repeats the last byte off the bus for it. The CPU only makes the call
-when I is in range, since it is on the busiest path there is — with the check
-a screenful of NOPs runs a fifth slower, and real code about seven per cent.
-The +2A/+3 drive the bus themselves and do not snow.
+**The ULA snows when I points at RAM it is reading.** After every opcode fetch
+the CPU puts I:R on the address bus, and the ULA — which tells the CPU's
+accesses from its own by watching that bus — is disturbed by it. Two different
+things happen, depending on where the last T-state of the M1 falls in the ULA's
+eight-T-state cycle
+([redcode's notes](https://github-wiki-see.page/m/redcode/ZXSpectrum/wiki/Snow-effect)):
+on its third, the pixel fetch is made from the wrong address, bits 6..0 of R
+standing in for the low seven of it — so snow is made of the program's own
+graphics, from the same part of the screen, and the colours stay right. On its
+fifth, the second cell of the pair is not fetched at all and the first goes out
+again in its place: the "double effect", an eight-pixel bar repeated.
+
+The address has to be RAM the ULA reads: $4000-$7FFF on a 48K, and on a 128K
+also $C000-$FFFF when an odd page is banked there. The +2A/+3 drive the bus
+themselves and do neither. The CPU only calls `Bus::refresh` when I could point
+at either range, since it is on the busiest path there is — with the test a
+screenful of NOPs runs a fifth slower, and real code about seven per cent.
+
+**The ULA's fetch cycle starts a T-state after contention does.** The reference
+FAQ says the first byte is displayed at 14336 while its own contention table
+starts at 14335, and `snow.tap` settles it: its interrupt handler fills the
+display with a solid field of NOPs after `LD R,A`, so every eight-T-state block
+gets an M1 in the same place, and it lands on the snow window only with the
+cycle anchored at 14336. All 3,072 blocks snow, which is what a program written
+to demonstrate snow should do. Against that, `ula128.tap` sets I to $FE on a
+128K and lands on the other parity, so it shows nothing here — worth checking
+against a real machine before trusting the anchor further.
 
 `tests/reference_48k.rs` holds the
 [48K reference](https://worldofspectrum.org/faq/reference/48kreference.htm)'s

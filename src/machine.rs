@@ -224,17 +224,17 @@ pub struct SpectrumBus {
     /// display file at any one moment is not what a television showed. Reading
     /// it at whatever moment the window repaints makes such a line blink.
     pub painted: Vec<u8>,
-    /// Which of this frame's cell fetches the ULA lost to snow, two bits a
-    /// cell: the bitmap fetch and the attribute fetch.
+    /// How each of this frame's cells was disturbed, if it was: [`SNOW`] or
+    /// [`DOUBLE`], one byte a cell.
     ///
     /// Empty until something makes the screen snow, which is rare — a program
     /// has to point I into the screen's own RAM — and cleared as it is used.
     snow: Vec<u8>,
     /// How many marks are in `snow`, so a frame with none costs nothing.
     snow_marks: u32,
-    /// The last byte the ULA got off the bus. A fetch lost to snow puts this
-    /// out again in place of the byte it should have read.
-    last_ula_byte: u8,
+    /// For a cell lost to snow, the byte that replaced the low half of the
+    /// address the ULA read from — the R register as it stood.
+    snow_r: Vec<u8>,
     /// How many character cells of this frame have been copied into `painted`,
     /// counting across each line and then down.
     ///
@@ -307,8 +307,8 @@ impl SpectrumBus {
             slots: [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)],
             tracker: Tracker::new(),
             snow: Vec::new(),
+            snow_r: Vec::new(),
             snow_marks: 0,
-            last_ula_byte: 0,
             tints: None,
             undo: None,
             capture: None,
@@ -512,11 +512,10 @@ impl SpectrumBus {
             // that goes with the cell.
             let from = ((line & 0xc0) << 5) | ((line & 0x07) << 8) | ((line & 0x38) << 2);
             let attr = 0x1800 + (line / 8) * 32;
-            // What the ULA got off the bus, which is the byte it read unless
-            // snow lost it that fetch — then the byte before goes out again.
-            // Nearly every frame has no snow in it at all, and this runs six
-            // thousand times a frame, so the empty case does no work.
-            let spoiled = if snowing {
+            // How the ULA's fetch went. Nearly every frame has nothing wrong
+            // with it, and this runs six thousand times a frame, so the empty
+            // case does no work.
+            let disturbed = if snowing {
                 self.snow
                     .get(self.painted_cells as usize)
                     .copied()
@@ -524,18 +523,26 @@ impl SpectrumBus {
             } else {
                 0
             };
-            let bitmap = if spoiled & 1 != 0 {
-                self.last_ula_byte
-            } else {
-                self.video(from + cell)
+            let (bitmap, attribute) = match disturbed {
+                // Read from the wrong address: bits 6..0 of R stand in for
+                // the low seven of it, so the byte comes from somewhere else
+                // in the same part of the screen — which is why snow is made
+                // of the program's own graphics rather than of noise. The
+                // coincidence is with one fetch, and that fetch is a pixel
+                // one; the attribute is read a T-state later and is fine.
+                SNOW => {
+                    let r = self.snow_r[self.painted_cells as usize] as u16;
+                    let wrong = ((from + cell) & 0xff80) | (r & 0x7f);
+                    (self.video(wrong), self.video(attr + cell))
+                }
+                // Not fetched at all: what went out was the cell before it,
+                // which is why it shows as a repeated bar.
+                DOUBLE => (
+                    self.painted[(from + cell - 1) as usize],
+                    self.painted[(attr + cell - 1) as usize],
+                ),
+                _ => (self.video(from + cell), self.video(attr + cell)),
             };
-            self.last_ula_byte = bitmap;
-            let attribute = if spoiled & 2 != 0 {
-                self.last_ula_byte
-            } else {
-                self.video(attr + cell)
-            };
-            self.last_ula_byte = attribute;
             self.painted[(from + cell) as usize] = bitmap;
             self.painted[(attr + cell) as usize] = attribute;
             // The beam has now put this byte out, so whatever was written
@@ -552,56 +559,78 @@ impl SpectrumBus {
 
     /// The CPU has put `addr` on the bus for a refresh.
     ///
-    /// The ULA shares the lower 16K with the CPU, and tells the two apart by
-    /// watching the address bus. A refresh address in that range — which is I
-    /// in $40..$7F, since R supplies the low byte — looks to it like the CPU
-    /// reading the screen, over and over, once per instruction. It cannot keep
-    /// up, and the fetch it was making is lost: the byte it read before goes
-    /// out again in place of the one it should have read, which is the snow.
+    /// The ULA shares the lower RAM with the CPU and tells the two apart by
+    /// watching the address bus. A refresh address in that RAM — which is I in
+    /// $40..$7F on a 48K, and also $C0..$FF on a 128K with a contended page
+    /// banked at $C000 — arrives once per instruction and disturbs the fetch
+    /// the ULA is making. Which way it is disturbed depends on where in the
+    /// ULA's eight-T-state cycle the last T-state of the M1 falls:
     ///
-    /// Only where there is a shared bus to be confused about. The +2A and +3
-    /// gate array drives it itself and does not snow.
+    /// - on the third, where the first cell of the pair is fetched, that fetch
+    ///   is made from the wrong address: bits 6..0 of R are picked up into the
+    ///   low byte of it. That is the snow, and it is made of the program's own
+    ///   graphics — the same 256 bytes of the screen, the wrong one of them.
+    /// - on the fifth, where the second cell is fetched, it is not fetched at
+    ///   all and the first cell goes out again in its place. That is the
+    ///   "double effect", and it shows as an eight-pixel bar repeated.
+    ///
+    /// The reference counts the ULA's cycle from two T-states before the first
+    /// fetch of the pair, so its third and fifth are the two fetches this
+    /// emulator counts as the first and third T-states of the eight.
+    ///
+    /// Only where there is a shared bus to be confused about: the +2A and +3
+    /// gate array drives it itself and does neither.
     pub fn refresh(&mut self, addr: u16) {
-        if addr & 0xc000 != 0x4000 || !self.model.has_floating_bus() {
+        if !self.model.has_floating_bus() || !self.contended_addr(addr) {
             return;
         }
-        // The refresh is the second half of the M1 cycle, which has already
-        // been counted, so it happened two T-states back.
-        let at = self.tstates.wrapping_sub(2);
-        let Some((cell, attribute)) = self.fetch_slot(at) else {
+        // The M1 cycle has already been counted, so its last T-state — the one
+        // that has to coincide with the ULA's — is one back from here.
+        let at = self.tstates.wrapping_sub(1);
+        let Some((cell, kind)) = self.disturbed_cell(at) else {
             return;
         };
-        // A cell the beam has already been over cannot be spoiled: the ULA
+        // A cell the beam has already been over cannot be disturbed: the ULA
         // read it before the CPU got here.
         if cell < self.painted_cells {
             return;
         }
         if self.snow.is_empty() {
             self.snow = vec![0; (192 * 32) as usize];
+            self.snow_r = vec![0; (192 * 32) as usize];
         }
-        let bit = if attribute { 2 } else { 1 };
-        let mark = &mut self.snow[cell as usize];
-        if *mark & bit == 0 {
-            *mark |= bit;
+        if self.snow[cell as usize] == 0 {
             self.snow_marks += 1;
         }
+        self.snow[cell as usize] = kind;
+        // The low byte of the address the ULA reads from, when it is snow.
+        self.snow_r[cell as usize] = addr as u8;
     }
 
-    /// How many fetches this frame have been lost to snow, for tests and for
+    /// How many of each kind, for tests: (snow, double).
+    pub fn snow_kinds(&self) -> (u32, u32) {
+        let snow = self.snow.iter().filter(|k| **k == SNOW).count() as u32;
+        let double = self.snow.iter().filter(|k| **k == DOUBLE).count() as u32;
+        (snow, double)
+    }
+
+    /// How many of this frame's fetches have been disturbed, for tests and for
     /// anybody wondering why the picture looks like that.
     pub fn snow_marks(&self) -> u32 {
         self.snow_marks
     }
 
-    /// Which cell the ULA is fetching at T-state `at`, and whether it is the
-    /// attribute rather than the bitmap.
+    /// Which cell the ULA is fetching at T-state `at`, and how a refresh
+    /// landing there disturbs it.
     ///
-    /// The ULA fetches in pairs — bitmap, attribute, bitmap, attribute — over
-    /// the first four T-states of every eight, and idles for the other four.
-    /// A refresh in an idle slot spoils nothing.
-    fn fetch_slot(&self, at: u32) -> Option<(u32, bool)> {
+    /// The ULA works in pairs of cells over eight T-states: the first cell's
+    /// bitmap and attribute, then the second's, then four T-states with the
+    /// bus left alone. Counting from one as the reference does, the third
+    /// T-state is where the second cell's bitmap is fetched and the fifth is
+    /// the first idle one.
+    fn disturbed_cell(&self, at: u32) -> Option<(u32, u8)> {
         let first = self.first_pixel_t();
-        let since = at.checked_sub(first)?;
+        let since = at.checked_sub(first + 1)?;
         let per_line = self.model.t_per_line();
         let line = since / per_line;
         if line >= 192 {
@@ -611,15 +640,10 @@ impl SpectrumBus {
         if along >= 128 {
             return None;
         }
-        // Two cells in every eight T-states — bitmap, attribute, bitmap,
-        // attribute — and the bus left alone for the other four, as
-        // [`SpectrumBus::floating_bus`] has it.
-        let cell = (along / 8) * 2;
+        let pair = (along / 8) * 2;
         match along % 8 {
-            0 => Some((line * 32 + cell, false)),
-            1 => Some((line * 32 + cell, true)),
-            2 => Some((line * 32 + cell + 1, false)),
-            3 => Some((line * 32 + cell + 1, true)),
+            2 => Some((line * 32 + pair + 1, SNOW)),
+            4 => Some((line * 32 + pair + 1, DOUBLE)),
             _ => None,
         }
     }
@@ -1508,6 +1532,11 @@ impl Tints {
         }
     }
 }
+
+/// A fetch made from the wrong address, the low half of it the R register.
+pub const SNOW: u8 = 1;
+/// A fetch not made at all, the cell before it put out again instead.
+pub const DOUBLE: u8 = 2;
 
 /// Where the ROM ends and RAM begins, on every machine here.
 const ROM_END: u16 = 0x4000;

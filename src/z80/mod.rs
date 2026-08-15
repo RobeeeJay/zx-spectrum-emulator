@@ -261,14 +261,15 @@ impl Z80 {
     /// the I register as the high byte and R as the low one, before R is
     /// stepped on.
     ///
-    /// Only when I points into the lower 16K, which is the only case any bus
-    /// here cares about — a Spectrum's ULA sharing that RAM. The test is a
-    /// register compare against a call and a division on every instruction
-    /// the machine executes; without it a screenful of NOPs runs a fifth
-    /// slower for a thing that almost never happens.
+    /// Only when I points at one of the two places a Spectrum keeps RAM the
+    /// ULA might be reading — $4000-$7FFF, or $C000-$FFFF where a 128K can
+    /// bank a contended page. The bus decides whether it is really contended;
+    /// this is a register compare that keeps a call and a division off every
+    /// instruction the machine executes, which a screenful of NOPs feels as a
+    /// fifth of its speed.
     #[inline]
     fn refresh(&self, bus: &mut impl Bus) {
-        if self.i & 0xc0 == 0x40 {
+        if matches!(self.i & 0xc0, 0x40 | 0xc0) {
             bus.refresh(((self.i as u16) << 8) | self.r as u16);
         }
     }

@@ -107,41 +107,123 @@ fn snow_does_not_stop_the_machine() {
     );
 }
 
-/// What replaces the lost byte is the one before it, not a blank or a random
-/// one: the ULA puts out again whatever it last got off the bus.
+/// Snow is a fetch made from the wrong address.
+///
+/// "If the 4th cycle of the operation code fetching cycle coincides with the
+/// 3th cycle of the 8-tacts output cycle of 16 pixels … the low byte of
+/// address is replaced with the current contents of the R register." So the
+/// ULA reads the right third of the screen and the wrong byte of it, which is
+/// why snow is made of the program's own graphics rather than of noise.
 #[test]
-fn a_lost_fetch_puts_out_the_byte_before_it() {
+fn snow_reads_the_line_with_r_for_the_low_byte_of_the_address() {
     let mut spec = machine(Model::Spectrum48, 0x40);
+    // R is $AB, and it is bits 6..0 of it that are picked up — bit 7 is the
+    // one the Z80 never increments — so the byte comes from $402B, not $40AB.
+    spec.bus.poke(0x4000 + 0x2b, 0x5a);
+    spec.bus.poke(0x4000 + 0xab, 0x99);
     let first = spec.bus.first_pixel_t();
-    // The ULA reads cell 0's bitmap and attribute in the first two T-states
-    // of the line; let it, so there is a byte for the next fetch to repeat.
-    spec.bus.tstates = first + 2;
-    spec.bus.catch_up_painting();
-    let read_so_far = spec.bus.video_painting(0x1800); // cell 0's attribute
 
-    // The third T-state of the eight is cell 1's bitmap, and the refresh is
-    // counted two T-states back from where the clock stands.
-    spec.bus.tstates = first + 2 + 2;
-    spec.bus.refresh(0x4000);
+    // The ULA's eight-T-state cycle starts a T-state after the contention
+    // does; its third is where the second cell of the pair is fetched. The
+    // M1's last T-state is one back from where the clock stands.
+    spec.bus.tstates = first + 1 + 2 + 1;
+    spec.bus.refresh(0x40ab); // I = $40, R = $AB
     spec.bus.tstates = first + 16;
     spec.bus.catch_up_painting();
 
     assert_eq!(
         spec.bus.video_painting(1),
-        read_so_far,
-        "the lost fetch should have put out the byte the ULA read before it, \
-         which was cell 0's attribute"
-    );
-    assert_ne!(
-        spec.bus.video_painting(1),
-        spec.bus.video(1),
-        "and not the byte the display file holds"
+        0x5a,
+        "the second cell should have been read from $402B — the ULA's own \
+         address with bits 6..0 of R underneath it"
     );
     assert_eq!(
-        spec.bus.video_painting(2),
-        spec.bus.video(2),
-        "the fetch after it is not spoiled"
+        spec.bus.video_painting(0x1801),
+        spec.bus.video(0x1801),
+        "the coincidence is with one fetch, and the attribute is the next one \
+         along: snow scrambles the pixels and leaves the colours"
     );
+    assert_eq!(
+        spec.bus.video_painting(0),
+        spec.bus.video(0),
+        "and the cell before it was fetched before the CPU got there"
+    );
+}
+
+/// The double effect is a fetch not made at all.
+///
+/// "If the 4th cycle of the operation code fetching cycle coincides with the
+/// 5th cycle of the 8-tacts output cycle … the pixels2/attributes2 data will
+/// not be read, and the screen bar with pixels1/attributes1 data will be
+/// re-displayed."
+#[test]
+fn the_double_effect_shows_the_bar_before_it_again() {
+    let mut spec = machine(Model::Spectrum48, 0x40);
+    // Two cells that cannot be confused with one another.
+    spec.bus.poke(0x4000, 0xf0);
+    spec.bus.poke(0x4001, 0x0f);
+    spec.bus.poke(0x5800, 0x07);
+    spec.bus.poke(0x5801, 0x38);
+    let first = spec.bus.first_pixel_t();
+
+    spec.bus.tstates = first + 1 + 4 + 1;
+    spec.bus.refresh(0x40ab);
+    spec.bus.tstates = first + 16;
+    spec.bus.catch_up_painting();
+
+    assert_eq!(
+        spec.bus.video_painting(1),
+        0xf0,
+        "the second cell was never fetched, so the first one went out again"
+    );
+    assert_eq!(
+        spec.bus.video_painting(0x1801),
+        0x07,
+        "and its attribute with it"
+    );
+}
+
+/// Nothing happens on the other six T-states of the eight.
+#[test]
+fn a_refresh_anywhere_else_in_the_cycle_does_nothing() {
+    let first = Spectrum::with_model(Model::Spectrum48).bus.first_pixel_t();
+    for phase in [0u32, 1, 3, 5, 6, 7] {
+        let mut spec = machine(Model::Spectrum48, 0x40);
+        spec.bus.tstates = first + 1 + phase + 1;
+        spec.bus.refresh(0x40ab);
+        assert_eq!(
+            spec.bus.snow_marks(),
+            0,
+            "a refresh on T-state {phase} of the eight should disturb nothing"
+        );
+    }
+}
+
+/// A 128K snows for I in $C0..$FF as well, when a contended page is banked at
+/// $C000: "Spectrum 128/+2: addresses #C000..#FFFF (odd-numbered pages:
+/// 1,3,5,7)".
+#[test]
+fn a_128k_snows_from_the_top_of_memory_too() {
+    for (page, snows) in [
+        (1u8, true),
+        (3, true),
+        (5, true),
+        (7, true),
+        (0, false),
+        (2, false),
+    ] {
+        let mut spec = machine(Model::Spectrum128, 0xc0);
+        spec.bus.write_paging(page);
+        let first = spec.bus.first_pixel_t();
+        spec.bus.tstates = first + 1 + 2 + 1;
+        spec.bus.refresh(0xc0ab);
+        assert_eq!(
+            spec.bus.snow_marks() > 0,
+            snows,
+            "with page {page} at $C000, snow should {}happen",
+            if snows { "" } else { "not " }
+        );
+    }
 }
 
 /// The +2A and +3 drive the bus themselves rather than sharing it, so there is
