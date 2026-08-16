@@ -9,6 +9,7 @@ pub mod blocks;
 pub mod demo_rom;
 pub mod detect;
 pub mod disasm;
+pub mod flashload;
 pub mod flow;
 pub mod listing;
 pub mod logo;

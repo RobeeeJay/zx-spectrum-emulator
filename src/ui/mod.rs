@@ -1902,6 +1902,17 @@ impl App {
         }
     }
 
+    /// Whether whole blocks are handed to the ROM's loader rather than
+    /// played. The ZX81's ROM is a different one and has no such routine, so
+    /// it is a Spectrum switch only.
+    pub fn tape_flash(&self) -> bool {
+        self.zx81.is_none() && self.spec.bus.tape_flash
+    }
+
+    pub fn set_tape_flash(&mut self, on: bool) {
+        self.spec.bus.tape_flash = on;
+    }
+
     pub fn tape_boost_mut(&mut self) -> &mut bool {
         match &mut self.zx81 {
             Some(zx) => &mut zx.bus.tape_boost,

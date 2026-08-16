@@ -258,6 +258,9 @@ pub struct SpectrumBus {
     /// Run faster while the tape is playing, so loading does not take the
     /// same four minutes it did in 1983.
     pub tape_boost: bool,
+    /// Hand whole blocks to the ROM's loader instead of playing them, so a
+    /// tape loads in the time it takes to copy it. See [`crate::flashload`].
+    pub tape_flash: bool,
 
     /// Scratch space for tape edges on their way to the mixer.
     tape_edge_scratch: Vec<(u64, bool)>,
@@ -331,6 +334,7 @@ impl SpectrumBus {
             audio: Audio::new(model.cpu_hz()),
             tape: None,
             tape_boost: true,
+            tape_flash: false,
             tape_edge_scratch: Vec::new(),
             slow: SlowDraw::default(),
             screen_writes: 0,
@@ -1578,6 +1582,7 @@ impl Spectrum {
         let tape = self.bus.tape.take();
         let audio = std::mem::replace(&mut self.bus.audio, crate::audio::Audio::new(1.0));
         let tape_boost = self.bus.tape_boost;
+        let tape_flash = self.bus.tape_flash;
         let slow_enabled = self.bus.slow.enabled;
         let late = self.bus.late_timing;
 
@@ -1589,6 +1594,7 @@ impl Spectrum {
         self.bus.audio.ay.reset();
         self.bus.tape = tape;
         self.bus.tape_boost = tape_boost;
+        self.bus.tape_flash = tape_flash;
         self.bus.slow.enabled = slow_enabled;
         self.load_rom(rom);
         self.reset();
@@ -1709,6 +1715,16 @@ impl Spectrum {
     }
 
     pub fn step_instruction(&mut self) {
+        // Answering the ROM's loader is done in place of the instruction at
+        // its first address, so the routine never runs at all. One comparison
+        // when the switch is off, and it is only on while somebody is loading
+        // a tape in a hurry.
+        if self.bus.tape_flash
+            && self.cpu.pc == crate::flashload::LD_BYTES
+            && crate::flashload::load_block(self) != crate::flashload::Loaded::NotOurs
+        {
+            return;
+        }
         self.check_interrupt();
 
         let watching = self.profiler.running || self.bus.observer.enabled || self.bus.breaks.rom;

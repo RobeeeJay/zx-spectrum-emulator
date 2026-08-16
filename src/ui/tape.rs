@@ -121,11 +121,35 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         let boost = app.tape_boost();
         if ui
             .selectable_label(boost, "Max speed")
-            .on_hover_text("Runs the CPU at 8x while the tape moves, so loading is quick.")
+            .on_hover_text("Runs the CPU as fast as it will go while the tape moves.")
             .clicked()
         {
             *app.tape_boost_mut() = !boost;
         }
+
+        // Faster than fast: the tape is not played at all, it is handed over.
+        // Only where there is a ROM with the routine in it to hand it to.
+        let flash = app.tape_flash();
+        ui.add_enabled_ui(!app.on_zx81(), |ui| {
+            if ui
+                .selectable_label(flash, "Ludicrous speed")
+                .on_hover_text(
+                    "Hand each block straight to the ROM's loader instead of playing \
+                     it, so a tape loads in the time it takes to copy it. Games with \
+                     a loader of their own read the tape themselves and cannot be \
+                     helped: those load at whatever speed the machine is running at.",
+                )
+                .clicked()
+            {
+                app.set_tape_flash(!flash);
+                // A game with a loader of its own still has to be played to,
+                // so switching this on switches the other on with it: this is
+                // meant to be the fastest way of loading anything.
+                if !flash {
+                    *app.tape_boost_mut() = true;
+                }
+            }
+        });
     });
 
     if let Some(dir) = action {

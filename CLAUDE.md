@@ -183,6 +183,22 @@ asks for more input than it holds has come adrift, and the toolbar says so
 rather than letting the picture look authentic. `recordings/` is gitignored for
 the same reason as `tapes/`.
 
+**Ludicrous speed answers the ROM instead of playing to it.** A tape loads at
+1,500 baud however fast the machine is run — the pulses take as long as they
+take — so Max speed shortens the wait and cannot remove it. `src/flashload.rs`
+removes it: when the machine calls LD-BYTES at $0556, the next block with the
+flag byte it asked for is copied into memory, the registers are left as the
+routine would have left them, and the return is taken there and then. Border
+Break loads in two frames instead of 2,605, ending in the same place with the
+same screen.
+
+It only works where the ROM is doing the loading, and only where that ROM is
+the one paged in — the eight bytes at $0556 are checked against the routine
+rather than assumed, since a 128K is running its own ROM there and a program
+may put anything it likes at that address. A game with a loader of its own is
+counting its own pulses and cannot be helped, which is why switching this on
+switches Max speed on with it.
+
 **Tapes are played as pulses**, never decoded, so turbo loaders and the ZX81's
 own format work through the same path. Each machine has its own deck, because a
 tape is timed in the T-states of the machine playing it and the two clocks
