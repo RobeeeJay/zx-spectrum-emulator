@@ -278,6 +278,15 @@ pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("Max", MAX_SPEED),
 ];
 
+/// How much emulated time Ludicrous speed will do in one host frame before it
+/// stops to draw, in frames of the machine's own.
+const LUDICROUS_FRAMES: u32 = 24;
+
+/// And how much of the host's time it will spend doing it. The window has to
+/// go on answering while it works, so it stops to draw twenty times a second —
+/// which is still a hundred times the machine time Max speed manages.
+const LUDICROUS_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// How long a write stays marked before it has blended into the colour it
 /// should be, in seconds of the user's time. Long enough to see where a write
 /// landed while the frame it landed in is still on screen.
@@ -1902,6 +1911,16 @@ impl App {
         }
     }
 
+    /// Is a loader of the game's own reading the tape at this moment?
+    ///
+    /// Told by the sampling loop it is sitting in, which nearly every loader
+    /// shares — see [`crate::flashload::at_sampler`]. Blocks cannot be handed
+    /// to one of those, so what Ludicrous speed does for them is let the
+    /// machine run.
+    pub fn loader_is_reading(&self) -> bool {
+        self.zx81.is_none() && crate::flashload::at_sampler(&self.spec)
+    }
+
     /// Whether whole blocks are handed to the ROM's loader rather than
     /// played. The ZX81's ROM is a different one and has no such routine, so
     /// it is a Spectrum switch only.
@@ -2111,10 +2130,36 @@ impl App {
         self.spec.bus.audio.speed_ok = (0.85..=1.2).contains(&effective);
 
         // Cap the work per host frame so "Max" speed cannot lock up the UI.
-        let budget = budget.min(self.spec.bus.frame_t() * 24);
+        //
+        // Ludicrous speed lifts the cap while a tape is moving, and keeps the
+        // window answering by watching the clock instead: a game with a loader
+        // of its own reads the tape itself, and the only thing that gets it
+        // loaded quickly is letting the machine run. Twenty-four frames of
+        // work a host frame is about twelve seconds of waiting for a Speedlock
+        // tape; a tenth of a second of real work a host frame gets it down to
+        // about one.
+        let flat_out = self.spec.bus.tape_flash && self.tape_is_loading();
+        let budget = if flat_out {
+            budget.min(self.spec.bus.frame_t() * LUDICROUS_FRAMES)
+        } else {
+            budget.min(self.spec.bus.frame_t() * 24)
+        };
         self.rewind.clear();
+        let started = std::time::Instant::now();
         let stop = self.spec.run(budget);
         self.last_stop = Some(stop);
+        if flat_out {
+            // However much is left of the budget, stop when the host frame is
+            // spent: the picture and the buttons still have to happen.
+            while started.elapsed() < LUDICROUS_SLICE
+                && matches!(self.last_stop, Some(Stop::Budget))
+                && self.tape_is_loading()
+            {
+                let stop = self.spec.run(self.spec.bus.frame_t() * 24);
+                self.last_stop = Some(stop);
+            }
+        }
+        let stop = self.last_stop.expect("just set");
         self.handle_stop(stop);
         self.spec.bus.audio_sync();
         self.spec.bus.audio.flush();

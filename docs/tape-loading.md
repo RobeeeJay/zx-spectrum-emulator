@@ -124,10 +124,84 @@ over.
 
 ## Loading that is not the ROM's
 
-Games with their own loaders are the majority of anything past 1984, and they
-are all different. What the emulator can do for them is play the pulses
-accurately and run the CPU fast; what it cannot do is guess their block format.
-Two things make them work:
+Games with their own loaders are the majority of anything past 1984. Nearly all
+of them are built round the same handful of
+[loading routine cores](https://sinclair.wiki.zxnet.co.uk/wiki/Loading_routine_%22cores%22),
+of which the commonest is the ROM's own edge sampler with the BREAK check taken
+out:
+
+```text
+LD-SAMPLE  INC B          04
+           RET Z          C8
+           LD A,$7F       3E 7F
+           IN A,($FE)     DB FE
+           RRA            1F
+           XOR C          A9
+           AND $20        E6 20
+           JR Z,LD-SAMPLE 28 xx
+```
+
+Speedlock uses exactly that. Found in Head over Heels at $FD30, byte for byte,
+with the jump back reading `28 F4` rather than the ROM's `F6` because its loop
+starts two bytes earlier — which is why the first search for it, using the
+ROM's displacement, found nothing at all. `flashload::at_sampler` matches the
+first eleven bytes and ignores the displacement.
+
+### What cannot be done, and why
+
+A Speedlock block cannot be handed over the way a ROM block can, because the
+bytes on the tape are not the bytes that reach memory. Its byte loop, from Head
+over Heels:
+
+```text
+$FE04  LD A,$12          ; both immediates are rewritten as it goes
+$FE06  XOR L             ; L is the byte assembled from the tape
+$FE07  ADD A,$86
+$FE09  LD (IX+$00),A
+$FE0C  INC IX
+$FE0E  DEC DE
+$FE1A  CALL $FD2C        ; the next bit
+```
+
+The obvious shortcut is not to hand over blocks but to skip the *waiting*: when
+the machine is sitting in the sampler, the deck already knows when the next
+edge is due, so move the clock there and give B the turns it would have
+counted. That was tried and **it does not work**. The port the loop reads is
+$7FFE, whose high byte is in the contended range, so the ULA stalls the read by
+an amount that depends on where the beam is: measured over a load of Head over
+Heels, a turn costs 54 T-states most of the time but 56, 58 or 60 often enough
+to matter. Divide the wait by a fixed 54 and B comes out wrong, the loader
+mis-measures its pulses, and both test tapes failed to load. Charging each
+skipped turn its true contended cost would mean reproducing the I/O contention
+in closed form for a saving of a few instructions a bit, which is not worth it.
+
+### What is done instead
+
+Ludicrous speed lifts the work cap while a tape is moving. Max speed is held to
+twenty-four frames of machine time a host frame so that fast-forward cannot
+lock up the window; with a tape loading, that cap is what a person is waiting
+on. Ludicrous keeps working until fifty milliseconds of the host's own time
+have gone, then stops to draw, so the window still answers twenty times a
+second.
+
+Measured on Daley Thompson's Decathlon, from `LOAD ""` to the tape stopping:
+
+| | host frames | what that is at 60 Hz |
+| --- | --- | --- |
+| Max speed | 615 | about ten seconds |
+| Ludicrous speed | 11 | about a fifth of a second |
+
+And it loads the same game: comparing all of memory at the moment the tape
+stops, the loading screen's pixels and everything above the screen are
+identical byte for byte. What differs is the stack below SP ($FFCE-$FFDF for
+Head over Heels, $FFF3-$FFF9 for Daley) and, for Daley, 151 attribute bytes —
+its loading screen cycles colours while the tape runs, so how far round it has
+got depends on exactly when the tape ran out.
+
+## The rest of what a custom loader needs
+
+What the emulator can do for a loader it cannot answer is play the pulses
+accurately and run the CPU fast. Two things make that work:
 
 - **Pulse-level playback**, as above. A loader measuring its own edge timings
   gets the same edges a real machine would.

@@ -1025,6 +1025,15 @@ impl Tape {
         matches!(self.phase, Phase::Finished) || self.block >= self.blocks.len()
     }
 
+    /// When the level next changes, in absolute T-states.
+    ///
+    /// A loader waiting for an edge is going to sit in its sampling loop until
+    /// this moment, and there is nothing to be learned by watching it do so.
+    /// See [`crate::flashload`].
+    pub fn next_edge(&self) -> u64 {
+        self.next_edge
+    }
+
     /// EAR level at absolute T-state `now`, advancing the pulse generator to
     /// get there. Cheap: it only does work when pulses have actually elapsed.
     pub fn level_at(&mut self, now: u64) -> bool {

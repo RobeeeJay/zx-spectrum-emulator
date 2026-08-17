@@ -111,6 +111,37 @@ fn a_block_that_is_the_wrong_length_fails_as_the_rom_would() {
     assert_eq!(spec.cpu.pc, 0x1234, "and it still returns to its caller");
 }
 
+/// A block longer than the program asked for is ordinary: the ROM stops
+/// listening after the length it wanted and takes the next byte as the parity,
+/// and the rest of the block goes past unread.
+///
+/// Daley Thompson's Decathlon's headers carry a spare byte after the checksum
+/// — twenty bytes where nineteen is the usual — and calling that a failure
+/// made BASIC retry the load for ever while the tape ran on into the game's
+/// own loader, which then had nothing to sync to.
+#[test]
+fn a_block_longer_than_asked_for_is_not_a_failure() {
+    let mut bytes = match block(0xFF, &[3; 17]) {
+        Block::Standard { data, .. } => data,
+        _ => unreachable!(),
+    };
+    bytes.push(0x80); // the spare byte on the end
+    let mut spec = machine(vec![Block::Standard {
+        pause_ms: 1000,
+        data: bytes,
+    }]);
+    call_loader(&mut spec, 0xFF, 0x8000, 17);
+
+    assert_eq!(spec.cpu.f & 0x01, 1, "it should have loaded");
+    assert_eq!(spec.bus.mem(0x8000), 3, "and put the bytes where they go");
+    assert_eq!(
+        spec.bus.mem(0x8011),
+        0,
+        "and stopped after the seventeen it was asked for"
+    );
+    assert_eq!(spec.cpu.ix, 0x8011, "IX ends after those seventeen");
+}
+
 /// Only where the ROM that owns the address is the one paged in. A program is
 /// free to put anything it likes at $0556, and a 128K is running a different
 /// ROM there until a game pages the other one back.

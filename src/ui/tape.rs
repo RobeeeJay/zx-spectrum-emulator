@@ -110,6 +110,17 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
+
+        // Which of the two things it is doing, since they are not the same
+        // thing: a game with a loader of its own is read to, not handed to.
+        if flash {
+            let what = if app.loader_is_reading() {
+                "the game's own loader is reading the tape"
+            } else {
+                "handing blocks to the ROM"
+            };
+            ui.label(egui::RichText::new(what).small().color(theme::DIM));
+        }
     });
 }
 

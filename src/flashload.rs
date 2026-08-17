@@ -30,6 +30,56 @@ pub const LD_BYTES: u16 = 0x0556;
 /// likes at that address in RAM.
 const LD_BYTES_SIGNATURE: [u8; 8] = [0x14, 0x08, 0x15, 0xF3, 0x3E, 0x0F, 0xD3, 0xFE];
 
+/// The edge-sampling loop that nearly every loader is built round, from the
+/// [loading routine cores](https://sinclair.wiki.zxnet.co.uk/wiki/Loading_routine_%22cores%22):
+///
+/// ```text
+/// LD-SAMPLE  INC B          04
+///            RET Z          C8
+///            LD A,$7F       3E 7F
+///            IN A,($FE)     DB FE
+///            RRA            1F
+///            XOR C          A9
+///            AND $20        E6 20
+///            JR Z,LD-SAMPLE 28 xx
+/// ```
+///
+/// The ROM has a `RET NC` in the middle of it to abort on BREAK and Speedlock
+/// does not, which is the only difference between the two; the jump back is
+/// the last byte and its displacement depends on where the loop starts, so it
+/// is not part of what is matched.
+const SAMPLER: [u8; 11] = [
+    0x04, 0xC8, 0x3E, 0x7F, 0xDB, 0xFE, 0x1F, 0xA9, 0xE6, 0x20, 0x28,
+];
+
+/// What one turn of that loop costs when nothing is in its way: `INC B` 4,
+/// `RET Z` 5, `LD A,$7F` 7, `IN A,($FE)` 11, `RRA` 4, `XOR C` 4, `AND $20` 7,
+/// and `JR Z` 12 when it is taken.
+///
+/// Only when nothing is in its way. The port it reads is $7FFE, whose high
+/// byte is in the contended range, so the ULA stalls the read by however much
+/// it feels like: measured over a load of Head over Heels, 54 T-states most of
+/// the time but 56, 58 and 60 often enough to matter. That is why the wait
+/// cannot simply be divided out and skipped — see the note in
+/// `docs/tape-loading.md`.
+#[allow(dead_code)]
+const SAMPLER_T: u64 = 54;
+
+/// Is the machine sitting in a loader's sampling loop?
+///
+/// Which is to say: is a loader of the game's own reading the tape? The ROM's
+/// blocks can be handed over whole, and these cannot — the bytes on the tape
+/// are not the bytes that reach memory, since Speedlock decrypts each one as
+/// it goes with a key it rewrites into its own code — but knowing that a
+/// loader is at work is what says the machine should be let run flat out.
+pub fn at_sampler(spec: &Spectrum) -> bool {
+    use crate::z80::Bus;
+    SAMPLER
+        .iter()
+        .enumerate()
+        .all(|(offset, byte)| spec.bus.peek(spec.cpu.pc.wrapping_add(offset as u16)) == *byte)
+}
+
 /// What came of trying to hand a block over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Loaded {
@@ -82,10 +132,14 @@ pub fn load_block(spec: &mut Spectrum) -> Loaded {
         return Loaded::NotOurs;
     };
 
-    let body = &data[1..data.len() - 1];
-    let checksum = data[data.len() - 1];
-    let mut parity = wanted_flag;
+    // The bytes the ROM would have read: the flag, then as many as were asked
+    // for, then one more as the parity byte. A block longer than the program
+    // wanted is ordinary — the ROM stops listening and the rest of the block
+    // goes past unread — so what decides success is whether there were enough
+    // of them and whether the parity agrees.
+    let body = &data[1..];
     let count = (wanted as usize).min(body.len());
+    let mut parity = wanted_flag;
     for byte in &body[..count] {
         parity ^= byte;
         if !verifying {
@@ -93,15 +147,13 @@ pub fn load_block(spec: &mut Spectrum) -> Loaded {
         }
         at = at.wrapping_add(1);
     }
-
-    // The ROM only reports success when the block held exactly what was asked
-    // for and the checksum agrees. A block shorter than the program wanted is
-    // the "R Tape loading error" every mistyped POKE ends in.
-    let whole = body.len() == wanted as usize;
-    if whole {
+    let enough = count == wanted as usize;
+    if let Some(checksum) = body.get(count) {
         parity ^= checksum;
     }
-    let ok = whole && parity == 0;
+    // A block too short for what was asked is the "R Tape loading error" every
+    // mistyped POKE ends in.
+    let ok = enough && body.len() > count && parity == 0;
     seek_past(spec, index);
     finish(spec, ok, at, wanted - count as u16);
     Loaded::Block {
