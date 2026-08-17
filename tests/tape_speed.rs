@@ -269,3 +269,81 @@ fn a_pause_before_a_stop_block_slows_down_too() {
     }
     assert!(reached, "the tape should have reached its first pause");
 }
+
+/// A tape that stops itself says so.
+///
+/// A multi-load carries a block that tells the deck to stop: the program takes
+/// over there and asks for the next part when it wants it. Nothing said so,
+/// and a deck that stops half way through a tape looks exactly like a load
+/// that has gone wrong — which is what Gauntlet III looks like, since it stops
+/// half way through its first side.
+#[test]
+fn the_deck_says_when_the_tape_stopped_it() {
+    use zx_rustrum::tape::{Block, Tape};
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = true;
+    // A short block, then the block that stops the tape, then more.
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![
+            Block::Standard {
+                pause_ms: 1,
+                data: vec![0xFF, 1, 2, 3],
+            },
+            Block::Pause(0),
+            Block::Standard {
+                pause_ms: 1,
+                data: vec![0xFF, 4, 5, 6],
+            },
+            Block::Pause(0),
+            Block::Standard {
+                pause_ms: 1,
+                data: vec![0xFF, 7, 8, 9],
+            },
+        ],
+    ));
+    let now = app.spec.bus.total_t();
+    app.spec.bus.tape.as_mut().unwrap().play(now);
+
+    for _ in 0..600 {
+        app.advance(1.0 / 50.0);
+        if !app.spec.bus.tape_playing() {
+            break;
+        }
+    }
+    app.advance(1.0 / 50.0);
+
+    assert!(
+        !app.spec.bus.tape_playing(),
+        "the block should have stopped the deck"
+    );
+    assert!(
+        app.status.contains("stop"),
+        "and the window should say why it stopped, not just stop: {:?}",
+        app.status
+    );
+
+    // And it is said again the next time, rather than once a session: the
+    // status line is written over with something else, the tape started, and
+    // the next stop has to speak up for itself.
+    app.set_status("something else".to_string(), false);
+    let now = app.spec.bus.total_t();
+    app.spec.bus.tape.as_mut().unwrap().play(now);
+    for _ in 0..600 {
+        app.advance(1.0 / 50.0);
+        if !app.spec.bus.tape_playing() {
+            break;
+        }
+    }
+    app.advance(1.0 / 50.0);
+    assert!(
+        app.status.contains("stop"),
+        "the second stop should say so as well: {:?}",
+        app.status
+    );
+}

@@ -397,6 +397,9 @@ pub struct App {
     pub fade_floor: f32,
     /// The speed to go back to when racing is switched off.
     speed_before_race: f32,
+    /// Whether the deck stopping itself has already been mentioned, so it is
+    /// said once rather than sixty times a second.
+    said_tape_stopped: bool,
     /// The frame being raced: a copy of the machine taken at the interrupt,
     /// run forward to wherever the cursor is. Only ever set while the machine
     /// is stopped.
@@ -489,6 +492,7 @@ impl App {
             racing: false,
             fade_floor: 0.5,
             speed_before_race: 1.0,
+            said_tape_stopped: false,
             race: None,
             beam_t: None,
             ram: ram_map::RamMapState::default(),
@@ -2052,7 +2056,30 @@ impl App {
     /// Advance the emulation by however much wall-clock time has passed.
     /// Run the machine for a slice of wall-clock time, as a frame of the UI
     /// would. Public so tests can stop it at a breakpoint without a window.
+    /// Say so when the tape stops itself.
+    ///
+    /// A tape can carry a block that tells the deck to stop — the end of a
+    /// part of a multi-load, where the program takes over and asks for the
+    /// next part later. Nothing said so, and a deck that stops on its own part
+    /// way through a tape looks exactly like a load that has gone wrong.
+    /// Gauntlet III's does it half way through its first side.
+    fn announce_tape_stops(&mut self) {
+        let stopped = self
+            .tape_ref()
+            .is_some_and(|tape| tape.stopped_by_block && !tape.playing);
+        if stopped && !self.said_tape_stopped {
+            self.said_tape_stopped = true;
+            self.set_status(
+                "The tape asked the deck to stop — press Play for the next part".to_string(),
+                false,
+            );
+        } else if !stopped {
+            self.said_tape_stopped = false;
+        }
+    }
+
     pub fn advance(&mut self, dt: f32) {
+        self.announce_tape_stops();
         if !self.running {
             return;
         }

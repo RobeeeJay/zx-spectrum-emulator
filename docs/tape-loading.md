@@ -290,6 +290,22 @@ Feeding a trailing tone into the deck by hand fixes it too, and gives the same
 table — $9000 reads `77 04 C3 B7 92 DD 7E 0A` either way — so the check is
 asking whether the line is alive rather than measuring what is on it.
 
+## A tape that stops itself
+
+A multi-load carries a block that tells the deck to stop — TZX's pause block
+with a length of zero, or a stop-if-48K. The program takes over there and asks
+for the next part when it wants it. Gauntlet III does it half way through its
+first side: the first part loads, the tape stops, the title and menu come up,
+and the rest of the tape is for later.
+
+A deck that stops on its own half way through a tape looks exactly like a load
+that has gone wrong, so the window now says which it is. It is said again each
+time rather than once a session.
+
+Gauntlet III is also a 128K release, and it fails on a 48K the way it would on
+a real one. It loads on a 128K at every speed: 12,072 host frames played, 711
+at Max speed, 140 at Ludicrous.
+
 ## The ZX81
 
 A ZX81 tape is a different format and the ZX81's ROM has no LD-BYTES, so
