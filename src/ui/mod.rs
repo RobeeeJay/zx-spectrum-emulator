@@ -2040,7 +2040,16 @@ impl App {
     /// to one of those, so what Fastload does for them is let the
     /// machine run.
     pub fn loader_is_reading(&self) -> bool {
-        self.zx81.is_none() && crate::flashload::at_sampler(&self.spec)
+        self.loader_reading().is_some()
+    }
+
+    /// Which loader's sampling loop it is, so the window can say so rather
+    /// than only saying that one is at work.
+    pub fn loader_reading(&self) -> Option<&'static str> {
+        if self.zx81.is_some() {
+            return None;
+        }
+        crate::flashload::sampler(&self.spec)
     }
 
     /// How much of a hurry a tape is loaded in. The three settle the two

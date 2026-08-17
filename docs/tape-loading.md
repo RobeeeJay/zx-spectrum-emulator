@@ -158,8 +158,38 @@ LD-SAMPLE  INC B          04
 Speedlock uses exactly that. Found in Head over Heels at $FD30, byte for byte,
 with the jump back reading `28 F4` rather than the ROM's `F6` because its loop
 starts two bytes earlier — which is why the first search for it, using the
-ROM's displacement, found nothing at all. `flashload::at_sampler` matches the
-first eleven bytes and ignores the displacement.
+ROM's displacement, found nothing at all. `flashload::sampler` ignores the
+displacement, and the immediate loaded into A before the `IN`: that is the
+port's high byte and games differ on it — $7F for most, $FF for Astro Marine
+Corps, $00 for City Slicker — without it changing what the loop is.
+
+### The loops, as found on the tapes
+
+Seven of them, read off the tapes rather than off a list: run the game, take
+the bytes at the address the machine spends its time at while the tape runs.
+They are all the same idea and differ in how the EAR bit is got at and in what
+happens when B comes round.
+
+| loop | bytes from the `INC B` | seen in |
+| --- | --- | --- |
+| the ROM's sampler | `04 C8 3E ?? DB FE 1F A9 E6 20 28` | Speedlock: Head over Heels, Daley Thompson's Decathlon |
+| the same with a byte of filler | `04 C8 3E ?? DB FE 1F ?? A9 E6 20 28` | Bleepload (`00`), Microsphere (`A7`), Paul Owens |
+| one that answers BREAK | `04 C8 3E ?? DB FE 1F D0 A9 E6 20 28` | Dinamic: Astro Marine Corps, Freddy Hardest; the Search loader: Blood Brothers |
+| one masking the EAR bit where it lies | `04 C8 3E ?? DB FE A9 E6 40 28` | the Search loader's variant: Lotus Esprit Turbo Challenge, Space Crusade |
+| the same answering the carry | `04 C8 3E ?? DB FE A9 E6 40 D8` | Hewson: City Slicker |
+| Alkatraz's | `04 20 03 C9 ?? ?? DB FE 1F C8 A9 E6 ?? 28` | Cobra, 720 Degrees |
+| Digital Integration's | `05 C8 DB FE A9 E6 40 CA` | ATF, Tomahawk |
+
+The `D0` is `RET NC`, which is the ROM's own BREAK check left in rather than
+taken out. Masking with $40 instead of $20 is the same bit looked at without
+the `RRA` first. Digital Integration's counts B *down*, does not load the
+port's high byte at all — whatever was last on the bus will do — and closes
+with an absolute jump.
+
+Knowing which loop it is buys one thing: the tape window says who is reading
+("Digital Integration's sampler is reading") rather than only that somebody
+is. It is not what makes a tape load. Nothing about a game's own loader can be
+answered the way the ROM's can, for the reason below.
 
 ### What cannot be done, and why
 
@@ -316,6 +346,44 @@ past the game, and the game says "STOP THE TAPE" long before the tape agrees.
 **It needs the closing edge**, like Alkatraz and unlike Bleepload and
 Microsphere: taken out again, Chase H.Q. ends with a report line and 134 bytes
 of screen. The EAR feedback it does not care about.
+
+## Dinamic, the Search loader and Digital Integration
+
+Five more loaders, eight more games, and none of them needed anything the
+earlier ones had not already needed: they load with the closing edge, the EAR
+feedback and the pulse timings as they stand. Checked rather than assumed — the
+same memory comes off the tape whether it is played or hurried, screen included
+byte for byte.
+
+| | tape | Max CPU | Fastload |
+| --- | --- | --- | --- |
+| Astro Marine Corps | 3,210 blocks | 1,076 | 39 |
+| Freddy Hardest in South Manhattan | 7 blocks | 893 | 33 |
+| Blood Brothers | 15 blocks | 696 | 26 |
+| City Slicker | 3 blocks | 971 | 38 |
+| Lotus Esprit Turbo Challenge | 53 blocks | 1,940 | 61 |
+| Space Crusade | 43 blocks | 1,875 | 36 |
+| ATF | 14 blocks | 570 | 21 |
+| Tomahawk | 14 blocks | 611 | 23 |
+
+Host frames from `LOAD ""` to the tape stopping. Fastload is worth a factor of
+about thirty over Max CPU for all of them, which is what lifting the work cap
+is worth when nothing can be handed over: the leading ROM blocks are handed
+over, and everything after that is played to a loader running flat out.
+
+**Astro Marine Corps** is the odd one on the shelf: 3,210 blocks, because
+Dinamic wrote each of its parts as a long run of pulse blocks rather than as
+data blocks. It still comes off identically either way.
+
+**Blood Brothers** is the one that cannot be checked by its picture. It loads
+the game and asks for the first module straight away, so when the tape stops it
+is back in its own sampling loop with 216 bytes of screen drawn in its own
+font, where the others draw a title. What can be said of it is that it left the
+ROM for its own code and that pressing Play again feeds it the modules in
+order, which is what its test does.
+
+**Lotus and Space Crusade** are multiloads too, and both draw their titles
+before the first stop.
 
 ## A deck that is not quite right
 

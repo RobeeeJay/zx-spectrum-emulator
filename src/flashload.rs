@@ -30,31 +30,94 @@ pub const LD_BYTES: u16 = 0x0556;
 /// likes at that address in RAM.
 const LD_BYTES_SIGNATURE: [u8; 8] = [0x14, 0x08, 0x15, 0xF3, 0x3E, 0x0F, 0xD3, 0xFE];
 
-/// The edge-sampling loop that nearly every loader is built round, from the
-/// [loading routine cores](https://sinclair.wiki.zxnet.co.uk/wiki/Loading_routine_%22cores%22):
+/// A byte of a sampling loop that may be anything: the port's high byte, a
+/// jump displacement, a filler.
+const ANY: u16 = 0x100;
+
+/// The edge-sampling loops the commercial loaders are built round, and the
+/// name each is known by here.
 ///
-/// ```text
-/// LD-SAMPLE  INC B          04
-///            RET Z          C8
-///            LD A,$7F       3E 7F
-///            IN A,($FE)     DB FE
-///            RRA            1F
-///            XOR C          A9
-///            AND $20        E6 20
-///            JR Z,LD-SAMPLE 28 xx
-/// ```
+/// They are all the same idea — count turns of a loop in B until the EAR bit
+/// changes, and give up if B comes round — and they differ in how the bit is
+/// got at and in what happens when it does not change. The list was read off
+/// the tapes themselves, by running each game and taking the bytes at the
+/// address the machine spent its time at while the tape ran; each is written
+/// out below in the form it was found in.
 ///
-/// The ROM has a `RET NC` in the middle of it to abort on BREAK and Speedlock
-/// does not, which is the only difference between the two; the jump back is
-/// the last byte and its displacement depends on where the loop starts, so it
-/// is not part of what is matched.
-const SAMPLER: [u8; 11] = [
-    0x04, 0xC8, 0x3E, 0x7F, 0xDB, 0xFE, 0x1F, 0xA9, 0xE6, 0x20, 0x28,
+/// The immediate loaded into A before the `IN` is wildcarded. It is the port's
+/// high byte and games differ on it — $7F for most, $FF for Astro Marine
+/// Corps, $00 for City Slicker — and none of it changes what the loop is. The
+/// jump back at the end is wildcarded for the same reason it always was: its
+/// displacement depends on where the loop starts, which is how the first
+/// search for Speedlock's found nothing at all.
+const CORES: &[(&str, &[u16])] = &[
+    // The ROM's own, with the BREAK check taken out. Speedlock (Head over
+    // Heels, Daley Thompson's Decathlon).
+    //
+    //   INC B / RET Z / LD A,$7F / IN A,($FE) / RRA / XOR C / AND $20 / JR Z
+    (
+        "the ROM's sampler",
+        &[
+            0x04, 0xC8, 0x3E, ANY, 0xDB, 0xFE, 0x1F, 0xA9, 0xE6, 0x20, 0x28,
+        ],
+    ),
+    // The same with the check left in — `RET NC` after the RRA, so BREAK
+    // aborts the load. Dinamic (Astro Marine Corps, Freddy Hardest) and the
+    // Search loader (Blood Brothers).
+    (
+        "a sampler that answers BREAK",
+        &[
+            0x04, 0xC8, 0x3E, ANY, 0xDB, 0xFE, 0x1F, 0xD0, 0xA9, 0xE6, 0x20, 0x28,
+        ],
+    ),
+    // The same again with a byte of filler where that check would be: `AND A`
+    // in Microsphere's (Skool Daze, Contact Sam Cruise), `NOP` in Bleepload's
+    // (Bubble Bobble, Starglider).
+    (
+        "the ROM's sampler with a byte of filler",
+        &[
+            0x04, 0xC8, 0x3E, ANY, 0xDB, 0xFE, 0x1F, ANY, 0xA9, 0xE6, 0x20, 0x28,
+        ],
+    ),
+    // No RRA: the EAR bit is left where it is and masked with $40 instead of
+    // being rotated down to $20 first. The Search loader's variant (Lotus
+    // Esprit Turbo Challenge, Space Crusade).
+    (
+        "a sampler masking the EAR bit where it lies",
+        &[0x04, 0xC8, 0x3E, ANY, 0xDB, 0xFE, 0xA9, 0xE6, 0x40, 0x28],
+    ),
+    // The same, with `RET C` in it: the carry is the loader's own flag for
+    // having been told to stop. City Slicker.
+    (
+        "a sampler masking bit 6 and answering the carry",
+        &[0x04, 0xC8, 0x3E, ANY, 0xDB, 0xFE, 0xA9, 0xE6, 0x40, 0xD8],
+    ),
+    // Alkatraz's (Cobra, 720 Degrees), which gives up by falling through to a
+    // `RET` rather than by returning from inside the loop, and looks at the
+    // bit before deciding whether B has come round:
+    //
+    //   INC B / JR NZ,+3 / RET / (two bytes jumped over) / IN A,($FE) / RRA /
+    //   RET Z / XOR C / AND $20 / JR Z
+    (
+        "Alkatraz's sampler",
+        &[
+            0x04, 0x20, 0x03, 0xC9, ANY, ANY, 0xDB, 0xFE, 0x1F, 0xC8, 0xA9, 0xE6, ANY, 0x28,
+        ],
+    ),
+    // Digital Integration's (ATF, Tomahawk): B counts *down*, the port's high
+    // byte is whatever was last on it rather than being loaded each turn, and
+    // the loop closes with an absolute jump.
+    //
+    //   DEC B / RET Z / IN A,($FE) / XOR C / AND $40 / JP Z
+    (
+        "Digital Integration's sampler",
+        &[0x05, 0xC8, 0xDB, 0xFE, 0xA9, 0xE6, 0x40, 0xCA],
+    ),
 ];
 
-/// What one turn of that loop costs when nothing is in its way: `INC B` 4,
-/// `RET Z` 5, `LD A,$7F` 7, `IN A,($FE)` 11, `RRA` 4, `XOR C` 4, `AND $20` 7,
-/// and `JR Z` 12 when it is taken.
+/// What one turn of the ROM's loop costs when nothing is in its way: `INC B`
+/// 4, `RET Z` 5, `LD A,$7F` 7, `IN A,($FE)` 11, `RRA` 4, `XOR C` 4, `AND $20`
+/// 7, and `JR Z` 12 when it is taken.
 ///
 /// Only when nothing is in its way. The port it reads is $7FFE, whose high
 /// byte is in the contended range, so the ULA stalls the read by however much
@@ -65,19 +128,33 @@ const SAMPLER: [u8; 11] = [
 #[allow(dead_code)]
 const SAMPLER_T: u64 = 54;
 
-/// Is the machine sitting in a loader's sampling loop?
+/// Which loader's sampling loop the machine is sitting in, if it is in one.
 ///
 /// Which is to say: is a loader of the game's own reading the tape? The ROM's
 /// blocks can be handed over whole, and these cannot — the bytes on the tape
 /// are not the bytes that reach memory, since Speedlock decrypts each one as
 /// it goes with a key it rewrites into its own code — but knowing that a
-/// loader is at work is what says the machine should be let run flat out.
-pub fn at_sampler(spec: &Spectrum) -> bool {
+/// loader is at work is what says the machine should be let run flat out, and
+/// saying which one is at work is worth more than saying that one is.
+///
+/// The loops are checked longest first, since the shorter ones are prefixes of
+/// nothing but would match the wrong thing if a longer one were skipped.
+pub fn sampler(spec: &Spectrum) -> Option<&'static str> {
     use crate::z80::Bus;
-    SAMPLER
+    let at = spec.cpu.pc;
+    CORES
         .iter()
-        .enumerate()
-        .all(|(offset, byte)| spec.bus.peek(spec.cpu.pc.wrapping_add(offset as u16)) == *byte)
+        .find(|(_, pattern)| {
+            pattern.iter().enumerate().all(|(offset, byte)| {
+                *byte == ANY || spec.bus.peek(at.wrapping_add(offset as u16)) as u16 == *byte
+            })
+        })
+        .map(|(name, _)| *name)
+}
+
+/// Is the machine sitting in a loader's sampling loop at all?
+pub fn at_sampler(spec: &Spectrum) -> bool {
+    sampler(spec).is_some()
 }
 
 /// What came of trying to hand a block over.

@@ -138,13 +138,17 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
         // Which of the two things Fastload is doing, since they are not the
         // same thing: a game with a loader of its own is read to, not handed
         // to.
+        // Which loader is reading, while one is. Nothing is said when blocks
+        // are being handed to the ROM instead: that is what the switch says it
+        // does, and a line that only ever repeated it was noise.
         if flash {
-            let what = if app.loader_is_reading() {
-                "the game's own loader is reading"
-            } else {
-                "handing blocks over"
-            };
-            ui.label(egui::RichText::new(what).small().color(theme::DIM));
+            if let Some(core) = app.loader_reading() {
+                ui.label(
+                    egui::RichText::new(format!("{core} is reading"))
+                        .small()
+                        .color(theme::DIM),
+                );
+            }
         }
     });
 }

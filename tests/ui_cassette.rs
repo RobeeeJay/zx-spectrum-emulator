@@ -74,13 +74,13 @@ fn a_small_pack_turns_faster_than_a_fat_one() {
 #[test]
 fn boosting_the_tape_winds_the_hubs_on_faster() {
     // At its own pace the hubs turn at the speed a real deck's do; hurried
-    // along they go half again as fast, which reads as urgency without the
-    // picture running away from the sound.
+    // along — Max CPU or Fastload — they turn at double speed, the way a
+    // deck's do with the fast-forward held down.
     let slow = spin_rate(1.0, false);
     let fast = spin_rate(1.0, true);
     assert!(
-        (fast / slow - 1.5).abs() < 1e-5,
-        "boosted should be half again as fast, got {}",
+        (fast / slow - 2.0).abs() < 1e-5,
+        "boosted should be twice as fast, got {}",
         fast / slow
     );
 }
@@ -304,8 +304,12 @@ fn the_hubs_turn_at_the_speed_a_real_cassette_does() {
         (0.45..0.55).contains(&empty),
         "and a nearly empty one about half a turn, got {empty}"
     );
+    // Hurried along it is double that: about a turn a second on a nearly
+    // empty pack, which is a hub you can still see turning rather than a
+    // blur.
+    let hurried = revs_per_second(0.6, true);
     assert!(
-        revs_per_second(0.6, true) < 0.8,
-        "even hurried along it should stay watchable"
+        (0.9..1.1).contains(&hurried),
+        "hurried along it should turn about once a second, got {hurried}"
     );
 }

@@ -29,6 +29,15 @@ const SKOOL_DAZE: &str = "tapes/Skool Daze (1985)(Microsphere).zip";
 const SAM_CRUISE: &str = "tapes/Contact Sam Cruise (1986)(Microsphere).zip";
 const CHASE_HQ: &str = "tapes/Chase H.Q. (1989)(Ocean Software)[48-128K].zip";
 const SEVEN_TWENTY: &str = "tapes/720 Degrees (1986)(U.S. Gold).zip";
+const ASTRO_MARINE: &str = "tapes/Astro Marine Corps (1989)(Dinamic Software)(es)[48-128K].zip";
+const FREDDY: &str = "tapes/Freddy Hardest in South Manhattan (1989)(Dinamic Software)(ES).zip";
+const BLOOD_BROTHERS: &str = "tapes/Blood Brothers (1988)(Gremlin Graphics Software)[48-128K].zip";
+const CITY_SLICKER: &str = "tapes/City Slicker (1986)(Hewson Consultants).zip";
+const LOTUS: &str =
+    "tapes/Lotus Esprit Turbo Challenge (1990)(Gremlin Graphics Software)[48-128K].zip";
+const SPACE_CRUSADE: &str = "tapes/Space Crusade (1992)(Gremlin Graphics Software).zip";
+const ATF: &str = "tapes/ATF - Advanced Tactical Fighter (1988)(Digital Integration)[48-128K].zip";
+const TOMAHAWK: &str = "tapes/Tomahawk (1985)(Digital Integration)[Lenslok].zip";
 
 fn tape(name: &str) -> Option<Tape> {
     let bytes = std::fs::read(name).ok()?;
@@ -475,4 +484,202 @@ fn loaded_screen(name: &str, quality: zx_rustrum::tape::Quality) -> Option<usize
             .filter(|a| spec.bus.mem(*a) != 0)
             .count(),
     )
+}
+
+/// Which sampling loop a game sits in while its tape runs.
+///
+/// Loads the tape with Fastload on and reports the loop the machine was found
+/// in most often, along with how much of the load was spent there. `None` when
+/// the tape or the ROM is missing, so the test skips itself.
+fn core_used(name: &str) -> Option<(&'static str, u64)> {
+    let rom = std::fs::read("roms/48.rom").ok()?;
+    let mut spec = Spectrum::new();
+    spec.load_rom(&rom);
+    spec.reset();
+    spec.bus.tape_flash = true;
+    start_loading(&mut spec, tape(name)?);
+    let mut seen: std::collections::BTreeMap<&'static str, u64> = Default::default();
+    let mut sampled = 0u64;
+    while spec.bus.tape_playing() {
+        spec.run(2_000);
+        sampled += 1;
+        if let Some(core) = flashload::sampler(&spec) {
+            *seen.entry(core).or_default() += 1;
+        }
+    }
+    // "nothing" rather than `None`, which is reserved for a tape that is not
+    // there: a loader nobody recognises is a failure and has to read as one,
+    // not as a test quietly skipping itself.
+    let (core, hits) = seen
+        .into_iter()
+        .max_by_key(|(_, n)| *n)
+        .unwrap_or(("nothing", 0));
+    Some((core, hits * 100 / sampled.max(1)))
+}
+
+/// Each loader is recognised by the loop it counts its pulses in.
+///
+/// The loops were read off the tapes themselves — run the game, take the bytes
+/// at the address the machine spends its time at while the tape runs — and
+/// they are all the same idea with different answers to "what if B comes
+/// round" and "which bit is the EAR bit". Knowing which one is at work is what
+/// lets the tape window say who is reading rather than only that somebody is.
+#[test]
+fn each_loader_is_recognised_while_its_tape_runs() {
+    let expected = [
+        (HEAD_OVER_HEELS, "the ROM's sampler"),
+        (COBRA, "Alkatraz's sampler"),
+        (BUBBLE_BOBBLE, "the ROM's sampler with a byte of filler"),
+        (SKOOL_DAZE, "the ROM's sampler with a byte of filler"),
+        (CHASE_HQ, "the ROM's sampler with a byte of filler"),
+        (ASTRO_MARINE, "a sampler that answers BREAK"),
+        (FREDDY, "a sampler that answers BREAK"),
+        (BLOOD_BROTHERS, "a sampler that answers BREAK"),
+        (
+            CITY_SLICKER,
+            "a sampler masking bit 6 and answering the carry",
+        ),
+        (LOTUS, "a sampler masking the EAR bit where it lies"),
+        (SPACE_CRUSADE, "a sampler masking the EAR bit where it lies"),
+        (ATF, "Digital Integration's sampler"),
+        (TOMAHAWK, "Digital Integration's sampler"),
+    ];
+    let mut checked = 0;
+    for (name, core) in expected {
+        let Some((found, share)) = core_used(name) else {
+            eprintln!("need roms/48.rom and {name}; skipping");
+            continue;
+        };
+        assert_eq!(
+            found, core,
+            "{name} was found in a different loop than expected"
+        );
+        assert!(
+            share >= 1,
+            "{name}: the machine should spend real time in {core}, not {share}%"
+        );
+        checked += 1;
+    }
+    eprintln!("{checked} of {} tapes were there to check", expected.len());
+}
+
+/// The five loaders added last come off the tape the same whether the tape is
+/// played or hurried, which is the whole claim Fastload makes about a loader
+/// whose blocks cannot be handed over.
+///
+/// One game of each: Dinamic, the Search loader, its bit-6 variant, Hewson's,
+/// and Digital Integration's. What is compared is the screen — which is loaded
+/// from the tape and must match byte for byte — and the rest of memory, where
+/// a loader's own counters and whatever is below the stack pointer depend on
+/// how long the load took rather than on what was loaded.
+#[test]
+fn the_new_loaders_load_the_same_thing_in_a_hurry() {
+    for name in [ASTRO_MARINE, BLOOD_BROTHERS, LOTUS, CITY_SLICKER, ATF] {
+        let (Some((slow, _)), Some((fast, _))) = (load(name, false), load(name, true)) else {
+            eprintln!("need roms/48.rom and {name}; skipping");
+            continue;
+        };
+        let differing = |from: u32, to: u32| -> usize {
+            (from..to)
+                .filter(|a| slow[(*a - 0x4000) as usize] != fast[(*a - 0x4000) as usize])
+                .count()
+        };
+        assert_eq!(
+            differing(0x4000, 0x5B00),
+            0,
+            "{name}: the screen differs between playing the tape and hurrying it"
+        );
+        let elsewhere = differing(0x5B00, 0xFF00);
+        assert!(
+            elsewhere < 200,
+            "{name}: {elsewhere} bytes of memory differ, which is more than a \
+             loader's counters"
+        );
+    }
+}
+
+/// Dinamic's loader: Astro Marine Corps and Freddy Hardest in South Manhattan.
+#[test]
+fn dinamic_tapes_load() {
+    starts_after_loading(ASTRO_MARINE);
+    starts_after_loading(FREDDY);
+}
+
+/// Hewson's, on City Slicker.
+#[test]
+fn city_slicker_loads() {
+    starts_after_loading(CITY_SLICKER);
+}
+
+/// The Search loader's bit-6 variant: Lotus Esprit Turbo Challenge and Space
+/// Crusade. Both are multiloads — the tape stops between the parts, and what
+/// is on screen when the first stop comes is the game's own title rather than
+/// a report line.
+#[test]
+fn the_search_loaders_variant_loads() {
+    starts_after_loading(LOTUS);
+    starts_after_loading(SPACE_CRUSADE);
+}
+
+/// Digital Integration's: ATF and Tomahawk.
+#[test]
+fn digital_integration_tapes_load() {
+    starts_after_loading(ATF);
+    starts_after_loading(TOMAHAWK);
+}
+
+/// Blood Brothers is the one that cannot be checked by its picture.
+///
+/// It loads its game and then asks for the first module straight away, so at
+/// the moment the tape stops it is back in its own sampling loop with a nearly
+/// blank screen — 216 bytes of it, in the game's own font, against the 500 the
+/// others draw. What can be said is that it got out of the ROM and into its
+/// own code, and that pressing Play again feeds it the modules in order.
+#[test]
+fn blood_brothers_loads_its_modules_one_at_a_time() {
+    let Ok(rom) = std::fs::read("roms/48.rom") else {
+        eprintln!("need roms/48.rom; skipping");
+        return;
+    };
+    let Some(tape) = tape(BLOOD_BROTHERS) else {
+        eprintln!("need {BLOOD_BROTHERS}; skipping");
+        return;
+    };
+    let blocks = tape.blocks.len();
+    let mut spec = Spectrum::new();
+    spec.load_rom(&rom);
+    spec.reset();
+    spec.bus.tape_flash = true;
+    start_loading(&mut spec, tape);
+
+    let mut reached = Vec::new();
+    for _ in 0..4 {
+        while spec.bus.tape_playing() {
+            spec.run(20_000);
+        }
+        for _ in 0..300 {
+            spec.run(FRAME_T);
+        }
+        assert!(
+            spec.cpu.pc >= 0x4000,
+            "it should be in its own code, not the ROM, at ${:04X}",
+            spec.cpu.pc
+        );
+        let now = spec.bus.total_t();
+        let t = spec.bus.tape.as_mut().unwrap();
+        reached.push(t.block);
+        if t.finished() {
+            break;
+        }
+        t.play(now);
+    }
+    assert!(
+        reached.windows(2).all(|w| w[1] > w[0]),
+        "each turn of the tape should get further: {reached:?}"
+    );
+    assert!(
+        reached.last().is_some_and(|b| *b + 1 >= blocks),
+        "and the last of them should reach the end of the tape: {reached:?} of \
+         {blocks} blocks"
+    );
 }

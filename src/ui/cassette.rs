@@ -75,9 +75,9 @@ pub fn spin_rate(pack: f32, boosted: bool) -> f32 {
     const TAPE_MM_S: f32 = 47.6;
     /// Radius of a full pack, in millimetres.
     const FULL_MM: f32 = 25.7;
-    /// Hurrying the tape along turns the hubs half again as fast, which reads
-    /// as urgency without becoming a blur.
-    const BOOST: f32 = 1.5;
+    /// Hurrying the tape along — Max CPU or Fastload — turns the hubs at
+    /// double speed, the way a deck's do when the fast-forward is held down.
+    const BOOST: f32 = 2.0;
     TAPE_MM_S / (pack.max(EMPTY) * FULL_MM) * if boosted { BOOST } else { 1.0 }
 }
 

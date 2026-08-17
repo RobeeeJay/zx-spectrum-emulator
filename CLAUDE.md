@@ -203,6 +203,14 @@ routine would have left them, and the return is taken there and then. Border
 Break loads in two frames instead of 2,605, ending in the same place with the
 same screen.
 
+Nothing else can be handed over: a game's own loader reads the tape itself and
+often decrypts each byte as it arrives. What the emulator knows about those is
+which sampling loop they count pulses in — seven of them, read off the tapes
+rather than off a list, in `flashload::CORES` — so the tape window can say who
+is reading. Speedlock, Bleepload, Microsphere, Paul Owens, Alkatraz, Dinamic,
+the Search loader and its variant, Hewson's and Digital Integration's are all
+recognised, and thirteen games are checked against their tapes.
+
 It only works where the ROM is doing the loading, and only where that ROM is
 the one paged in — the eight bytes at $0556 are checked against the routine
 rather than assumed, since a 128K is running its own ROM there and a program
