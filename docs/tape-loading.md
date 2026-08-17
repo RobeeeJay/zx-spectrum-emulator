@@ -279,6 +279,24 @@ machine is executing says nothing about whether the game loaded. What says it
 is the picture — a report line is a hundred-odd bytes of screen, a menu is a
 thousand.
 
+## Microsphere
+
+A whole game in one block, and the least ceremony of any of them. Skool Daze
+is 82,109 bytes of turbo block at twice the ROM's rate — 422 and 843 T-states
+a bit — behind nothing but a header and a BASIC line. Contact Sam Cruise does
+it the other way about: a 244-byte turbo block carrying the loader, and then
+49,465 bytes as an *ordinary standard block*, read by the game rather than by
+the ROM, which is why nothing can be handed over for it.
+
+| | played | Max speed | Ludicrous |
+| --- | --- | --- | --- |
+| Skool Daze | 14,906 | 746 | 30 |
+| Contact Sam Cruise | 18,180 | 910 | 35 |
+
+Like Bleepload, neither needs anything the other loaders needed: both load
+with the closing edge taken out again and with the EAR line left dead.
+Checked, not assumed.
+
 ## The EAR line is never dead
 
 Reading port $FE bit 6 with no tape playing does not give zero: the machine

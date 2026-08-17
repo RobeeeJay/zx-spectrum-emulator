@@ -1,9 +1,10 @@
 //! Loading games whose loaders are their own.
 //!
-//! Four of them, which between them cover most of what a commercial tape did:
+//! Five of them, which between them cover most of what a commercial tape did:
 //! Speedlock (Head over Heels, Daley Thompson's Decathlon), Alkatraz (Cobra,
-//! 720 Degrees), Bleepload (Bubble Bobble, Starglider, Starglider 2), and the
-//! ROM's own for the blocks in front of them.
+//! 720 Degrees), Bleepload (Bubble Bobble, Starglider, Starglider 2),
+//! Microsphere (Skool Daze, Contact Sam Cruise), and the ROM's own for the
+//! blocks in front of them.
 //!
 //! None of their blocks can be handed over the way the ROM's can: they read
 //! the tape themselves, and some of them decrypt every byte as it arrives.
@@ -24,6 +25,8 @@ const BUBBLE_BOBBLE: &str = "tapes/Bubble Bobble (1987)(Firebird Software)[48-12
 const STARGLIDER: &str = "tapes/Starglider (1986)(Rainbird Software).zip";
 const STARGLIDER_2: &str =
     "tapes/Starglider 2 - The Egrons Strike Back (1989)(Rainbird Software)[48-128K].zip";
+const SKOOL_DAZE: &str = "tapes/Skool Daze (1985)(Microsphere).zip";
+const SAM_CRUISE: &str = "tapes/Contact Sam Cruise (1986)(Microsphere).zip";
 const SEVEN_TWENTY: &str = "tapes/720 Degrees (1986)(U.S. Gold).zip";
 
 fn tape(name: &str) -> Option<Tape> {
@@ -377,4 +380,20 @@ fn starglider_loads() {
 #[test]
 fn starglider_2_loads() {
     starts_after_loading(STARGLIDER_2);
+}
+
+/// Microsphere's is a whole game in one block. Skool Daze is 82,109 bytes of
+/// turbo block at twice the ROM's rate — 422 and 843 T-states a bit — behind
+/// nothing but a header and a BASIC line.
+#[test]
+fn skool_daze_loads() {
+    starts_after_loading(SKOOL_DAZE);
+}
+
+/// Contact Sam Cruise does the same thing the other way about: a small turbo
+/// block carrying the loader, and then 49,465 bytes as an ordinary standard
+/// block, read by the game rather than by the ROM.
+#[test]
+fn contact_sam_cruise_loads() {
+    starts_after_loading(SAM_CRUISE);
 }
