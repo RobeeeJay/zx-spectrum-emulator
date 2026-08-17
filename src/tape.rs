@@ -1412,6 +1412,21 @@ impl Tape {
     }
 
     /// Jump straight to a block, e.g. from the tape window.
+    /// Put a stop-the-tape block in front of a block.
+    ///
+    /// A tape image is a list of blocks and the deck plays through it; a stop
+    /// block is how a tape says "the loader is waiting for something", and
+    /// putting one in is how somebody working on a game gets the deck to stop
+    /// where the tape's author did not. The block being played keeps being the
+    /// block being played, whichever side of it the new one goes.
+    pub fn insert_stop_before(&mut self, index: usize) {
+        let index = index.min(self.blocks.len());
+        self.blocks.insert(index, Block::Pause(0));
+        if index <= self.block {
+            self.block += 1;
+        }
+    }
+
     pub fn seek(&mut self, block: usize) {
         self.pause_span = None;
         self.block = block.min(self.blocks.len());

@@ -502,6 +502,7 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
     };
 
     let mut clicked = None;
+    let mut insert_before: Option<usize> = None;
     app.tape.scroll_requested_for = None;
     egui::ScrollArea::vertical()
         .id_salt("tape-blocks")
@@ -535,9 +536,50 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     clicked = Some(i);
                 }
+
+                // A way of stopping the deck where the tape's author did not.
+                // It is on the row rather than in a menu because the row is
+                // where the block is, and it appears on hover so the list
+                // stays a list. Drawn into a child ui rather than allocated,
+                // or every row would grow a button's worth of height.
+                let row = resp.rect;
+                let strip = egui::Rect::from_min_max(
+                    egui::pos2(ui.max_rect().left(), row.top()),
+                    egui::pos2(ui.max_rect().right(), row.bottom()),
+                );
+                // Where the pointer is, rather than what egui thinks is under
+                // it: the list is inside a scroll area whose layer is not the
+                // one the pointer is reckoned against, so `rect_contains_
+                // pointer` says no over every row.
+                let pointer = ui.input(|i| i.pointer.latest_pos());
+                let over_row =
+                    pointer.is_some_and(|at| strip.contains(at) && ui.clip_rect().contains(at));
+                if over_row {
+                    let mut over = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(strip.shrink2(egui::vec2(2.0, 0.0)))
+                            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    );
+                    if over
+                        .button(RichText::new("⏸ Pause before").size(11.0))
+                        .on_hover_text(
+                            "Put a stop-the-tape block in front of this one, \
+                             so the deck stops here and waits to be started \
+                             again",
+                        )
+                        .clicked()
+                    {
+                        insert_before = Some(i);
+                    }
+                }
             }
         });
     app.tape.scroll_to_current = false;
+
+    if let Some(i) = insert_before {
+        app.tape_mut().unwrap().insert_stop_before(i);
+        return;
+    }
 
     if let Some(i) = clicked {
         let now = app.machine_t();

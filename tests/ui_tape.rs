@@ -719,3 +719,65 @@ fn the_noise_switch_tells_the_deck_to_hiss() {
         "the deck should have been told how loud: {deck:?}"
     );
 }
+
+/// A block's row offers to stop the deck in front of it.
+///
+/// A tape stops where its author put a stop block, which is where the loader
+/// they wrote wanted it; somebody taking a game apart wants the deck to stop
+/// somewhere else. The button is on the row because the row is where the block
+/// is, and it appears on hover so the list stays a list.
+#[test]
+fn a_row_offers_to_put_a_stop_in_front_of_its_block() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![
+            Block::PureTone {
+                len: 2168,
+                count: 100,
+            },
+            Block::PureTone {
+                len: 1000,
+                count: 50,
+            },
+        ],
+    ));
+    let mut h = harness_for(app);
+    h.run_steps(2);
+    assert!(
+        h.query_by_label("⏸ Pause before").is_none(),
+        "the button should only be there under the pointer"
+    );
+
+    // With the deck on the second block, so pressing the button on the first
+    // row can be told apart from clicking the row: a click seeks there.
+    h.state_mut().tape_mut().unwrap().seek(1);
+    h.run_steps(2);
+
+    // Over the first block's row, which is the one the window has room for.
+    let over = h
+        .get_all_by_label_contains("1  Pure tone")
+        .next()
+        .and_then(|node| node.accesskit_node().bounding_box())
+        .map(|box_| egui::pos2(box_.x0 as f32 + 20.0, box_.y0 as f32 + 4.0))
+        .expect("the first block should be listed");
+    h.input_mut().events.push(egui::Event::PointerMoved(over));
+    h.run_steps(2);
+
+    h.get_by_label("⏸ Pause before").click();
+    h.run_steps(2);
+
+    let deck = h.state().tape_ref().unwrap();
+    assert_eq!(deck.blocks.len(), 3, "a block should have been put in");
+    assert!(
+        matches!(deck.blocks[0], Block::Pause(0)),
+        "and it should be a stop-the-tape block, in front of the first: {}",
+        deck.blocks[0].describe()
+    );
+    assert_eq!(
+        deck.block, 2,
+        "the deck should still be on the block it was on, which has moved \
+         along one — pressing the button should not seek the way clicking \
+         the row does"
+    );
+}

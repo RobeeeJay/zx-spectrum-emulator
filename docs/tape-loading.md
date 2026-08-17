@@ -485,6 +485,23 @@ whole slice of work rather than whatever the speed setting asked for, and the
 hurry lasts as long as the deck is running rather than as long as something is
 being loaded. Out Run Europa: 1,341 host frames to 82.
 
+## Stopping the deck where the tape does not
+
+A tape stops where its author put a stop block, which is where the loader they
+wrote wanted the deck to stop. Somebody taking a game apart wants it to stop
+somewhere else, so hovering a row in the block list offers **⏸ Pause before**
+at the right-hand end of it, and pressing it puts a stop-the-tape block —
+`Block::Pause(0)` — in front of that block. The block being played goes on
+being the block being played, whichever side of it the new one lands.
+
+Two things about the row it sits on. The button is drawn into a child ui rather
+than allocated, or every row in the list would grow by a button's height; and
+whether the pointer is over the row is worked out from where the pointer is,
+because the list is inside a scroll area whose layer is not the one
+`rect_contains_pointer` reckons against — it says no over every row. The row's
+own clip rectangle is checked too, so a row scrolled out of sight is not
+offered.
+
 ## A tape that stops itself
 
 A multi-load carries a block that tells the deck to stop — TZX's pause block
