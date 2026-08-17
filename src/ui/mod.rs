@@ -2526,6 +2526,26 @@ impl App {
                 false,
             );
         }
+
+        // Which bits of a write to $FE the EAR input hears back. A tape
+        // protection that listens for the line to be alive hears the MIC bit
+        // on an issue 2 board and nothing on an issue 3 one.
+        let mut issue2 = self.spec.bus.issue2;
+        if theme::toggle(ui, &mut issue2, "Issue 2")
+            .on_hover_text(
+                "The EAR input hears the machine's own loudspeaker. An issue 2 \
+                 board hears the MIC bit as well as the speaker's, which is what \
+                 a tape protection listening for a live line expects — Head over \
+                 Heels needs it. Switch it off for a strict issue 3.",
+            )
+            .changed()
+        {
+            self.spec.bus.issue2 = issue2;
+            self.set_status(
+                format!("48K issue {}", if issue2 { "2" } else { "3" }),
+                false,
+            );
+        }
     }
 
     fn controls_row(&mut self, ui: &mut egui::Ui) {

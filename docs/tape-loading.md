@@ -209,6 +209,42 @@ accurately and run the CPU fast. Two things make that work:
   even start without it: it looks for the beam by reading port $40FF and never
   enables interrupts until the byte it wants comes back.
 
+## The EAR line is never dead
+
+Reading port $FE bit 6 with no tape playing does not give zero: the machine
+hears its own loudspeaker. On an issue 3 board the bit follows bit 4 of the
+last write to $FE; on an issue 2 it follows the MIC bit, bit 3, as well. The
+emulator models both and has the MIC feedback on by default, with a switch
+beside Late timing.
+
+**Head over Heels does not load without it**, and the way it fails is worth
+knowing because nothing about it looks like a tape problem. Every block of that
+tape decodes byte for byte — all 48K of it, checked against the file — and then
+the loader does this:
+
+```text
+$FECC  LD HL,$9000
+$FECF  LD B,$FF
+$FED1  PUSH BC
+$FED2  CALL $FEDE     ; listen to the EAR line
+$FED5  LD (HL),E      ; and write down what it heard
+$FED6  INC HL
+$FED8  DJNZ $FED1
+```
+
+`$FEDE` reads $7FFE two hundred and fifty-five times looking for bit 6 to
+change. On a dead line it never does, the table at $9000 comes out all zeros,
+and the loader calls $FD20 — which walks IY through the whole address space
+writing zeros. A black screen and a machine that never comes back, which is
+exactly what it is meant to look like when somebody has taken the tape away.
+
+On a real machine the line is alive at that moment for either of two reasons:
+the tape is still rolling long after its last block, which no tape file has
+anything to say about, and the loudspeaker feeds back into the input besides.
+Feeding a trailing tone into the deck by hand fixes it too, and gives the same
+table — $9000 reads `77 04 C3 B7 92 DD 7E 0A` either way — so the check is
+asking whether the line is alive rather than measuring what is on it.
+
 ## The ZX81
 
 A ZX81 tape is a different format and the ZX81's ROM has no LD-BYTES, so

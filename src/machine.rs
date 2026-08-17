@@ -253,6 +253,15 @@ pub struct SpectrumBus {
 
     pub audio: Audio,
 
+    /// The last byte written to port $FE, which the EAR input hears through
+    /// the loudspeaker when no tape is playing.
+    pub last_fe: u8,
+    /// Whether the MIC bit feeds back as well as the speaker's, which is what
+    /// an issue 2 board does. On by default: a tape protection that listens
+    /// for the line to be alive hears nothing on a dead one, and the tape it
+    /// is listening to is still rolling on a real machine long after its last
+    /// block — which no tape file has anything to say about.
+    pub issue2: bool,
     /// Cassette player. Its EAR output is read through port $FE bit 6.
     pub tape: Option<Tape>,
     /// Run faster while the tape is playing, so loading does not take the
@@ -333,6 +342,8 @@ impl SpectrumBus {
             mic: false,
             audio: Audio::new(model.cpu_hz()),
             tape: None,
+            last_fe: 0,
+            issue2: true,
             tape_boost: true,
             tape_flash: false,
             tape_edge_scratch: Vec::new(),
@@ -1037,6 +1048,18 @@ impl SpectrumBus {
         v
     }
 
+    /// What bit 6 reads back when no tape is playing.
+    ///
+    /// The EAR input is not dead with the tape stopped: the machine hears its
+    /// own loudspeaker. On an issue 3 board bit 6 follows bit 4 of the last
+    /// write to $FE, and on an issue 2 it follows bit 3 as well — which is
+    /// what a loader is asking about when it writes to the port and reads
+    /// straight back.
+    fn ear_feedback(&self) -> bool {
+        let mask = if self.issue2 { 0x18 } else { 0x10 };
+        self.last_fe & mask != 0
+    }
+
     /// The floating bus: what the ULA had on the bus at T-state `t`.
     /// The +2A/+3 has none, so it reads back as $FF.
     fn floating_bus(&self, t: u32) -> u8 {
@@ -1268,6 +1291,7 @@ impl Bus for SpectrumBus {
         }
 
         if port & 1 == 0 {
+            self.last_fe = value;
             let new = value & 7;
             if new != self.border && self.border_events.len() < BORDER_EVENT_CAP {
                 // Timed at the start of the IORQ cycle, which is when the ULA
@@ -1944,7 +1968,12 @@ impl SpectrumBus {
             return self.audio.ay.read();
         }
         if port & 1 == 0 {
-            let ear = self.tape_level();
+            let playing = self.tape.as_ref().is_some_and(|t| t.playing);
+            let ear = if playing {
+                self.tape_level()
+            } else {
+                self.ear_feedback()
+            };
             self.keyboard(port, ear)
         } else {
             self.floating_bus(sampled)

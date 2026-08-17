@@ -253,3 +253,56 @@ fn a_real_tape_loads_in_a_frame_or_two() {
         "the machine should end up in the same place either way"
     );
 }
+
+/// The EAR input hears the machine's own loudspeaker when no tape is playing.
+///
+/// It is not a dead line: on an issue 3 board bit 6 follows bit 4 of the last
+/// write to $FE, and on an issue 2 it follows the MIC bit as well. A loader
+/// that writes to the port and reads straight back is asking about exactly
+/// that, and one that hears nothing at all decides the tape has been taken
+/// away.
+#[test]
+fn the_ear_bit_hears_the_last_write_when_no_tape_is_playing() {
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    let ear = |spec: &mut Spectrum| spec.bus.io_read(0x7FFE) & 0x40 != 0;
+
+    spec.bus.issue2 = false;
+    spec.bus.io_write(0x00FE, 0x10); // speaker on
+    assert!(ear(&mut spec), "an issue 3 board hears the speaker");
+    spec.bus.io_write(0x00FE, 0x08); // MIC only
+    assert!(!ear(&mut spec), "and not the MIC bit");
+
+    spec.bus.issue2 = true;
+    spec.bus.io_write(0x00FE, 0x08);
+    assert!(ear(&mut spec), "an issue 2 board hears the MIC bit too");
+    spec.bus.io_write(0x00FE, 0x00);
+    assert!(!ear(&mut spec), "and silence is silence either way");
+}
+
+/// A tape under the head is what the line carries, whatever was last written.
+#[test]
+fn a_playing_tape_is_what_the_ear_bit_carries() {
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = machine(vec![block(0xFF, &[0x55; 400])]);
+    spec.bus.issue2 = true;
+    // A write that would read straight back as a set bit if the loudspeaker
+    // were what the line carried.
+    spec.bus.io_write(0x00FE, 0x18);
+
+    // Over a stretch of the pilot tone the line has to follow the deck, which
+    // means it has to go low somewhere: the loudspeaker would hold it high.
+    let mut low = 0;
+    for _ in 0..400 {
+        spec.bus.tstates += 500;
+        if spec.bus.io_read(0x7FFE) & 0x40 == 0 {
+            low += 1;
+        }
+    }
+    assert!(
+        low > 0,
+        "with a tape playing the line carries the tape, not the loudspeaker"
+    );
+}
