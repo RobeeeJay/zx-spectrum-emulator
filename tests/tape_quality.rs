@@ -139,7 +139,7 @@ fn a_head_out_of_square_rolls_off_rather_than_cutting() {
     assert_eq!(mean_of(&square, false), 800.0);
 
     let mut squeezed = Vec::new();
-    for offset in [0.45f32, 0.55, 0.62] {
+    for offset in [0.25f32, 0.35, 0.45] {
         let gaps = mixed(Quality {
             alignment: true,
             alignment_offset: offset,
@@ -166,7 +166,7 @@ fn a_head_out_of_square_rolls_off_rather_than_cutting() {
 
     let gone = mixed(Quality {
         alignment: true,
-        alignment_offset: 0.7,
+        alignment_offset: 0.6,
         ..Quality::default()
     });
     assert!(
@@ -239,5 +239,58 @@ fn a_bad_deck_is_bad_in_the_same_way_every_time() {
     assert_eq!(
         first, second,
         "the same tape should play the same way twice"
+    );
+}
+
+/// The scope is shown the signal, not the reader's idea of it.
+///
+/// With the head square the trace is a square wave — corners and nothing in
+/// between. With it out of square the trace is the charging curve, which is
+/// the whole point of being able to see it: the squares round off, the swing
+/// gets smaller as the corner comes down, and when the swing stops reaching
+/// the reader's threshold that is visible too.
+#[test]
+fn the_scope_is_given_the_shape_of_the_signal() {
+    let block = || Block::PureData {
+        data: vec![0b1100_1100; 40],
+        zero: 400,
+        one: 800,
+        used_bits: 8,
+        pause_ms: 0,
+    };
+
+    let mut square = Tape::from_blocks("t".into(), vec![block()]);
+    square.play(0);
+    square.level_at(60_000);
+    assert!(
+        square.trace.iter().all(|(_, y)| y.abs() > 0.99),
+        "a square head puts out squares: {:?}",
+        square.trace.iter().take(8).collect::<Vec<_>>()
+    );
+
+    let mut rolled_off = Tape::from_blocks("t".into(), vec![block()]);
+    rolled_off.quality = Quality {
+        alignment: true,
+        alignment_offset: 0.3,
+        ..Quality::default()
+    };
+    rolled_off.play(0);
+    rolled_off.level_at(60_000);
+    let middling = rolled_off
+        .trace
+        .iter()
+        .filter(|(_, y)| y.abs() < 0.9)
+        .count();
+    assert!(
+        middling * 3 > rolled_off.trace.len(),
+        "a rolled-off signal spends its time between the rails, not on them: \
+         {middling} of {} samples",
+        rolled_off.trace.len()
+    );
+    assert!(
+        rolled_off.trace.len() > square.trace.len() * 2,
+        "and is drawn with enough points to show the curve: {} against {}",
+        rolled_off.trace.len(),
+        square.trace.len()
     );
 }

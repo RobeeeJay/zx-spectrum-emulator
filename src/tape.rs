@@ -725,12 +725,14 @@ pub struct Quality {
     pub alignment_wobble: f32,
 }
 
-/// Where the corner sits with the head square, and where it sits with the head
-/// as far out as the slider goes. A ROM pulse is about 2 kHz and the quickest
-/// turbo loaders are up around 4.5 kHz, so the useful part of the range is
-/// between the two.
-const CUTOFF_SQUARE: f32 = 30_000.0;
-const CUTOFF_WORST: f32 = 300.0;
+/// Where the corner sits at each end of the slider.
+///
+/// The top end is only just above the quickest loaders — around 4.5 kHz — so
+/// that the whole of the slider does something: at 30 kHz the first half of it
+/// was a dead run, since nothing on any tape is anywhere near that. The bottom
+/// end is below the pilot tone, where even a ROM block has had it.
+const CUTOFF_SQUARE: f32 = 10_000.0;
+const CUTOFF_WORST: f32 = 250.0;
 
 /// How much of the signal the reader wants before it believes the line has
 /// changed. A comparator has to have some of this or it would chatter on the
@@ -747,8 +749,8 @@ impl Quality {
             return base;
         }
         let seconds = at as f32 / crate::machine::CPU_HZ as f32;
-        // Slower than the motor's wander: a head creeps, it does not shake.
-        let wander = (seconds * std::f32::consts::TAU * 0.08).sin();
+        // Slower again than the motor's wander: a head creeps.
+        let wander = (seconds * std::f32::consts::TAU * 0.027).sin();
         base * (1.0 + self.alignment_wobble * wander)
     }
 
@@ -763,9 +765,9 @@ impl Quality {
             return len;
         }
         let seconds = at as f32 / crate::machine::CPU_HZ as f32;
-        let wow = (seconds * std::f32::consts::TAU * 0.11).sin();
-        let slower = (seconds * std::f32::consts::TAU * 0.037).sin() * 0.6;
-        let flutter = (seconds * std::f32::consts::TAU * 4.3).sin() * 0.15;
+        let wow = (seconds * std::f32::consts::TAU * 0.037).sin();
+        let slower = (seconds * std::f32::consts::TAU * 0.012).sin() * 0.6;
+        let flutter = (seconds * std::f32::consts::TAU * 1.4).sin() * 0.15;
         let waver = (wow + slower + flutter) / 1.75;
         (len as f32 * (1.0 + self.speed_wobble * waver)).max(1.0) as u32
     }
@@ -850,6 +852,10 @@ pub struct Tape {
     raw_next: u64,
     /// The level change the reader is about to make, and when.
     pending: Option<(u64, bool)>,
+    /// The signal itself, as it reaches the reader: samples between -1 and 1,
+    /// so the scope can draw the shape the head made of it rather than the
+    /// squares the reader made of that. Oldest are dropped.
+    pub trace: VecDeque<(u64, f32)>,
     /// Total pulses emitted, for the UI.
     pub pulses: u64,
     /// Recent level changes as (absolute T-state, new level), for the
@@ -863,6 +869,10 @@ pub struct Tape {
 
 /// How many edges the oscilloscope can look back through.
 pub const EDGE_HISTORY: usize = 16384;
+
+/// And how many samples of the signal's own shape, for drawing what the head
+/// made of it rather than what the reader made of that.
+const TRACE_SAMPLES: usize = 4096;
 
 impl Tape {
     pub fn load(path: &Path) -> Result<Tape, String> {
@@ -960,6 +970,7 @@ impl Tape {
             filter_y: 0.0,
             raw_next: 0,
             pending: None,
+            trace: VecDeque::with_capacity(TRACE_SAMPLES),
             pulses: 0,
             edges: VecDeque::with_capacity(EDGE_HISTORY),
             pending_edges: Vec::new(),
@@ -980,11 +991,34 @@ impl Tape {
         self.pending = None;
         self.raw_level = false;
         self.filter_y = 0.0;
+        self.trace.clear();
     }
 
     pub fn stop(&mut self) {
         self.playing = false;
         self.level = false;
+    }
+
+    /// Keep the shape of the signal across one pulse, for the scope.
+    ///
+    /// A pulse the head has not touched is a step and needs no more than its
+    /// corner; one it has rolled off is a curve, so it is sampled along its
+    /// length. What the scope then draws is the signal as it arrives rather
+    /// than the squares the reader makes of it.
+    fn record_trace(&mut self, start: u64, len: u32, from: f32, to: f32, settled: f32) {
+        while self.trace.len() + 4 > TRACE_SAMPLES {
+            self.trace.pop_front();
+        }
+        if !self.quality.alignment || (settled - to).abs() < 0.01 {
+            self.trace.push_back((start, to));
+            return;
+        }
+        let tau = self.quality.tau(start);
+        for step in 0..4 {
+            let along = len as f32 * step as f32 / 4.0;
+            let y = to + (from - to) * (-along / tau).exp();
+            self.trace.push_back((start + along as u64, y));
+        }
     }
 
     /// Record a level change for the oscilloscope and the mixer.
@@ -1200,6 +1234,7 @@ impl Tape {
         self.raw_level = false;
         self.filter_y = 0.0;
         self.pending = None;
+        self.trace.clear();
     }
 
     pub fn finished(&self) -> bool {
@@ -1255,6 +1290,7 @@ impl Tape {
                         self.quality
                             .through_the_head(len, start, self.filter_y, to, self.level)
                     };
+                    self.record_trace(start, len, self.filter_y, to, settled);
                     self.filter_y = settled;
                     self.raw_next = start.saturating_add(len as u64);
                     self.pending = crossing.map(|at| (start.saturating_add(at as u64), raw));

@@ -324,16 +324,17 @@ Two switches, three sliders, and nothing random about any of it: both wobbles
 are sine waves read off the T-state clock, so a given moment always gets the
 same treatment and a load can be repeated.
 
-**Speed** is wow and flutter, scaling every pulse: a waver at 0.11 Hz with a
-slower drift at 0.037 Hz under it and a little flutter at 4.3 Hz over the top.
-Those are periods of seconds and tens of seconds, which is what a tape does —
-the first version wavered at 2.7 Hz and sounded like a machine rather than a
-cassette. The slider is how far it wanders, as a fraction of the right speed.
+**Speed** is wow and flutter, scaling every pulse: a waver at 0.037 Hz with a
+slower drift at 0.012 Hz under it and a little flutter at 1.4 Hz over the top —
+periods of half a minute down to a second, which is what a tape does. The
+slider is how far it wanders, as a fraction of the right speed.
 
 **Alignment** is a head out of square with the tape. It reads the top of the
 track a moment before the bottom, and the two cancel each other the shorter the
 wavelength gets: a low-pass whose corner comes down the further out of square
-it is, from 30 kHz square to 300 Hz at the end of the slider. The second slider
+it is, from 10 kHz at one end of the slider to 250 Hz at the other. The top end
+sits just above the quickest loaders on purpose — at 30 kHz the first half of
+the slider was a dead run, since nothing on any tape is anywhere near that. The second slider
 wanders that corner up and down, slowly — a head creeps, it does not shake.
 
 It is the filter itself rather than a rule about it. A one-pole corner charges
@@ -360,9 +361,15 @@ misaligned deck did to a shelf of them:
 
 | corner | Skool Daze (bits at 422 T, 4.1 kHz) | Chase H.Q. (bits at 735 T, 2.4 kHz) |
 | --- | --- | --- |
-| 4.2 kHz | loads | loads |
-| 1.9 kHz | loads | loads |
-| 1.2 kHz | **fails** | loads |
+| 4.8 kHz | loads | loads |
+| 2.3 kHz | loads | loads |
+| 1.1 kHz | **fails** | loads |
+
+The scope shows it. The deck keeps the signal's own shape as well as the reader's
+edges — samples along each pulse's charging curve — so the trace rounds off as
+the corner comes down, the swing gets smaller, and the reader's squares are
+drawn faintly behind it. When the swing stops reaching the threshold, the place
+where an edge went missing is there to see.
 
 And the motor, measured on Skool Daze: it loads with the speed wavering 2, 5
 and 10 per cent, and fails at 20. What breaks a loader there is the total

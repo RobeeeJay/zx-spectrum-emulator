@@ -126,50 +126,58 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
 
 /// How well the deck is behaving: the motor's steadiness and the head's
 /// alignment, both of which a real one only ever had so much of.
+///
+/// Two lines rather than one. The window is a fixed width and the switches and
+/// their sliders do not fit across it, and a row that wraps puts a slider
+/// under the switch it has nothing to do with.
 fn quality(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 96.0;
         theme::group_label(ui, "Quality");
-
         theme::toggle(ui, &mut app.quality.speed, "Speed").on_hover_text(
             "Let the motor waver, as a real one does: wow over a turn of the \
-             capstan and flutter above it. Loaders measure the tape against \
+             reel and a little flutter over the top of it, wandering across \
+             seconds rather than shaking. Loaders measure the tape against \
              their own clock, so enough of this and they lose it.",
         );
         ui.add_enabled_ui(app.quality.speed, |ui| {
             theme::slider(
                 ui,
                 egui::Slider::new(&mut app.quality.speed_wobble, 0.0..=0.25)
-                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                    .text("wavers"),
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
             );
         });
+    });
 
-        theme::divider(ui);
+    ui.horizontal_wrapped(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 96.0;
         theme::toggle(ui, &mut app.quality.alignment, "Alignment").on_hover_text(
             "Put the head out of square with the tape. It then reads the top \
              of the track a moment before the bottom, and the two cancel each \
-             other the shorter the wavelength gets — a low-pass filter whose \
-             corner comes down the further out it is. The quick loaders go \
-             first and ordinary ROM blocks last.",
+             other the shorter the wavelength gets — a low-pass whose corner \
+             comes down the further out it is. The edges creep late first and \
+             then start going missing, so the quick loaders go before the \
+             slow ones.",
         );
         ui.add_enabled_ui(app.quality.alignment, |ui| {
             // The slider is how far out of square the head is; what that is
-            // worth knowing as is where the corner lands, so it says both.
+            // worth knowing as is where the corner lands, so it says that.
             let at = app.machine_t();
             let corner = app.quality.cutoff(at);
             theme::slider(
                 ui,
                 egui::Slider::new(&mut app.quality.alignment_offset, 0.0..=1.0)
-                    .custom_formatter(move |_, _| format!("{:.1}kHz", corner / 1000.0))
-                    .text("corner"),
-            );
+                    .custom_formatter(move |_, _| format!("{:.1}kHz", corner / 1000.0)),
+            )
+            .on_hover_text("Where the corner sits");
             theme::slider(
                 ui,
                 egui::Slider::new(&mut app.quality.alignment_wobble, 0.0..=0.5)
-                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                    .text("wanders"),
-            );
+                    .custom_formatter(|v, _| format!("±{:.0}%", v * 100.0)),
+            )
+            .on_hover_text("How far the corner wanders as the tape runs");
         });
     });
 }
@@ -323,7 +331,10 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         .map(|(_, l)| *l)
         .unwrap_or(false);
 
-    let trace = Stroke::new(1.5, theme::LCD_FG);
+    // The reader's own idea of the signal, faintly: it is what the machine
+    // acts on, and with the head out of square it is not the same shape as
+    // what arrived.
+    let squares = Stroke::new(1.0, theme::LCD_GRID);
     let mut x = rect.left();
     let mut drew = false;
     for &(t, l) in tape.edges.iter() {
@@ -336,9 +347,12 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         let ex = x_of(t);
         painter.line_segment(
             [Pos2::new(x, y_of(level)), Pos2::new(ex, y_of(level))],
-            trace,
+            squares,
         );
-        painter.line_segment([Pos2::new(ex, y_of(level)), Pos2::new(ex, y_of(l))], trace);
+        painter.line_segment(
+            [Pos2::new(ex, y_of(level)), Pos2::new(ex, y_of(l))],
+            squares,
+        );
         level = l;
         x = ex;
         drew = true;
@@ -348,8 +362,24 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
             Pos2::new(x, y_of(level)),
             Pos2::new(rect.right(), y_of(level)),
         ],
-        trace,
+        squares,
     );
+
+    // And the signal itself over the top, which is where the head's doing
+    // shows: a corner brought down rounds the squares off, and when the
+    // rounding no longer reaches the reader's threshold an edge goes missing.
+    let trace = Stroke::new(1.5, theme::LCD_FG);
+    let y_of_signal = |y: f32| y_mid - y.clamp(-1.0, 1.0) * (y_low - y_high) * 0.5;
+    let shape: Vec<Pos2> = tape
+        .trace
+        .iter()
+        .filter(|(t, _)| *t >= t0 && *t <= t1)
+        .map(|(t, y)| Pos2::new(x_of(*t), y_of_signal(*y)))
+        .collect();
+    if shape.len() > 1 {
+        painter.add(egui::Shape::line(shape, trace));
+        drew = true;
+    }
 
     // Trigger marker.
     if triggered.is_some() {
