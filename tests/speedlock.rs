@@ -79,37 +79,38 @@ fn load(name: &str, flash: bool) -> Option<(Vec<u8>, u16)> {
 
 /// The game that comes off the tape is the same game either way.
 ///
-/// Not every byte of memory: the loading screen's colours are cycled while the
-/// tape runs, and the stack below SP holds whatever the loader last pushed, so
-/// both depend on exactly when the tape ran out. The loaded program does not.
+/// Head over Heels, because it stays in its loader until the tape runs out:
+/// the comparison is then of two machines at the same point in the load. Daley
+/// Thompson's is already running its game by the time its tape ends, so its
+/// own variables have moved on by different amounts and there is nothing exact
+/// to compare — what that one has to show is further down, that it runs.
+///
+/// Not every byte even so: the stack below SP holds whatever the loader last
+/// pushed, and the system variables hold a frame counter, both of which depend
+/// on how long the load took rather than on what was loaded.
 #[test]
 fn a_speedlock_tape_loads_to_the_same_thing_in_a_hurry() {
-    for name in [HEAD_OVER_HEELS, DALEY] {
-        let (Some((slow, slow_pc)), Some((fast, fast_pc))) = (load(name, false), load(name, true))
-        else {
-            eprintln!("need roms/48.rom and {name}; skipping");
-            return;
-        };
+    let name = HEAD_OVER_HEELS;
+    let (Some((slow, _)), Some((fast, _))) = (load(name, false), load(name, true)) else {
+        eprintln!("need roms/48.rom and {name}; skipping");
+        return;
+    };
 
-        let differing = |from: u32, to: u32| -> usize {
-            (from..to)
-                .filter(|a| slow[(*a - 0x4000) as usize] != fast[(*a - 0x4000) as usize])
-                .count()
-        };
-        assert_eq!(
-            differing(0x4000, 0x5800),
-            0,
-            "{name}: the loading screen's pixels differ"
-        );
-        // Everything above the screen but the stack, which is at the top of
-        // memory while a loader is running.
-        assert_eq!(
-            differing(0x5B00, 0xFF00),
-            0,
-            "{name}: the game loaded differently when it was loaded quickly"
-        );
-        let _ = (slow_pc, fast_pc);
-    }
+    let differing = |from: u32, to: u32| -> usize {
+        (from..to)
+            .filter(|a| slow[(*a - 0x4000) as usize] != fast[(*a - 0x4000) as usize])
+            .count()
+    };
+    assert_eq!(
+        differing(0x4000, 0x5800),
+        0,
+        "{name}: the loading screen's pixels differ"
+    );
+    assert_eq!(
+        differing(0x6000, 0xFF00),
+        0,
+        "{name}: the game loaded differently when it was loaded quickly"
+    );
 }
 
 /// And the game starts.
@@ -123,23 +124,30 @@ fn a_speedlock_tape_loads_to_the_same_thing_in_a_hurry() {
 /// feeds back into it besides.
 #[test]
 fn head_over_heels_starts_after_loading() {
-    let Some((memory, _)) = load(HEAD_OVER_HEELS, true) else {
-        eprintln!("need roms/48.rom and {HEAD_OVER_HEELS}; skipping");
+    starts_after_loading(HEAD_OVER_HEELS);
+}
+
+/// And so does the other one, whose loader starts the game while the tape is
+/// still running.
+#[test]
+fn daley_thompson_starts_after_loading() {
+    starts_after_loading(DALEY);
+}
+
+fn starts_after_loading(name: &str) {
+    let Ok(rom) = std::fs::read("roms/48.rom") else {
+        eprintln!("need roms/48.rom; skipping");
         return;
     };
-    let table: Vec<u8> = (0x9000..0x9008).map(|a| memory[a - 0x4000]).collect();
-    assert!(
-        table.iter().any(|b| *b != 0),
-        "the table the game builds from the tape came out empty: {table:02X?}"
-    );
-
-    // And it goes on to run: away from the loader, with a picture.
-    let rom = std::fs::read("roms/48.rom").unwrap();
+    if tape(name).is_none() {
+        eprintln!("need {name}; skipping");
+        return;
+    }
     let mut spec = Spectrum::new();
     spec.load_rom(&rom);
     spec.reset();
     spec.bus.tape_flash = true;
-    start_loading(&mut spec, tape(HEAD_OVER_HEELS).unwrap());
+    start_loading(&mut spec, tape(name).unwrap());
     while spec.bus.tape_playing() {
         spec.run(20_000);
     }
@@ -148,7 +156,7 @@ fn head_over_heels_starts_after_loading() {
     }
     assert!(
         !(0xFC00..=0xFFFF).contains(&spec.cpu.pc),
-        "it should be running the game, not still in the loader at ${:04X}",
+        "{name} should be running the game, not still in the loader at ${:04X}",
         spec.cpu.pc
     );
     let drawn = (0x4000..0x5800u16)

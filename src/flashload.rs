@@ -106,6 +106,14 @@ pub fn load_block(spec: &mut Spectrum) -> Loaded {
     let Some(tape) = spec.bus.tape.as_ref() else {
         return Loaded::NotOurs;
     };
+    // Only from a deck that is running. A stopped tape is a stopped tape,
+    // however quickly the emulator is willing to read one: `LOAD ""` on a
+    // machine with the tape paused waits for somebody to press Play, and
+    // handing it blocks anyway ran the whole tape through the moment it was
+    // asked for.
+    if !tape.playing {
+        return Loaded::NotOurs;
+    }
 
     // What the caller asked for: the flag it expects in A, the address in IX,
     // the length in DE, and carry telling load from verify. The routine keeps

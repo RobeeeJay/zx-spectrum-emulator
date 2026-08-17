@@ -175,6 +175,109 @@ fn nothing_is_handed_over_unless_it_is_switched_on() {
     );
 }
 
+/// A stopped deck is a stopped deck.
+///
+/// `LOAD ""` with the tape paused waits for somebody to press Play, and no
+/// amount of hurry changes that. Handing blocks over anyway ran the whole tape
+/// through the instant it was asked for, and left the machine stuck part way
+/// into a tape nobody had started.
+#[test]
+fn a_stopped_tape_is_not_handed_over() {
+    let mut spec = machine(vec![block(0xFF, &[1, 2, 3, 4])]);
+    spec.bus.tape.as_mut().unwrap().stop();
+    call_loader(&mut spec, 0xFF, 0x8000, 4);
+
+    assert_ne!(
+        spec.bus.mem(0x8000),
+        1,
+        "nothing should have been loaded from a tape that is not playing"
+    );
+    assert_ne!(
+        spec.cpu.pc, 0x1234,
+        "the machine should be in the ROM's loader, waiting for a pilot"
+    );
+    assert_eq!(
+        spec.bus.tape.as_ref().unwrap().block,
+        0,
+        "and the deck should not have moved"
+    );
+}
+
+/// The whole way round, in the order a person does it: reset, tape in but not
+/// running, `LOAD ""`, and then Play.
+#[test]
+fn nothing_happens_until_play_is_pressed() {
+    let (Ok(rom), Ok(tape)) = (
+        std::fs::read("roms/48.rom"),
+        Tape::load(std::path::Path::new("tapes/borderbreak.tap")),
+    ) else {
+        eprintln!("need roms/48.rom and tapes/borderbreak.tap; skipping");
+        return;
+    };
+    let mut spec = Spectrum::new();
+    spec.load_rom(&rom);
+    spec.reset();
+    spec.bus.tape_flash = true;
+    for _ in 0..120 {
+        spec.run(FRAME_T);
+    }
+    spec.bus.tape = Some(tape);
+    spec.bus.tape.as_mut().unwrap().stop();
+
+    // LOAD ""
+    for keys in [
+        &[(6usize, 3u8)][..],
+        &[(7, 1), (5, 0)][..],
+        &[(7, 1), (5, 0)][..],
+        &[(6, 0)][..],
+    ] {
+        for (row, bit) in keys {
+            spec.bus.keys[*row] &= !(1 << bit);
+        }
+        for _ in 0..4 {
+            spec.run(FRAME_T);
+        }
+        for (row, bit) in keys {
+            spec.bus.keys[*row] |= 1 << bit;
+        }
+        for _ in 0..4 {
+            spec.run(FRAME_T);
+        }
+    }
+    // A couple of seconds of waiting, which is what a stopped tape gives you.
+    for _ in 0..100 {
+        spec.run(FRAME_T);
+    }
+    assert_eq!(
+        spec.bus.tape.as_ref().unwrap().block,
+        0,
+        "the deck ran on its own with nobody pressing Play"
+    );
+    assert!(!spec.bus.tape_playing(), "and it should still be stopped");
+
+    // Now press Play.
+    let now = spec.bus.total_t();
+    spec.bus.tape.as_mut().unwrap().play(now);
+    let mut frames = 0;
+    while frames < 4000 {
+        spec.run(FRAME_T);
+        frames += 1;
+        if !spec.bus.tape_playing() {
+            break;
+        }
+    }
+    for _ in 0..300 {
+        spec.run(FRAME_T);
+    }
+    let drawn = (0x4000..0x5800u16)
+        .filter(|a| spec.bus.mem(*a) != 0)
+        .count();
+    assert!(
+        drawn > 500,
+        "and then it should load: only {drawn} bytes on screen after {frames} frames"
+    );
+}
+
 /// End to end, against a real tape: the same machine state at the end, in two
 /// frames instead of two and a half thousand.
 #[test]
@@ -195,7 +298,13 @@ fn a_real_tape_loads_in_a_frame_or_two() {
         for _ in 0..120 {
             spec.run(FRAME_T);
         }
+        // The tape goes in and the deck is started before anything is typed,
+        // as it would be: the answer is given when the ROM's loader is called,
+        // and if the machine is already inside it — waiting for a pilot with
+        // the deck stopped — the block it is waiting for has to play.
         spec.bus.tape = Some(tape);
+        let now = spec.bus.total_t();
+        spec.bus.tape.as_mut().unwrap().play(now);
         // LOAD ""
         for keys in [
             &[(6usize, 3u8)][..],
@@ -216,8 +325,6 @@ fn a_real_tape_loads_in_a_frame_or_two() {
                 spec.run(FRAME_T);
             }
         }
-        let now = spec.bus.total_t();
-        spec.bus.tape.as_mut().unwrap().play(now);
         let mut frames = 0;
         while frames < 60_000 {
             spec.run(FRAME_T);

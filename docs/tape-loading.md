@@ -116,10 +116,15 @@ which is why switching Ludicrous on switches Max speed on with it. Measured:
 Border Break 2,605 emulated frames → 2; Anabasis, which loads a small BASIC
 stub and then reads the rest itself, 18,722 → 18,149.
 
+**A stopped deck is a stopped deck.** Blocks are only handed over while the
+tape is running: `LOAD ""` with the deck paused waits for Play, as it should.
+Without that check the whole tape ran through the moment the ROM asked for its
+first block, leaving the machine part way into a tape nobody had started.
+
 The first block of a session sometimes still loads at tape speed. The ROM sits
 *inside* LD-BYTES waiting for a pilot tone, and the answer is only given on
-entry — so if the machine is already in there when the tape goes in, that block
-is played. Put the tape in before typing `LOAD ""` and every block is handed
+entry — so if the machine is already in there when Play is pressed, that block
+is played. Start the deck before typing `LOAD ""` and every block is handed
 over.
 
 ## Loading that is not the ROM's
