@@ -696,6 +696,62 @@ struct Pulse {
     level: Option<bool>,
 }
 
+/// How well the tape and the deck are behaving.
+///
+/// A cassette is not a perfect medium and a deck is not a perfect reader. The
+/// motor runs a little fast and a little slow — wow over a turn of the
+/// capstan, flutter above it — and a head that is not square to the tape reads
+/// one edge of the signal early and the other late. Loaders were written with
+/// enough slack for both, and how much slack is exactly what this is for:
+/// turning these up is how to find out what a loader will put up with.
+///
+/// Nothing here is random. Both wobbles come from the clock, so a given
+/// T-state always gets the same treatment and a load can be repeated.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Quality {
+    /// Whether the motor wavers.
+    pub speed: bool,
+    /// How far it wavers, as a fraction of the right speed: 0.05 is a deck
+    /// running five per cent fast and slow by turns.
+    pub speed_wobble: f32,
+    /// Whether the head is out of square with the tape.
+    pub alignment: bool,
+    /// How far out, as a fraction of a pulse: one edge of the signal arrives
+    /// that much early and the other that much late.
+    pub alignment_offset: f32,
+    /// And how much that wanders as the tape runs, on top of the offset.
+    pub alignment_wobble: f32,
+}
+
+impl Quality {
+    /// How long a pulse of `len` lasts at absolute T-state `at`, given which
+    /// way the edge in front of it went.
+    ///
+    /// The wobble is two sine waves — a slow one for the capstan and a quicker
+    /// one over it — so it wanders rather than beating against the pulse rate.
+    fn stretch(&self, len: u32, at: u64, rising: bool) -> u32 {
+        if !self.speed && !self.alignment {
+            return len;
+        }
+        let seconds = at as f32 / crate::machine::CPU_HZ as f32;
+        let mut out = len as f32;
+        if self.speed {
+            let wow = (seconds * std::f32::consts::TAU * 2.7).sin();
+            let flutter = (seconds * std::f32::consts::TAU * 31.0).sin() * 0.3;
+            out *= 1.0 + self.speed_wobble * (wow + flutter) / 1.3;
+        }
+        if self.alignment {
+            let wander = (seconds * std::f32::consts::TAU * 1.3).sin();
+            let skew = self.alignment_offset + self.alignment_wobble * wander;
+            // A head out of square reads one edge early and the other late,
+            // so the mark and the space stop being the same length while the
+            // pair of them still adds up.
+            out *= if rising { 1.0 + skew } else { 1.0 - skew };
+        }
+        out.max(1.0) as u32
+    }
+}
+
 #[derive(Clone)]
 pub struct Tape {
     pub name: String,
@@ -716,6 +772,8 @@ pub struct Tape {
     clock: u64,
     /// The pause a block ends with: when it starts and when it ends.
     pause_span: Option<(u64, u64)>,
+    /// How well the deck is behaving.
+    pub quality: Quality,
     /// Total pulses emitted, for the UI.
     pub pulses: u64,
     /// Recent level changes as (absolute T-state, new level), for the
@@ -821,6 +879,7 @@ impl Tape {
             stopped_by_block: false,
             clock: 0,
             pause_span: None,
+            quality: Quality::default(),
             pulses: 0,
             edges: VecDeque::with_capacity(EDGE_HISTORY),
             pending_edges: Vec::new(),
@@ -1085,7 +1144,10 @@ impl Tape {
                     let new_level = p.level.unwrap_or(!self.level);
                     let changed = new_level != self.level;
                     self.level = new_level;
-                    self.next_edge = self.next_edge.saturating_add(p.len.max(1) as u64);
+                    let len = self
+                        .quality
+                        .stretch(p.len.max(1), self.next_edge, new_level);
+                    self.next_edge = self.next_edge.saturating_add(len as u64);
                     self.pulses += 1;
                     if changed {
                         self.push_edge(edge_at);

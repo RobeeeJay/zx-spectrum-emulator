@@ -124,6 +124,51 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
+/// How well the deck is behaving: the motor's steadiness and the head's
+/// alignment, both of which a real one only ever had so much of.
+fn quality(app: &mut App, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        theme::group_label(ui, "Quality");
+
+        theme::toggle(ui, &mut app.quality.speed, "Speed").on_hover_text(
+            "Let the motor waver, as a real one does: wow over a turn of the \
+             capstan and flutter above it. Loaders measure the tape against \
+             their own clock, so enough of this and they lose it.",
+        );
+        ui.add_enabled_ui(app.quality.speed, |ui| {
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.speed_wobble, 0.0..=0.25)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .text("wavers"),
+            );
+        });
+
+        theme::divider(ui);
+        theme::toggle(ui, &mut app.quality.alignment, "Alignment").on_hover_text(
+            "Put the head out of square with the tape, so one edge of the \
+             signal arrives early and the other late. What a loader hears is \
+             the mark and the space swapping length while the pair of them \
+             still adds up.",
+        );
+        ui.add_enabled_ui(app.quality.alignment, |ui| {
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.alignment_offset, 0.0..=0.4)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .text("out by"),
+            );
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.alignment_wobble, 0.0..=0.2)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .text("wanders"),
+            );
+        });
+    });
+}
+
 fn transport(app: &mut App, ui: &mut egui::Ui) {
     let now = app.machine_t();
     let mut action: Option<i32> = None;
@@ -172,6 +217,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
     });
 
     speeds(app, ui);
+    quality(app, ui);
 
     if let Some(dir) = action {
         let t = app.tape_mut().unwrap();

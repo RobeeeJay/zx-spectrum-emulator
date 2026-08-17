@@ -400,6 +400,9 @@ pub struct App {
     /// Whether the deck stopping itself has already been mentioned, so it is
     /// said once rather than sixty times a second.
     said_tape_stopped: bool,
+    /// How well the deck is asked to behave. Kept here rather than on the deck
+    /// so that it survives one tape being taken out and another put in.
+    pub quality: crate::tape::Quality,
     /// The frame being raced: a copy of the machine taken at the interrupt,
     /// run forward to wherever the cursor is. Only ever set while the machine
     /// is stopped.
@@ -493,6 +496,7 @@ impl App {
             fade_floor: 0.5,
             speed_before_race: 1.0,
             said_tape_stopped: false,
+            quality: crate::tape::Quality::default(),
             race: None,
             beam_t: None,
             ram: ram_map::RamMapState::default(),
@@ -2080,6 +2084,13 @@ impl App {
 
     pub fn advance(&mut self, dt: f32) {
         self.announce_tape_stops();
+        // The deck is told how to behave rather than asked: a tape put in
+        // after the sliders were set gets the same treatment as one already
+        // in the machine.
+        let quality = self.quality;
+        if let Some(tape) = self.tape_mut() {
+            tape.quality = quality;
+        }
         if !self.running {
             return;
         }

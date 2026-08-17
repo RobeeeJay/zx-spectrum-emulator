@@ -317,6 +317,35 @@ past the game, and the game says "STOP THE TAPE" long before the tape agrees.
 Microsphere: taken out again, Chase H.Q. ends with a report line and 134 bytes
 of screen. The EAR feedback it does not care about.
 
+## A deck that is not quite right
+
+The tape window's Quality row makes the deck behave the way a real one did.
+Two switches, three sliders, and nothing random about any of it: both wobbles
+are sine waves read off the T-state clock, so a given moment always gets the
+same treatment and a load can be repeated.
+
+**Speed** is wow and flutter — a slow waver over a turn of the capstan at 2.7
+Hz with a quicker one at 31 Hz over the top of it — scaling every pulse. The
+slider is how far it wanders, as a fraction of the right speed.
+
+**Alignment** is a head out of square with the tape, which reads one edge of
+the signal early and the other late. The mark and the space swap length while
+the pair of them still adds up. One slider is how far out it is, the other how
+much that wanders as the tape runs.
+
+What loaders put up with, measured on Skool Daze:
+
+| | loads |
+| --- | --- |
+| speed wavering 2%, 5%, 10% | yes |
+| speed wavering 20% | no |
+| head out by 5%, 10%, 20%, 35% | yes |
+
+The alignment one is worth understanding rather than dismissing: a loader times
+a *pair* of pulses, and skewing the pair without changing its total is
+something it cannot see. What breaks a loader is the total moving, which is
+what the speed slider does.
+
 ## The EAR line is never dead
 
 Reading port $FE bit 6 with no tape playing does not give zero: the machine

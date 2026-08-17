@@ -122,3 +122,38 @@ fn a_zx81_is_not_offered_it() {
         "a ZX81 has no such routine to hand blocks to"
     );
 }
+
+/// The Quality row: two switches for the deck's failings, and the sliders that
+/// say how bad each is.
+#[test]
+fn the_quality_row_sets_the_decks_failings() {
+    let mut h = harness();
+    assert!(!h.state().quality.speed, "it should start behaving");
+    assert!(!h.state().quality.alignment);
+
+    h.get_by_label("Speed").click();
+    h.run_steps(2);
+    assert!(h.state().quality.speed, "the Speed switch did nothing");
+
+    h.get_by_label("Alignment").click();
+    h.run_steps(2);
+    assert!(
+        h.state().quality.alignment,
+        "the Alignment switch did nothing"
+    );
+
+    // What the sliders are set to reaches the deck, which is where the pulses
+    // are made.
+    h.state_mut().quality.speed_wobble = 0.07;
+    h.state_mut().quality.alignment_offset = 0.15;
+    h.state_mut().advance(1.0 / 50.0);
+    let deck = h.state().spec.bus.tape.as_ref().expect("a tape").quality;
+    assert!(
+        deck.speed && deck.alignment,
+        "the deck should have been told: {deck:?}"
+    );
+    assert!(
+        (deck.speed_wobble - 0.07).abs() < 0.001 && (deck.alignment_offset - 0.15).abs() < 0.001,
+        "and told how far: {deck:?}"
+    );
+}
