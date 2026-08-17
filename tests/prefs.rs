@@ -495,3 +495,57 @@ fn recordings_start_where_the_tapes_are() {
         "and after that, wherever the recordings are"
     );
 }
+
+/// Everything the tape window is set to comes back with the emulator.
+///
+/// A deck somebody has dialled in — a head out of square by a particular
+/// amount, a hiss at a particular level, the scope put away to make room for
+/// the block list — is tedious to find again, and none of it survived a
+/// restart.
+#[test]
+fn the_tape_windows_settings_survive_a_restart() {
+    use zx_rustrum::tape::Quality;
+    use zx_rustrum::ui::tape::Trigger;
+    use zx_rustrum::ui::Hurry;
+
+    let dir = TempDir::new("tape-settings");
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.prefs = Prefs::load_or_create_in(dir.path());
+    app.tape.show_scope = false;
+    app.tape.show_quality = true;
+    app.tape.window_us = 750.0;
+    app.tape.trigger = Trigger::Falling;
+    app.set_hurry(Hurry::Fastload);
+    app.quality = Quality {
+        wobble: true,
+        wow: 0.02,
+        flutter: 0.01,
+        alignment: true,
+        alignment_offset: 0.4,
+        alignment_wobble: 0.2,
+        noise: true,
+        noise_level: 0.35,
+    };
+    app.save_window_state();
+
+    let mut next = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    next.prefs = Prefs::load_or_create_in(dir.path());
+    next.apply_prefs();
+
+    assert!(!next.tape.show_scope, "the scope was put away");
+    assert!(
+        next.tape.show_quality,
+        "and the deck's failings were on show"
+    );
+    assert_eq!(next.tape.window_us, 750.0, "sweep");
+    assert_eq!(next.tape.trigger, Trigger::Falling, "trigger");
+    assert!(
+        next.tape_flash() && next.tape_boost(),
+        "the tape was being got through on Fastload"
+    );
+    assert_eq!(
+        next.quality, app.quality,
+        "and the deck's failings should be exactly what they were"
+    );
+}

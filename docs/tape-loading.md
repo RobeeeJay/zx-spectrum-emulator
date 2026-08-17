@@ -505,6 +505,16 @@ the switch it has nothing to do with. They are put away by default because they
 are three rows of a window the block list is at the bottom of, and most of the
 time a deck that behaves is what is wanted.
 
+Everything the window is set to is written to the preferences file and comes
+back with the emulator: the two switches above, the sweep and trigger, which of
+the three speeds is on, and every one of the deck's failings. A head out of
+square by a particular amount and a hiss at a particular level are tedious to
+dial in twice. The writing is left to the settling save, which only writes when
+something has changed and only after two seconds of quiet, so dragging a slider
+does not write the file forty times a second. The keys are `tape_*` in
+`zx-rustrum.conf` and can be hand-edited like the rest of it; nonsense in one
+is ignored rather than stopping the emulator starting.
+
 ## The silence at the end counts too
 
 Max speed comes back to normal speed for the pause a tape ends on, so that a

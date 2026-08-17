@@ -6,7 +6,7 @@ use egui::{Color32, Pos2, RichText, Sense, Stroke, Vec2};
 
 use crate::ui::{theme, App, Hurry};
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Trigger {
     Rising,
     Falling,

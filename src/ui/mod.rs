@@ -1532,6 +1532,7 @@ impl App {
         self.prefs.display_scale = Some(self.scale);
         self.prefs.overscan = Some(self.overscan);
         self.prefs.open_windows = Some(self.open_windows());
+        self.remember_tape_settings();
         self.prefs.save();
         self.last_saved = Some(self.prefs.to_text());
         self.last_save_at = Some(std::time::Instant::now());
@@ -1546,6 +1547,7 @@ impl App {
         self.prefs.display_scale = Some(self.scale);
         self.prefs.overscan = Some(self.overscan);
         self.prefs.open_windows = Some(self.open_windows());
+        self.remember_tape_settings();
         let text = self.prefs.to_text();
         if self.last_saved.as_deref() == Some(text.as_str()) {
             self.last_save_at = Some(std::time::Instant::now());
@@ -1554,8 +1556,109 @@ impl App {
         self.save_window_state();
     }
 
+    /// Put the tape window's settings into the preferences.
+    ///
+    /// Everything the window is set to, since a deck somebody has dialled in —
+    /// a head out of square by a particular amount, a hiss at a particular
+    /// level — is tedious to find again. Writing is left to the settling save,
+    /// which only writes when something has actually changed, so dragging a
+    /// slider does not write the file forty times a second.
+    fn remember_tape_settings(&mut self) {
+        let q = self.quality;
+        let tape = &self.tape;
+        let pairs: [(&str, String); 13] = [
+            ("tape_scope", tape.show_scope.to_string()),
+            ("tape_quality_shown", tape.show_quality.to_string()),
+            ("tape_scope_us", tape.window_us.to_string()),
+            (
+                "tape_scope_trigger",
+                match tape.trigger {
+                    crate::ui::tape::Trigger::Rising => "rising",
+                    crate::ui::tape::Trigger::Falling => "falling",
+                    crate::ui::tape::Trigger::Off => "free",
+                }
+                .to_string(),
+            ),
+            (
+                "tape_speed",
+                match (self.tape_flash(), self.tape_boost()) {
+                    (true, _) => "fastload",
+                    (false, true) => "max",
+                    (false, false) => "normal",
+                }
+                .to_string(),
+            ),
+            ("tape_wobble", q.wobble.to_string()),
+            ("tape_wow", q.wow.to_string()),
+            ("tape_flutter", q.flutter.to_string()),
+            ("tape_alignment", q.alignment.to_string()),
+            ("tape_alignment_offset", q.alignment_offset.to_string()),
+            ("tape_alignment_wobble", q.alignment_wobble.to_string()),
+            ("tape_noise", q.noise.to_string()),
+            ("tape_noise_level", q.noise_level.to_string()),
+        ];
+        for (key, value) in pairs {
+            self.prefs.set(key, value);
+        }
+    }
+
+    /// Take the tape window's settings back out of the preferences.
+    fn apply_tape_settings(&mut self) {
+        if let Some(on) = self.prefs.get_as("tape_scope") {
+            self.tape.show_scope = on;
+        }
+        if let Some(on) = self.prefs.get_as("tape_quality_shown") {
+            self.tape.show_quality = on;
+        }
+        if let Some(us) = self
+            .prefs
+            .get_as::<f32>("tape_scope_us")
+            .filter(|v| *v > 0.0)
+        {
+            self.tape.window_us = us;
+        }
+        match self.prefs.get("tape_scope_trigger") {
+            Some("rising") => self.tape.trigger = crate::ui::tape::Trigger::Rising,
+            Some("falling") => self.tape.trigger = crate::ui::tape::Trigger::Falling,
+            Some("free") => self.tape.trigger = crate::ui::tape::Trigger::Off,
+            _ => {}
+        }
+        match self.prefs.get("tape_speed") {
+            Some("fastload") => self.set_hurry(Hurry::Fastload),
+            Some("max") => self.set_hurry(Hurry::Max),
+            Some("normal") => self.set_hurry(Hurry::Normal),
+            _ => {}
+        }
+        let q = &mut self.quality;
+        if let Some(v) = self.prefs.get_as("tape_wobble") {
+            q.wobble = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_wow") {
+            q.wow = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_flutter") {
+            q.flutter = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_alignment") {
+            q.alignment = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_alignment_offset") {
+            q.alignment_offset = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_alignment_wobble") {
+            q.alignment_wobble = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_noise") {
+            q.noise = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_noise_level") {
+            q.noise_level = v;
+        }
+    }
+
     /// Take the display settings from the preferences file, if it has any.
     pub fn apply_prefs(&mut self) {
+        self.apply_tape_settings();
         if let Some(scale) = self.prefs.display_scale.filter(|s| *s > 0.0) {
             self.scale = scale;
         }

@@ -132,7 +132,11 @@ pub struct Prefs {
     pub overscan: Option<bool>,
     /// Which debug windows were open, so they come back with the emulator.
     pub open_windows: Option<Vec<String>>,
-    /// Anything else already in the file, kept so hand edits survive.
+    /// Simple settings written through [`Prefs::set`], and anything else
+    /// already in the file, kept so hand edits survive. One map for both: a
+    /// setting the emulator writes and a key somebody typed in are the same
+    /// thing to the file, and keeping them apart would mean listing every key
+    /// twice.
     other: BTreeMap<String, String>,
 }
 
@@ -267,6 +271,24 @@ impl Prefs {
             FileKind::Recording => self.recording_dir = Some(dir),
         }
         self.save();
+    }
+
+    /// Read a setting written by [`Prefs::set`], if it is there.
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.other.get(key).map(String::as_str)
+    }
+
+    /// A setting parsed as whatever it is meant to be, if it is there and
+    /// makes sense. A key somebody has hand-edited into nonsense is ignored
+    /// rather than being allowed to stop the emulator starting.
+    pub fn get_as<T: std::str::FromStr>(&self, key: &str) -> Option<T> {
+        self.get(key)?.parse().ok()
+    }
+
+    /// Write a setting. Saving is the caller's to do, since settings are
+    /// written in batches.
+    pub fn set(&mut self, key: &str, value: impl std::fmt::Display) {
+        self.other.insert(key.to_string(), value.to_string());
     }
 
     /// Remember where a window is.
