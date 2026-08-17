@@ -388,6 +388,38 @@ order, which is what its test does.
 **Lotus and Space Crusade** are multiloads too, and both draw their titles
 before the first stop.
 
+## Still open: Head over Heels loads or does not, depending on when Play is pressed
+
+Reported as "Head over Heels no longer loads with Max CPU or Fastload", and it
+is neither of those things. Sweeping the moment Play is pressed across two
+frames of machine time, with `LOAD ""` already running and the ROM sitting in
+its edge loop at $05ED-$05F8 every time:
+
+```
+152:ok  153:BLACK  155:ok  157:ok  158:BLACK  160:BLACK  162:BLACK  163:BLACK
+165:ok  167:BLACK  168:ok  170:ok  172:BLACK  173:ok  175:ok  177:ok  178:ok
+180:ok  182:BLACK  183:BLACK  185:ok  187:BLACK  188:ok  190:ok
+```
+
+About a third of start moments end with a black screen and the machine sitting
+in Speedlock's sampling loop at $FD27 while the deck runs on through the tape.
+What is known:
+
+- It is not the speed. The same sweep with the boost off gives the same
+  pattern, two marginal cases apart, and Fastload changes nothing either: the
+  ROM's blocks are handed over the same way whichever moment Play comes at.
+- It is not new. The identical sweep at `bbe284f`, before the deck's quality
+  model, the grain, the hiss and the silence work, fails at the same starts.
+- The ROM's part succeeds: the BASIC line and the loader block are read, and
+  the machine reaches Speedlock's own loader before it goes wrong.
+- Where in the frame the tape starts is what differs between one run and the
+  next, and Speedlock reads port $7FFE, whose high byte is contended — the
+  same 54/56/58/60 T-state variance that stopped the sampler wait being
+  divided out. Whether that is the cause has not been shown.
+
+What would settle it is a comparison of a working start against a failing one
+at the instruction where the two diverge. Not done yet.
+
 ## A deck that is not quite right
 
 The tape window's Quality row makes the deck behave the way a real one did.
