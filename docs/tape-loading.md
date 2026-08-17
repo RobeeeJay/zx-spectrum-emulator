@@ -493,9 +493,13 @@ no LD-BYTES to answer.
 
 The top of the window is two labelled rows — **Playback**, which is start,
 rewind, play, stop and forward, and **Speed**, which is the three above — and
-five when the **Quality** switch on the speed row is on: **Wobble** with the
-wow and flutter sliders, **Alignment** with where the corner sits and how far
-it wanders, and **Noise** with how loud the hiss is. A row each rather than
+five when the **Quality** switch on the speed row is on. Beside it is
+**Oscilloscope**, which shows and hides the scope: it is on by default, since
+what the deck is putting out is the point of watching a tape load, but it is a
+third of the window's height and somebody working down the block list wants
+that height for the list. The quality rows are: **Wobble** with the wow and
+flutter sliders, **Alignment** with where the corner sits and how far it
+wanders, and **Noise** with how loud the hiss is. A row each rather than
 sharing: the window is a fixed width, and a row that wraps puts a slider under
 the switch it has nothing to do with. They are put away by default because they
 are three rows of a window the block list is at the bottom of, and most of the

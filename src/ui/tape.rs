@@ -30,6 +30,9 @@ pub struct TapeWindowState {
     /// The block the list last asked to scroll into view, for tests and for
     /// anyone wondering why the list jumped.
     pub scroll_requested_for: Option<usize>,
+    /// Whether the scope is on show. It is, by default: what the deck is
+    /// putting out is the point of watching a tape load.
+    pub show_scope: bool,
     /// Whether the deck's failings are on show. They are three rows of a
     /// window whose height the block list is what is left of, and most of the
     /// time a deck that behaves is what is wanted.
@@ -47,6 +50,7 @@ impl Default for TapeWindowState {
             right_spin: 0.0,
             spun_at: 0.0,
             scroll_requested_for: None,
+            show_scope: true,
             show_quality: false,
         }
     }
@@ -70,8 +74,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             ui.vertical_centered(|ui| {
                 crate::ui::cassette::ui(app, ui);
             });
-            ui.separator();
-            scope(app, ui);
+            if app.tape.show_scope {
+                ui.separator();
+                scope(app, ui);
+            }
             ui.separator();
             block_list(app, ui);
         });
@@ -121,6 +127,8 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
             }
         });
         ui.separator();
+        theme::toggle(ui, &mut app.tape.show_scope, "Oscilloscope")
+            .on_hover_text("Show the signal on its way to the reader.");
         theme::toggle(ui, &mut app.tape.show_quality, "Quality").on_hover_text(
             "Show what the deck does wrong: the motor's wobble, the head's \
              alignment and the tape's hiss. They are three rows of a window \

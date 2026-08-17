@@ -192,3 +192,44 @@ fn the_quality_row_sets_the_decks_failings() {
         "and told how far: {deck:?}"
     );
 }
+
+/// The scope has a switch of its own beside the Quality one.
+///
+/// It is on by default — what the deck is putting out is the point of watching
+/// a tape load — but it is a third of the window's height, and somebody
+/// working down the block list wants that height for the list.
+#[test]
+fn the_scope_can_be_put_away() {
+    let mut h = harness();
+    assert!(
+        h.query_by_label("Free run").is_some(),
+        "the scope should be there to start with"
+    );
+    // Beside the speeds, with the other switch that shows and hides a section.
+    let row = |label: &str| -> f32 {
+        h.get_by_label(label)
+            .accesskit_node()
+            .bounding_box()
+            .expect("it should be somewhere")
+            .y0 as f32
+    };
+    assert!(
+        (row("Oscilloscope") - row("Fastload")).abs() < 0.5
+            && (row("Oscilloscope") - row("Quality")).abs() < 0.5,
+        "the switch belongs on the speed row with the Quality one"
+    );
+
+    h.get_by_label("Oscilloscope").click();
+    h.run_steps(2);
+    assert!(
+        h.query_by_label("Free run").is_none(),
+        "pressing it should put the scope away"
+    );
+
+    h.get_by_label("Oscilloscope").click();
+    h.run_steps(2);
+    assert!(
+        h.query_by_label("Free run").is_some(),
+        "and pressing it again should bring it back"
+    );
+}
