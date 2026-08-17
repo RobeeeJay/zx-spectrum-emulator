@@ -72,29 +72,91 @@ fn a_wavering_motor_stretches_the_tone() {
     );
 }
 
-/// A head out of square reads one edge early and the other late, so the mark
-/// and the space stop being the same length — while the pair of them still
-/// adds up to about what it should.
-#[test]
-fn a_head_out_of_square_skews_the_mark_and_the_space() {
-    let mut tape = tone_tape(Quality {
-        alignment: true,
-        alignment_offset: 0.2,
-        ..Quality::default()
-    });
-    let gaps = intervals(&mut tape, CPU_HZ as u64 / 4);
+/// A tape of one tone at `len` T-states a pulse, and how many edges come out
+/// of a stretch of it.
+fn edges_at(len: u16, quality: Quality, until: u64) -> usize {
+    let mut tape = Tape::from_blocks("t".into(), vec![Block::PureTone { len, count: 20_000 }]);
+    tape.quality = quality;
+    tape.play(0);
+    intervals(&mut tape, until).len()
+}
 
-    let odd: Vec<u64> = gaps.iter().step_by(2).copied().collect();
-    let even: Vec<u64> = gaps.iter().skip(1).step_by(2).copied().collect();
-    let mean = |v: &[u64]| v.iter().sum::<u64>() as f64 / v.len() as f64;
-    let (a, b) = (mean(&odd), mean(&even));
+/// A head out of square is a low-pass filter, and what it takes first is the
+/// quick loaders: at a corner between the two, a tone at ROM speed comes
+/// through and one at turbo speed does not.
+#[test]
+fn a_head_out_of_square_swallows_the_quick_pulses_first() {
+    // Far enough out that the corner sits near 2 kHz. A pilot pulse of 2168
+    // T-states is half a cycle of 807 Hz and comes through; a turbo bit of
+    // 400 is half a cycle of 4,375 Hz and does not.
+    let out = Quality {
+        alignment: true,
+        alignment_offset: 0.7,
+        ..Quality::default()
+    };
+    let corner = out.cutoff(0);
     assert!(
-        (a - b).abs() > 600.0,
-        "one should be a fifth long and the other a fifth short: {a:.0} and {b:.0}"
+        (1500.0..2500.0).contains(&corner),
+        "the corner should sit between the two speeds, not {corner:.0} Hz"
+    );
+
+    let tenth = zx_rustrum::machine::CPU_HZ as u64 / 10;
+    let rom_speed = edges_at(2168, out, tenth);
+    let turbo = edges_at(400, out, tenth);
+    let turbo_square = edges_at(400, Quality::default(), tenth);
+
+    assert!(
+        rom_speed > 130,
+        "a ROM-speed tone should still come through: {rom_speed} edges"
     );
     assert!(
-        ((a + b) - 2.0 * 2168.0).abs() < 60.0,
-        "and the pair should still add up to two pulses: {a:.0} + {b:.0}"
+        turbo * 4 < turbo_square,
+        "and a turbo one should not: {turbo} edges against {turbo_square} with \
+         the head square"
+    );
+}
+
+/// The corner comes down as the head goes further out, and wanders when it is
+/// asked to.
+#[test]
+fn the_corner_comes_down_and_wanders() {
+    let square = Quality {
+        alignment: true,
+        ..Quality::default()
+    };
+    let bit_out = Quality {
+        alignment_offset: 0.3,
+        ..square
+    };
+    let far_out = Quality {
+        alignment_offset: 0.9,
+        ..square
+    };
+    assert!(
+        square.cutoff(0) > bit_out.cutoff(0) && bit_out.cutoff(0) > far_out.cutoff(0),
+        "further out should mean a lower corner: {:.0}, {:.0}, {:.0} Hz",
+        square.cutoff(0),
+        bit_out.cutoff(0),
+        far_out.cutoff(0)
+    );
+
+    let wandering = Quality {
+        alignment_wobble: 0.3,
+        ..bit_out
+    };
+    let over_a_second: Vec<f32> = (0..20)
+        .map(|i| wandering.cutoff(i * zx_rustrum::machine::CPU_HZ as u64 / 20))
+        .collect();
+    let low = over_a_second.iter().cloned().fold(f32::MAX, f32::min);
+    let high = over_a_second.iter().cloned().fold(0.0, f32::max);
+    assert!(
+        high > low * 1.4,
+        "the corner should wander up and down: {low:.0} to {high:.0} Hz"
+    );
+    assert_eq!(
+        bit_out.cutoff(0),
+        bit_out.cutoff(12345),
+        "and stand still when it is not asked to wander"
     );
 }
 

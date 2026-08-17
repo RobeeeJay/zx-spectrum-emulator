@@ -407,3 +407,72 @@ fn contact_sam_cruise_loads() {
 fn chase_hq_loads() {
     starts_after_loading(CHASE_HQ);
 }
+
+/// A head out of square takes the quick loaders first.
+///
+/// Skool Daze writes its bits in 422 and 843 T-states, which is 4.1 kHz at the
+/// short end; Chase H.Q. uses 735 and 1,590, which is 2.4 kHz. Bring the
+/// filter's corner down to about 2 kHz and the first stops loading while the
+/// second does not notice — which is what a misaligned deck did to a shelf of
+/// tapes, and why the fast loaders were the ones people had trouble with.
+#[test]
+fn a_misaligned_head_stops_the_quick_loader_and_not_the_slow_one() {
+    use zx_rustrum::tape::Quality;
+
+    let out_of_square = Quality {
+        alignment: true,
+        alignment_offset: 0.7,
+        ..Quality::default()
+    };
+    let corner = out_of_square.cutoff(0);
+    assert!(
+        (1500.0..2500.0).contains(&corner),
+        "the corner should sit between the two loaders, not {corner:.0} Hz"
+    );
+
+    let Some(quick) = loaded_screen(SKOOL_DAZE, out_of_square) else {
+        eprintln!("need roms/48.rom and the tapes; skipping");
+        return;
+    };
+    let Some(slow) = loaded_screen(CHASE_HQ, out_of_square) else {
+        return;
+    };
+    assert!(
+        quick < 500,
+        "Skool Daze should not load through a head that far out: {quick} \
+         bytes of screen"
+    );
+    assert!(
+        slow > 500,
+        "and Chase H.Q. should: only {slow} bytes of screen"
+    );
+}
+
+/// Load a tape with the deck behaving however it is told to, and hand back how
+/// much of the screen ended up drawn.
+fn loaded_screen(name: &str, quality: zx_rustrum::tape::Quality) -> Option<usize> {
+    let rom = std::fs::read("roms/48.rom").ok()?;
+    let mut spec = Spectrum::new();
+    spec.load_rom(&rom);
+    spec.reset();
+    spec.bus.tape_flash = true;
+    let mut tape = tape(name)?;
+    tape.quality = quality;
+    start_loading(&mut spec, tape);
+    let mut frames = 0;
+    while frames < 40_000 {
+        spec.run(FRAME_T);
+        frames += 1;
+        if !spec.bus.tape_playing() {
+            break;
+        }
+    }
+    for _ in 0..300 {
+        spec.run(FRAME_T);
+    }
+    Some(
+        (0x4000..0x5800u16)
+            .filter(|a| spec.bus.mem(*a) != 0)
+            .count(),
+    )
+}

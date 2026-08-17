@@ -701,12 +701,13 @@ struct Pulse {
 /// A cassette is not a perfect medium and a deck is not a perfect reader. The
 /// motor runs a little fast and a little slow — wow over a turn of the
 /// capstan, flutter above it — and a head that is not square to the tape reads
-/// one edge of the signal early and the other late. Loaders were written with
-/// enough slack for both, and how much slack is exactly what this is for:
-/// turning these up is how to find out what a loader will put up with.
+/// the top of the track a moment before the bottom, so the two cancel each
+/// other the shorter the wavelength gets. That is a low-pass filter whose
+/// corner comes down as the head goes further out of square, and it is why a
+/// misaligned deck loses the quick loaders first and ordinary ROM blocks last.
 ///
-/// Nothing here is random. Both wobbles come from the clock, so a given
-/// T-state always gets the same treatment and a load can be repeated.
+/// Nothing here is random. Both wobbles are sine waves read off the clock, so
+/// a given moment always gets the same treatment and a load can be repeated.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Quality {
     /// Whether the motor wavers.
@@ -716,39 +717,69 @@ pub struct Quality {
     pub speed_wobble: f32,
     /// Whether the head is out of square with the tape.
     pub alignment: bool,
-    /// How far out, as a fraction of a pulse: one edge of the signal arrives
-    /// that much early and the other that much late.
+    /// How far out, from square at 0 to hopeless at 1. What it sets is where
+    /// the filter's corner sits: see [`Quality::cutoff`].
     pub alignment_offset: f32,
-    /// And how much that wanders as the tape runs, on top of the offset.
+    /// How much that corner wanders up and down as the tape runs, as a
+    /// fraction of itself.
     pub alignment_wobble: f32,
 }
 
+/// Where the corner sits with the head square, and where it sits with the head
+/// as far out as the slider goes. A ROM pulse is about 2 kHz and the quickest
+/// turbo loaders are up around 4.5 kHz, so the useful part of the range is
+/// between the two.
+const CUTOFF_SQUARE: f32 = 30_000.0;
+const CUTOFF_WORST: f32 = 600.0;
+
+/// With less than half the signal left, the reader cannot tell there was an
+/// edge at all: the pulse is swallowed and joins the one behind it.
+const READABLE: f32 = 0.5;
+
 impl Quality {
-    /// How long a pulse of `len` lasts at absolute T-state `at`, given which
-    /// way the edge in front of it went.
-    ///
-    /// The wobble is two sine waves — a slow one for the capstan and a quicker
-    /// one over it — so it wanders rather than beating against the pulse rate.
-    fn stretch(&self, len: u32, at: u64, rising: bool) -> u32 {
-        if !self.speed && !self.alignment {
+    /// The filter's corner, in Hz, at absolute T-state `at`.
+    pub fn cutoff(&self, at: u64) -> f32 {
+        let base = CUTOFF_SQUARE * (CUTOFF_WORST / CUTOFF_SQUARE).powf(self.alignment_offset);
+        if self.alignment_wobble == 0.0 {
+            return base;
+        }
+        let seconds = at as f32 / crate::machine::CPU_HZ as f32;
+        let wander = (seconds * std::f32::consts::TAU * 1.3).sin();
+        base * (1.0 + self.alignment_wobble * wander)
+    }
+
+    /// What the motor does to a pulse of `len` T-states.
+    fn wavered(&self, len: u32, at: u64) -> u32 {
+        if !self.speed {
             return len;
         }
         let seconds = at as f32 / crate::machine::CPU_HZ as f32;
-        let mut out = len as f32;
-        if self.speed {
-            let wow = (seconds * std::f32::consts::TAU * 2.7).sin();
-            let flutter = (seconds * std::f32::consts::TAU * 31.0).sin() * 0.3;
-            out *= 1.0 + self.speed_wobble * (wow + flutter) / 1.3;
+        let wow = (seconds * std::f32::consts::TAU * 2.7).sin();
+        let flutter = (seconds * std::f32::consts::TAU * 31.0).sin() * 0.3;
+        (len as f32 * (1.0 + self.speed_wobble * (wow + flutter) / 1.3)).max(1.0) as u32
+    }
+
+    /// What the head does to it: how much of the signal is left, and how late
+    /// what is left arrives.
+    ///
+    /// A first-order corner, which is what one cancellation looks like from a
+    /// distance: the amplitude falls off as the wavelength shortens, and what
+    /// survives is held up by the filter's own delay. The delay matters
+    /// because it is not the same for every pulse — a short one is held up
+    /// more than a long one — so the gaps between edges stop being what was
+    /// recorded even where nothing has been swallowed.
+    fn through_the_head(&self, len: u32, at: u64) -> (f32, i32) {
+        if !self.alignment {
+            return (1.0, 0);
         }
-        if self.alignment {
-            let wander = (seconds * std::f32::consts::TAU * 1.3).sin();
-            let skew = self.alignment_offset + self.alignment_wobble * wander;
-            // A head out of square reads one edge early and the other late,
-            // so the mark and the space stop being the same length while the
-            // pair of them still adds up.
-            out *= if rising { 1.0 + skew } else { 1.0 - skew };
-        }
-        out.max(1.0) as u32
+        let cutoff = self.cutoff(at).max(50.0);
+        // A pulse is half a cycle.
+        let hz = crate::machine::CPU_HZ as f32 / (2.0 * len as f32);
+        let ratio = hz / cutoff;
+        let left = 1.0 / (1.0 + ratio * ratio).sqrt();
+        let delay = crate::machine::CPU_HZ as f32
+            / (std::f32::consts::TAU * cutoff * (1.0 + ratio * ratio));
+        (left, delay as i32)
     }
 }
 
@@ -774,6 +805,9 @@ pub struct Tape {
     pause_span: Option<(u64, u64)>,
     /// How well the deck is behaving.
     pub quality: Quality,
+    /// How late the head held the last pulse up, so the next can be moved by
+    /// the difference rather than by the whole of it.
+    last_delay: i32,
     /// Total pulses emitted, for the UI.
     pub pulses: u64,
     /// Recent level changes as (absolute T-state, new level), for the
@@ -880,6 +914,7 @@ impl Tape {
             clock: 0,
             pause_span: None,
             quality: Quality::default(),
+            last_delay: 0,
             pulses: 0,
             edges: VecDeque::with_capacity(EDGE_HISTORY),
             pending_edges: Vec::new(),
@@ -1141,12 +1176,28 @@ impl Tape {
             match self.next_pulse() {
                 Some(p) => {
                     let edge_at = self.next_edge;
-                    let new_level = p.level.unwrap_or(!self.level);
+                    let len = self.quality.wavered(p.len.max(1), self.next_edge);
+                    let (left, delay) = self.quality.through_the_head(len, self.next_edge);
+                    // A pulse the head has all but cancelled is not an edge
+                    // the reader can see: it goes by without the line
+                    // changing and joins the pulse behind it. A forced level
+                    // is the deck's own doing — the silence behind a block —
+                    // rather than something read off the tape, so the head
+                    // cannot swallow that.
+                    let seen = p.level.is_some() || left >= READABLE;
+                    let new_level = if seen {
+                        p.level.unwrap_or(!self.level)
+                    } else {
+                        self.level
+                    };
                     let changed = new_level != self.level;
                     self.level = new_level;
-                    let len = self
-                        .quality
-                        .stretch(p.len.max(1), self.next_edge, new_level);
+                    // The filter holds a short pulse up more than a long one,
+                    // so what moves an edge is the difference between this
+                    // pulse's delay and the last one's.
+                    let shift = delay - self.last_delay;
+                    self.last_delay = delay;
+                    let len = (len as i32 + shift).max(1) as u32;
                     self.next_edge = self.next_edge.saturating_add(len as u64);
                     self.pulses += 1;
                     if changed {

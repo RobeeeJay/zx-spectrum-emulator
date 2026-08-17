@@ -328,23 +328,31 @@ same treatment and a load can be repeated.
 Hz with a quicker one at 31 Hz over the top of it — scaling every pulse. The
 slider is how far it wanders, as a fraction of the right speed.
 
-**Alignment** is a head out of square with the tape, which reads one edge of
-the signal early and the other late. The mark and the space swap length while
-the pair of them still adds up. One slider is how far out it is, the other how
-much that wanders as the tape runs.
+**Alignment** is a head out of square with the tape. It then reads the top of
+the track a moment before the bottom, and the two cancel each other the shorter
+the wavelength gets: a low-pass filter whose corner comes down the further out
+of square it is. Modelled as a first-order corner — the amplitude falling off
+as `1/√(1+(f/fc)²)`, a pulse with less than half of it left being one the
+reader cannot see at all, and what survives held up by the filter's own group
+delay, which is longer for a short pulse than a long one, so the gaps between
+edges shift even where nothing has been swallowed. The corner runs from 30 kHz
+square to 600 Hz at the far end of the slider, and the second slider wanders it
+up and down as the tape runs.
 
-What loaders put up with, measured on Skool Daze:
+What that does is take the quick loaders first, which is what a misaligned deck
+did to a shelf of tapes:
 
-| | loads |
-| --- | --- |
-| speed wavering 2%, 5%, 10% | yes |
-| speed wavering 20% | no |
-| head out by 5%, 10%, 20%, 35% | yes |
+| corner | Skool Daze (bits at 422 T, 4.1 kHz) | Chase H.Q. (bits at 735 T, 2.4 kHz) |
+| --- | --- | --- |
+| 30 kHz (square) | loads | loads |
+| 9.3 kHz | loads | loads |
+| 4.2 kHz | loads | loads |
+| 2.9 kHz | loads | loads |
+| 1.9 kHz | **fails** | loads |
 
-The alignment one is worth understanding rather than dismissing: a loader times
-a *pair* of pulses, and skewing the pair without changing its total is
-something it cannot see. What breaks a loader is the total moving, which is
-what the speed slider does.
+And the motor, measured on Skool Daze: it loads with the speed wavering 2, 5
+and 10 per cent, and fails at 20. What breaks a loader there is the total
+length of a pulse pair moving, since that is what it times.
 
 ## The EAR line is never dead
 

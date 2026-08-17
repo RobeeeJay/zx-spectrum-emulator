@@ -147,21 +147,26 @@ fn quality(app: &mut App, ui: &mut egui::Ui) {
 
         theme::divider(ui);
         theme::toggle(ui, &mut app.quality.alignment, "Alignment").on_hover_text(
-            "Put the head out of square with the tape, so one edge of the \
-             signal arrives early and the other late. What a loader hears is \
-             the mark and the space swapping length while the pair of them \
-             still adds up.",
+            "Put the head out of square with the tape. It then reads the top \
+             of the track a moment before the bottom, and the two cancel each \
+             other the shorter the wavelength gets — a low-pass filter whose \
+             corner comes down the further out it is. The quick loaders go \
+             first and ordinary ROM blocks last.",
         );
         ui.add_enabled_ui(app.quality.alignment, |ui| {
+            // The slider is how far out of square the head is; what that is
+            // worth knowing as is where the corner lands, so it says both.
+            let at = app.machine_t();
+            let corner = app.quality.cutoff(at);
             theme::slider(
                 ui,
-                egui::Slider::new(&mut app.quality.alignment_offset, 0.0..=0.4)
-                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                    .text("out by"),
+                egui::Slider::new(&mut app.quality.alignment_offset, 0.0..=1.0)
+                    .custom_formatter(move |_, _| format!("{:.1}kHz", corner / 1000.0))
+                    .text("corner"),
             );
             theme::slider(
                 ui,
-                egui::Slider::new(&mut app.quality.alignment_wobble, 0.0..=0.2)
+                egui::Slider::new(&mut app.quality.alignment_wobble, 0.0..=0.5)
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                     .text("wanders"),
             );
