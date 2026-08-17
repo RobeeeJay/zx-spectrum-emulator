@@ -273,3 +273,73 @@ fn cobra_loads() {
 fn seven_twenty_degrees_loads() {
     starts_after_loading(SEVEN_TWENTY);
 }
+
+/// The silence at the end of a tape is got through too.
+///
+/// Max speed comes back to normal for the pause a tape ends on, so that a
+/// loader finishing sounds and looks as it should. Ludicrous speed is a
+/// promise to get it over with, and Out Run Europa ends with twenty-two
+/// seconds of it — which used to be twenty-two seconds of watching a stopped
+/// picture, a thousand host frames of doing nothing at all.
+#[test]
+fn the_last_pause_is_hurried_through_as_well() {
+    use zx_rustrum::machine::Model;
+    use zx_rustrum::tape::Block;
+
+    let Ok(rom) = std::fs::read("roms/48.rom") else {
+        return;
+    };
+    // A short block and then ten seconds of silence to finish on.
+    let tape = Tape::from_blocks(
+        "t".into(),
+        vec![Block::Standard {
+            pause_ms: 10_000,
+            data: vec![0xFF, 1, 2, 3],
+        }],
+    );
+
+    let run = |ludicrous: bool| -> u32 {
+        let roms = Roms {
+            rom48: Some(rom.clone()),
+            ..Roms::default()
+        };
+        let mut app = App::with_roms(
+            Spectrum::with_model(Model::Spectrum48),
+            String::new(),
+            roms,
+            None,
+        );
+        app.show_ram_map = false;
+        app.show_debugger = false;
+        app.show_back_buffer = false;
+        app.show_tape = false;
+        app.spec.load_rom(&rom);
+        app.spec.reset();
+        app.running = true;
+        app.spec.bus.tape_boost = true;
+        app.spec.bus.tape_flash = ludicrous;
+        for _ in 0..60 {
+            app.advance(1.0 / 60.0);
+        }
+        app.spec.bus.tape = Some(tape.clone());
+        let now = app.spec.bus.total_t();
+        app.spec.bus.tape.as_mut().unwrap().play(now);
+        let mut host = 0;
+        while host < 60 * 60 {
+            app.advance(1.0 / 60.0);
+            host += 1;
+            if !app.spec.bus.tape_playing() {
+                break;
+            }
+        }
+        host
+    };
+
+    let played = run(false);
+    let hurried = run(true);
+    assert!(
+        hurried * 10 < played,
+        "the silence should be got through in a hurry: {hurried} host frames \
+         against {played}"
+    );
+}

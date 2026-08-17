@@ -290,6 +290,18 @@ Feeding a trailing tone into the deck by hand fixes it too, and gives the same
 table — $9000 reads `77 04 C3 B7 92 DD 7E 0A` either way — so the check is
 asking whether the line is alive rather than measuring what is on it.
 
+## The silence at the end counts too
+
+Max speed comes back to normal speed for the pause a tape ends on, so that a
+loader finishing sounds and looks as it should. That leaves Ludicrous speed
+crawling through it, because the budget it was capping came from the speed
+setting, and with the boost off that budget is a fraction of a frame: Out Run
+Europa ends with twenty-two seconds of silence, and 1,264 of its 1,341 host
+frames were doing less than one frame of work each. In a hurry the budget is a
+whole slice of work rather than whatever the speed setting asked for, and the
+hurry lasts as long as the deck is running rather than as long as something is
+being loaded. Out Run Europa: 1,341 host frames to 82.
+
 ## A tape that stops itself
 
 A multi-load carries a block that tells the deck to stop — TZX's pause block
@@ -304,7 +316,10 @@ time rather than once a session.
 
 Gauntlet III is also a 128K release, and it fails on a 48K the way it would on
 a real one. It loads on a 128K at every speed: 12,072 host frames played, 711
-at Max speed, 140 at Ludicrous.
+at Max speed, 140 at Ludicrous. Shadow Dancer does the same thing and asks for
+side B — 13,385 host frames played, 670 at Max, 26 at Ludicrous — and Out Run
+Europa asks to have the tape stopped, which is what its twenty-two seconds of
+trailing silence are for.
 
 ## The ZX81
 

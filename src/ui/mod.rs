@@ -2165,9 +2165,18 @@ impl App {
         // work a host frame is about twelve seconds of waiting for a Speedlock
         // tape; a tenth of a second of real work a host frame gets it down to
         // about one.
-        let flat_out = self.spec.bus.tape_flash && self.tape_is_loading();
+        // Right to the end of the tape, silence included. Max speed comes back
+        // to normal for the pause the tape ends on, so that a loader finishing
+        // sounds and looks as it should; Ludicrous speed is a promise to get
+        // it over with, and Out Run Europa ends with twenty-two seconds of
+        // silence that nothing is waiting for.
+        let flat_out = self.spec.bus.tape_flash && self.tape_ref().is_some_and(|tape| tape.playing);
+        // In a hurry the budget is a whole slice of work rather than whatever
+        // the speed setting asked for: at the end of a tape the boost above is
+        // off — Max speed comes back to normal for the last pause — and the
+        // budget it leaves is a fraction of a frame.
         let budget = if flat_out {
-            budget.min(self.spec.bus.frame_t() * LUDICROUS_FRAMES)
+            self.spec.bus.frame_t() * LUDICROUS_FRAMES
         } else {
             budget.min(self.spec.bus.frame_t() * 24)
         };
@@ -2180,7 +2189,7 @@ impl App {
             // spent: the picture and the buttons still have to happen.
             while started.elapsed() < LUDICROUS_SLICE
                 && matches!(self.last_stop, Some(Stop::Budget))
-                && self.tape_is_loading()
+                && self.tape_ref().is_some_and(|tape| tape.playing)
             {
                 let stop = self.spec.run(self.spec.bus.frame_t() * 24);
                 self.last_stop = Some(stop);
