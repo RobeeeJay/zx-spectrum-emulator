@@ -320,9 +320,10 @@ of screen. The EAR feedback it does not care about.
 ## A deck that is not quite right
 
 The tape window's Quality row makes the deck behave the way a real one did.
-Two switches, three sliders, and nothing random about any of it: both wobbles
-are sine waves read off the T-state clock, so a given moment always gets the
-same treatment and a load can be repeated.
+Three switches, four sliders, and nothing random about any of it: the wobbles
+are sine waves read off the T-state clock and the grain and hiss are hashed
+from it, so a given moment always gets the same treatment and a load can be
+repeated.
 
 **Speed** is wow and flutter, scaling every pulse: a waver at 0.037 Hz with a
 slower drift at 0.012 Hz under it and a little flutter at 1.4 Hz over the top —
@@ -363,7 +364,38 @@ misaligned deck did to a shelf of them:
 | --- | --- | --- |
 | 4.8 kHz | loads | loads |
 | 2.3 kHz | loads | loads |
-| 1.1 kHz | **fails** | loads |
+| 1.6 kHz | **fails** | loads |
+
+### The tape's own grain
+
+A perfect signal fails all at once. Every pulse of a given length is the same
+pulse, so at one slider position they all clear the threshold and one notch
+along none of them does: a 400 T tone went from 875 edges to 1 between 0.54 and
+0.56 of the slider, and what the user saw was a filter notched to particular
+frequencies rather than a control that swept.
+
+What was missing is the tape. It is oxide on plastic and its output is never
+quite the same twice, so every pulse now carries a deterministic ±8 per cent of
+its own — hashed from the T-state it starts at, so it has no period for a pulse
+rate to beat against and a load still repeats exactly. The same sweep now goes
+875, 847, 593, 289, 91, 9: a signal that fades over a stretch of the slider,
+with the weakest pulses going first. That is also why the Chase H.Q. row above
+moved from 1.1 kHz to 1.6 kHz — with grain in, a corner at 1.1 kHz takes both
+loaders.
+
+### Hiss
+
+**Noise** is the third switch: tape hiss, two grains at different rates so it is
+not a tone, scaled by its own slider. It rides under the signal, and it is
+there through the silence between blocks and on a tape held still — a real deck
+hisses from the moment the head touches the tape, not from the moment there is
+something to read.
+
+Which is why Pause and Stop are no longer the same call. Pause holds the tape
+still with the head down, so the hiss carries on and the scope has something to
+draw; Stop lifts the head, and then there is nothing at all. Turned up past the
+reader's threshold the machine hears the hiss as edges, which is what a tape
+played too loud does to a loader waiting through a gap.
 
 The scope shows it. The deck keeps the signal's own shape as well as the
 reader's edges — both ends of every pulse, and samples along the charging curve
@@ -371,6 +403,11 @@ when the head has rolled it off — so the trace is a square wave when nothing
 has been done to it and rounds off as the corner comes down, with the reader's
 squares faintly behind. When the swing stops reaching the threshold, the place
 where an edge went missing is there to see.
+
+A deck standing still draws a flat line across the middle, or the hiss if the
+tape is only paused. It used to hold the last block's reader level right across
+the screen — a line at the top or the bottom that meant nothing, since a deck
+that is not moving is not reading anything.
 
 Both ends of every pulse matter: with one sample apiece the corners have
 nothing joining them and a line drawn through them is a triangle wave, which is

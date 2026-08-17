@@ -708,7 +708,7 @@ struct Pulse {
 ///
 /// Nothing here is random. Both wobbles are sine waves read off the clock, so
 /// a given moment always gets the same treatment and a load can be repeated.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quality {
     /// Whether the motor wavers.
     pub speed: bool,
@@ -723,6 +723,12 @@ pub struct Quality {
     /// How much that corner wanders up and down as the tape runs, as a
     /// fraction of itself.
     pub alignment_wobble: f32,
+    /// Whether the tape hisses.
+    pub noise: bool,
+    /// How loudly, against a full-strength signal. Past the reader's
+    /// threshold it stops being a hiss behind the music and starts being
+    /// edges the machine can hear.
+    pub noise_level: f32,
 }
 
 /// Where the corner sits at each end of the slider.
@@ -740,6 +746,44 @@ const CUTOFF_WORST: f32 = 250.0;
 /// small to read: the filtered wave swings less and less as the corner comes
 /// down, and when it stops reaching this the edges stop arriving.
 const THRESHOLD: f32 = 0.45;
+
+/// How much the signal's own strength varies from pulse to pulse.
+///
+/// A tape is oxide on plastic and its output is never quite the same twice. It
+/// matters where the head has rolled the signal down to about what the reader
+/// needs, which is where a real tape becomes unreliable rather than failing
+/// outright: some pulses clear the threshold and some do not, and which is
+/// which changes as the corner comes down. Without it every pulse of a given
+/// length crosses or none of them does, and the slider has notches in it
+/// rather than a range.
+const GRAIN: f32 = 0.08;
+
+/// The tape's grain at a given moment: the same every time, since a load has
+/// to be repeatable, but with no pattern for a pulse rate to beat against.
+fn grain(at: u64) -> f32 {
+    let mut x = at.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 29;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 32;
+    ((x >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+}
+
+impl Default for Quality {
+    fn default() -> Self {
+        Self {
+            speed: false,
+            speed_wobble: 0.0,
+            alignment: false,
+            alignment_offset: 0.0,
+            alignment_wobble: 0.0,
+            noise: false,
+            // A hiss well under the reader's threshold, so switching it on
+            // shows something on the scope without stopping a load. Turning it
+            // up past THRESHOLD is what makes the machine hear it.
+            noise_level: 0.2,
+        }
+    }
+}
 
 impl Quality {
     /// The filter's corner, in Hz, at absolute T-state `at`.
@@ -770,6 +814,22 @@ impl Quality {
         let flutter = (seconds * std::f32::consts::TAU * 1.4).sin() * 0.15;
         let waver = (wow + slower + flutter) / 1.75;
         (len as f32 * (1.0 + self.speed_wobble * waver)).max(1.0) as u32
+    }
+
+    /// The hiss at a given moment, between -1 and 1 before it is scaled.
+    ///
+    /// Tape hiss is there whenever the head is on the tape — through the
+    /// silence between blocks as much as under the signal — and gone the
+    /// moment the head lifts. It is the same every time, as everything else
+    /// here is, so a load can be repeated.
+    pub fn hiss(&self, at: u64) -> f32 {
+        if !self.noise {
+            return 0.0;
+        }
+        // Two grains at different rates, so it is not a single tone.
+        let quick = grain(at);
+        let slower = grain(at / 37);
+        self.noise_level * (quick * 0.75 + slower * 0.25)
     }
 
     /// The filter's time constant at `at`, in T-states.
@@ -805,6 +865,9 @@ impl Quality {
         }
         let tau = self.tau(at);
         let span = len as f32;
+        // What this pulse is worth, which is not quite what the last one was,
+        // and the hiss it arrives on top of.
+        let to = to * (1.0 + GRAIN * grain(at)) + self.hiss(at);
         let settled = to + (from - to) * (-span / tau).exp();
         // The reader is watching for the threshold on the other side of where
         // it has the line now; a pulse heading the way it already thinks the
@@ -852,6 +915,13 @@ pub struct Tape {
     raw_next: u64,
     /// The level change the reader is about to make, and when.
     pending: Option<(u64, bool)>,
+    /// Whether the head is on the tape. Pause leaves it there — the hiss
+    /// carries on — and Stop lifts it, which is silence.
+    pub head_down: bool,
+    /// When the tape last stopped moving. Everything the scope holds from
+    /// before then is a block that has already gone past, not something the
+    /// head can hear now.
+    pub quiet_from: u64,
     /// The signal itself, as it reaches the reader: samples between -1 and 1,
     /// so the scope can draw the shape the head made of it rather than the
     /// squares the reader made of that. Oldest are dropped.
@@ -873,6 +943,10 @@ pub const EDGE_HISTORY: usize = 16384;
 /// And how many samples of the signal's own shape, for drawing what the head
 /// made of it rather than what the reader made of that.
 const TRACE_SAMPLES: usize = 4096;
+
+/// How far back to fill in the hiss when the scope has not been looked at for
+/// a while: a screenful, not the whole time the tape sat there.
+const HISS_CATCHUP: u64 = 200_000;
 
 impl Tape {
     pub fn load(path: &Path) -> Result<Tape, String> {
@@ -970,6 +1044,8 @@ impl Tape {
             filter_y: 0.0,
             raw_next: 0,
             pending: None,
+            head_down: false,
+            quiet_from: 0,
             trace: VecDeque::with_capacity(TRACE_SAMPLES),
             pulses: 0,
             edges: VecDeque::with_capacity(EDGE_HISTORY),
@@ -983,6 +1059,7 @@ impl Tape {
             self.rewind();
         }
         self.playing = true;
+        self.head_down = true;
         self.stopped_by_block = false;
         // No edge is recorded here: the first generated pulse starts at `now`
         // and records its own leading edge.
@@ -994,9 +1071,63 @@ impl Tape {
         self.trace.clear();
     }
 
+    /// Take the head off the tape: no signal and no hiss either.
     pub fn stop(&mut self) {
         self.playing = false;
+        self.head_down = false;
+        self.quiet_from = self.clock;
         self.level = false;
+        self.trace.clear();
+    }
+
+    /// Hold the tape still with the head on it, which is what a pause button
+    /// does: nothing is read, and the hiss carries on.
+    pub fn pause(&mut self) {
+        self.playing = false;
+        self.quiet_from = self.clock;
+    }
+
+    /// What the reader makes of a tape that is not moving.
+    ///
+    /// With the head off the tape there is nothing at all — the line sits at
+    /// the middle and the scope draws it flat. With the head down and the tape
+    /// hissing, the line is the hiss, which crosses the reader's threshold
+    /// only when it is turned up far enough to be heard as more than a hiss.
+    fn idle_hiss(&mut self, now: u64) -> bool {
+        if !self.head_down || !self.quality.noise {
+            self.level = false;
+            self.filter_y = 0.0;
+            return false;
+        }
+        // A handful of samples since the last look, so the scope has a trace
+        // to draw rather than whatever was left over from the last block.
+        let last = self.trace.back().map(|(t, _)| *t).unwrap_or(now);
+        let span = now.saturating_sub(last).min(HISS_CATCHUP);
+        if span > 0 {
+            let step = (span / 24).max(64);
+            let mut at = last;
+            while at < now {
+                while self.trace.len() + 1 > TRACE_SAMPLES {
+                    self.trace.pop_front();
+                }
+                self.trace.push_back((at, self.quality.hiss(at)));
+                at += step;
+            }
+        }
+        let hiss = self.quality.hiss(now);
+        self.filter_y = hiss;
+        let was = self.level;
+        self.level = if hiss > THRESHOLD {
+            true
+        } else if hiss < -THRESHOLD {
+            false
+        } else {
+            was
+        };
+        if self.level != was {
+            self.push_edge(now);
+        }
+        self.level
     }
 
     /// Keep the shape of the signal across one pulse, for the scope.
@@ -1262,7 +1393,9 @@ impl Tape {
     pub fn level_at(&mut self, now: u64) -> bool {
         self.clock = now;
         if !self.playing {
-            return false;
+            // A tape held still under the head is not silence: it hisses, and
+            // a hiss loud enough is edges as far as the machine is concerned.
+            return self.idle_hiss(now);
         }
         // Guard against a huge jump (e.g. after a long pause) taking forever.
         let mut guard = 0u32;

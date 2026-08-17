@@ -966,7 +966,10 @@ impl SpectrumBus {
     /// Keep the tape running even when the CPU is not polling the port, so the
     /// oscilloscope and block position stay live.
     pub fn tape_tick(&mut self) {
-        if self.tape_playing() {
+        // Also while the tape is merely paused, if the head is still on it:
+        // the hiss goes on, and the scope has nothing to draw unless somebody
+        // keeps asking the deck what it can hear.
+        if self.tape_playing() || self.tape.as_ref().is_some_and(|t| t.head_down) {
             self.tape_advance();
         }
     }

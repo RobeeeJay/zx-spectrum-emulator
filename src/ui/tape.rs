@@ -189,6 +189,20 @@ fn quality(app: &mut App, ui: &mut egui::Ui) {
             )
             .on_hover_text("How far the corner wanders as the tape runs");
         });
+        theme::toggle(ui, &mut app.quality.noise, "Noise").on_hover_text(
+            "Tape hiss, there from the moment the head goes down: under the \
+             signal, through the silence between blocks, and on a tape held \
+             at pause. Stop lifts the head and it goes. Turned up past what \
+             the reader calls an edge, the machine starts hearing it.",
+        );
+        ui.add_enabled_ui(app.quality.noise, |ui| {
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.noise_level, 0.0..=1.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            )
+            .on_hover_text("How loud the hiss is");
+        });
     });
 }
 
@@ -221,7 +235,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         {
             let t = app.tape_mut().unwrap();
             if playing {
-                t.stop();
+                t.pause();
             } else {
                 t.play(now);
             }
@@ -343,11 +357,13 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
 
     // The reader's own idea of the signal, faintly: it is what the machine
     // acts on, and with the head out of square it is not the same shape as
-    // what arrived.
+    // what arrived. Only while the tape is moving — a deck standing still is
+    // not reading anything, and holding the last block's level across the
+    // screen drew a line at the top or the bottom that meant nothing.
     let squares = Stroke::new(1.0, theme::LCD_GRID);
     let mut x = rect.left();
     let mut drew = false;
-    for &(t, l) in tape.edges.iter() {
+    for &(t, l) in tape.edges.iter().filter(|_| tape.playing) {
         if t <= t0 {
             continue;
         }
@@ -367,28 +383,47 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         x = ex;
         drew = true;
     }
-    painter.line_segment(
-        [
-            Pos2::new(x, y_of(level)),
-            Pos2::new(rect.right(), y_of(level)),
-        ],
-        squares,
-    );
+    if tape.playing {
+        painter.line_segment(
+            [
+                Pos2::new(x, y_of(level)),
+                Pos2::new(rect.right(), y_of(level)),
+            ],
+            squares,
+        );
+    }
 
     // And the signal itself over the top, which is where the head's doing
     // shows: a corner brought down rounds the squares off, and when the
     // rounding no longer reaches the reader's threshold an edge goes missing.
     let trace = Stroke::new(1.5, theme::LCD_FG);
     let y_of_signal = |y: f32| y_mid - y.clamp(-1.0, 1.0) * (y_low - y_high) * 0.5;
+    // Nothing from before the tape stopped: that block has gone past the head
+    // and is not what is on the line now.
+    let from = if tape.playing {
+        t0
+    } else {
+        t0.max(tape.quiet_from)
+    };
     let shape: Vec<Pos2> = tape
         .trace
         .iter()
-        .filter(|(t, _)| *t >= t0 && *t <= t1)
+        .filter(|(t, _)| *t >= from && *t <= t1)
         .map(|(t, y)| Pos2::new(x_of(*t), y_of_signal(*y)))
         .collect();
     if shape.len() > 1 {
         painter.add(egui::Shape::line(shape, trace));
         drew = true;
+    } else {
+        // A quiet line is still a line: a deck with nothing on it sits at the
+        // middle of the screen rather than showing whatever was there last.
+        painter.line_segment(
+            [
+                Pos2::new(rect.left(), y_mid),
+                Pos2::new(rect.right(), y_mid),
+            ],
+            trace,
+        );
     }
 
     // Trigger marker.
@@ -417,8 +452,8 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
     );
     if !drew && !tape.playing {
         painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
+            Pos2::new(rect.center().x, y_mid - 10.0),
+            egui::Align2::CENTER_BOTTOM,
             "no signal",
             egui::FontId::monospace(12.0),
             Color32::from_rgb(0x2a, 0x5a, 0x3c),

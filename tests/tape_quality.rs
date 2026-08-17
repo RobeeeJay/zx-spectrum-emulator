@@ -146,10 +146,14 @@ fn a_head_out_of_square_rolls_off_rather_than_cutting() {
             ..Quality::default()
         });
         let short_count = |g: &[u64]| g.iter().filter(|g| **g < 600).count();
-        assert_eq!(
-            short_count(&gaps),
-            short_count(&square),
-            "no quick pulse should be lost yet at this corner"
+        let (kept, all) = (short_count(&gaps), short_count(&square));
+        // Nearly all of them: the tape's own grain means a pulse here and
+        // there is weaker than its neighbours and goes first, which is how
+        // the roll-off starts rather than how it ends.
+        assert!(
+            kept * 100 >= all * 97,
+            "the quick pulses should still be arriving at this corner: \
+             {kept} of {all}"
         );
         let (short, long) = (mean_of(&gaps, true), mean_of(&gaps, false));
         assert!(
@@ -233,6 +237,8 @@ fn a_bad_deck_is_bad_in_the_same_way_every_time() {
         alignment: true,
         alignment_offset: 0.1,
         alignment_wobble: 0.05,
+        noise: true,
+        noise_level: 0.2,
     };
     let first = intervals(&mut tone_tape(quality), CPU_HZ as u64 / 8);
     let second = intervals(&mut tone_tape(quality), CPU_HZ as u64 / 8);
@@ -328,5 +334,140 @@ fn a_signal_nothing_has_touched_is_drawn_as_squares() {
     assert!(
         steps >= 3,
         "and change in no time at all at the end of each: {points:?}"
+    );
+}
+
+/// Edges left in a 400 T-state tone with the head that far out of square.
+fn edges_kept(offset: f32) -> usize {
+    let mut tape = Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureTone {
+            len: 400,
+            count: 8000,
+        }],
+    );
+    tape.quality = Quality {
+        alignment: true,
+        alignment_offset: offset,
+        ..Quality::default()
+    };
+    tape.play(0);
+    let mut level = tape.level_at(0);
+    let mut edges = 0;
+    for t in (0..CPU_HZ as u64 / 5).step_by(4) {
+        let now = tape.level_at(t);
+        if now != level {
+            edges += 1;
+            level = now;
+        }
+    }
+    edges
+}
+
+/// The head goes out of square by degrees, so the signal should go with it.
+///
+/// It did not: an ideal pulse train is the same pulse over and over, so at one
+/// slider position every pulse cleared the reader's threshold and one notch
+/// further along none of them did. A tone went from 875 edges to 1. What is
+/// missing there is the tape itself — oxide on plastic, never quite the same
+/// strength twice — so the pulses now vary a little and the transition is
+/// spread over the part of the slider it belongs on.
+#[test]
+fn the_corner_comes_down_by_degrees_and_not_in_a_step() {
+    let sweep: Vec<(f32, usize)> = (44..=64)
+        .step_by(2)
+        .map(|tenth| {
+            let offset = tenth as f32 / 100.0;
+            (offset, edges_kept(offset))
+        })
+        .collect();
+    let full = sweep[0].1;
+    assert!(full > 800, "the tone should start intact: {sweep:?}");
+    let partly = sweep
+        .iter()
+        .filter(|(_, kept)| *kept > full / 20 && *kept < full - full / 20)
+        .count();
+    assert!(
+        partly >= 3,
+        "the signal should fade across several slider positions, not fall off \
+         one: {sweep:?}"
+    );
+    assert!(
+        sweep.last().unwrap().1 < full / 20,
+        "far enough out of square, the reader should hear nothing: {sweep:?}"
+    );
+}
+
+/// A tape held still under the head, and what the reader hears of it.
+fn held_still(noise_level: f32, stopped: bool) -> (Tape, usize) {
+    let mut tape = Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureTone {
+            len: 2168,
+            count: 100,
+        }],
+    );
+    tape.quality = Quality {
+        noise: true,
+        noise_level,
+        ..Quality::default()
+    };
+    tape.play(0);
+    for t in (0..100_000u64).step_by(64) {
+        tape.level_at(t);
+    }
+    if stopped {
+        tape.stop();
+    } else {
+        tape.pause();
+    }
+    let mut level = tape.level_at(100_000);
+    let mut edges = 0;
+    for t in (100_000..400_000u64).step_by(64) {
+        if tape.level_at(t) != level {
+            edges += 1;
+            level = !level;
+        }
+    }
+    (tape, edges)
+}
+
+/// Hiss is on the tape, not in the signal: it is there while the tape is held
+/// at pause, and turned up far enough the machine hears it as edges. That is
+/// what a real deck does with the volume too high, and it is why a loader
+/// waiting through a gap can be sent off by a noisy tape.
+#[test]
+fn a_paused_tape_goes_on_hissing() {
+    let (tape, edges) = held_still(0.9, false);
+    assert!(
+        edges > 20,
+        "a loud hiss should keep crossing the reader's threshold: {edges} edges"
+    );
+    assert!(
+        tape.trace.iter().any(|(t, _)| *t > 100_000),
+        "the scope should be given the hiss to draw as well"
+    );
+}
+
+/// Stop lifts the head off the tape, and then there is nothing to hear.
+#[test]
+fn stopping_the_tape_takes_the_hiss_with_it() {
+    let (tape, edges) = held_still(0.9, true);
+    assert_eq!(edges, 0, "a stopped deck should be silent");
+    assert!(
+        tape.trace.is_empty(),
+        "and the scope should have nothing left over to draw"
+    );
+}
+
+/// A hiss under the reader's threshold is a hiss and nothing more: it shows on
+/// the scope and the machine hears none of it.
+#[test]
+fn a_quiet_hiss_is_only_heard_by_the_scope() {
+    let (tape, edges) = held_still(0.2, false);
+    assert_eq!(edges, 0, "a quiet hiss should not be read as edges");
+    assert!(
+        tape.trace.iter().any(|(t, y)| *t > 100_000 && *y != 0.0),
+        "but it should still be drawn"
     );
 }

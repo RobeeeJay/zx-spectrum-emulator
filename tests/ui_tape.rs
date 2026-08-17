@@ -648,3 +648,74 @@ fn the_windows_that_were_open_are_opened_again() {
     assert!(!app.show_ram_map, "the RAM map was not");
     assert!(!app.show_profiler);
 }
+
+/// Pause and Stop are different things to a tape deck.
+///
+/// Pause holds the tape still with the head on it, so the hiss goes on and the
+/// scope has something to draw; Stop lifts the head off, which is silence. The
+/// two used to be the same call, and a paused deck therefore went as quiet as
+/// a stopped one.
+#[test]
+fn pause_leaves_the_head_on_the_tape_and_stop_lifts_it() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureTone {
+            len: 2168,
+            count: 100,
+        }],
+    ));
+    app.quality.noise = true;
+    app.quality.noise_level = 0.9;
+    let mut h = harness_for(app);
+    h.run_steps(2);
+
+    h.get_by_label("▶ Play").click();
+    h.run_steps(2);
+    assert!(
+        h.state().tape_ref().unwrap().head_down,
+        "Play should put the head down"
+    );
+
+    h.get_by_label("⏸ Pause").click();
+    h.run_steps(2);
+    let deck = h.state().tape_ref().unwrap();
+    assert!(!deck.playing, "Pause should stop the tape moving");
+    assert!(deck.head_down, "but leave the head where it was");
+
+    h.get_by_label("■ Stop").click();
+    h.run_steps(2);
+    assert!(
+        !h.state().tape_ref().unwrap().head_down,
+        "Stop should take the head off the tape"
+    );
+}
+
+/// The Noise switch and its slider reach the deck, which is where the hiss is
+/// made.
+#[test]
+fn the_noise_switch_tells_the_deck_to_hiss() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureTone {
+            len: 2168,
+            count: 100,
+        }],
+    ));
+    let mut h = harness_for(app);
+    h.run_steps(2);
+    assert!(!h.state().quality.noise, "it should start quiet");
+
+    h.get_by_label("Noise").click();
+    h.run_steps(2);
+    assert!(h.state().quality.noise, "the Noise switch did nothing");
+
+    h.state_mut().quality.noise_level = 0.4;
+    h.state_mut().advance(1.0 / 50.0);
+    let deck = h.state().spec.bus.tape.as_ref().expect("a tape").quality;
+    assert!(
+        deck.noise && (deck.noise_level - 0.4).abs() < 0.001,
+        "the deck should have been told how loud: {deck:?}"
+    );
+}
