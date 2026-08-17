@@ -614,3 +614,59 @@ fn a_motor_with_its_switch_off_runs_true() {
         gaps.len()
     );
 }
+
+/// A silence is no signal, which is nothing volts.
+///
+/// It used to be played as the level held low, so on the scope the gap between
+/// blocks sat on the floor and the hiss sat on the floor with it — the line
+/// only came back to the middle when the tape was paused. A tape with nothing
+/// on it puts nothing on the line, and the hiss is on both sides of it.
+#[test]
+fn a_silence_sits_at_nothing_volts() {
+    let tone = 2168 * 40;
+    let make = |noise: bool| -> Tape {
+        let mut tape = Tape::from_blocks(
+            "t".into(),
+            vec![
+                Block::PureTone {
+                    len: 2168,
+                    count: 40,
+                },
+                Block::Pause(1000),
+            ],
+        );
+        tape.quality = Quality {
+            noise,
+            noise_level: 0.3,
+            ..Quality::default()
+        };
+        tape.play(0);
+        for t in (0..tone + 200_000).step_by(64) {
+            tape.level_at(t);
+        }
+        tape
+    };
+
+    // Well inside the silence, where the closing edge and its millisecond are
+    // long past.
+    let (from, to) = (tone + 100_000, tone + 150_000);
+
+    let quiet = make(false).scope_samples(from, to, 400);
+    assert!(
+        quiet.iter().all(|(_, y)| y.abs() < 0.01),
+        "a silence with nothing on it should be a flat line down the middle: \
+         {:?}",
+        quiet.iter().map(|(_, y)| *y).take(4).collect::<Vec<_>>()
+    );
+
+    let hissing = make(true).scope_samples(from, to, 400);
+    let mean = hissing.iter().map(|(_, y)| *y).sum::<f32>() / hissing.len() as f32;
+    assert!(
+        mean.abs() < 0.05,
+        "and the hiss should sit around it rather than under it: mean {mean:.2}"
+    );
+    assert!(
+        hissing.iter().any(|(_, y)| *y > 0.05) && hissing.iter().any(|(_, y)| *y < -0.05),
+        "with the line going both ways"
+    );
+}

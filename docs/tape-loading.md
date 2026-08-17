@@ -421,6 +421,13 @@ has been done to it and rounds off as the corner comes down, with the reader's
 squares faintly behind. When the swing stops reaching the threshold, the place
 where an edge went missing is there to see.
 
+A silence is drawn as nothing volts rather than as the level held low. The deck
+holds the line low through a gap because that is what the reader is to make of
+it, but there is no signal there at all, so the scope drew the gap between
+blocks along the floor and put the hiss on the floor with it — the line only
+came back to the middle if the tape was paused. A pulse the deck makes for
+itself is marked as silent and the trace sits at nothing while it runs.
+
 A deck standing still draws a flat line across the middle, or the hiss if the
 tape is only paused. It used to hold the last block's reader level right across
 the screen — a line at the top or the bottom that meant nothing, since a deck

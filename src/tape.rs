@@ -694,6 +694,11 @@ struct Pulse {
     len: u32,
     /// `None` toggles the level, `Some(l)` forces it.
     level: Option<bool>,
+    /// Whether this is the deck running tape past the head with nothing on it.
+    /// A silence is no signal, which is nothing volts rather than a signal
+    /// held all the way down, so the line sits in the middle of the scope and
+    /// the hiss sits on top of it.
+    silent: bool,
 }
 
 /// How well the tape and the deck are behaving.
@@ -1521,7 +1526,17 @@ impl Tape {
                     let forced = p.level;
                     let raw = forced.unwrap_or(!self.raw_level);
                     self.raw_level = raw;
-                    let to = if raw { 1.0 } else { -1.0 };
+                    // What the line is worth: a pulse is the signal one way
+                    // or the other, and a silence is nothing at all. Playing a
+                    // silence as the level held low put the gap between blocks
+                    // on the floor of the scope, and the hiss with it.
+                    let to = if p.silent {
+                        0.0
+                    } else if raw {
+                        1.0
+                    } else {
+                        -1.0
+                    };
                     let (crossing, settled) = if forced.is_some() {
                         // The deck's own doing — the silence behind a block —
                         // rather than something read off the tape, so the head
@@ -1540,7 +1555,7 @@ impl Tape {
                         None => self.raw_next,
                     };
                     self.pulses += 1;
-                    self.silent = forced.is_some();
+                    self.silent = p.silent;
                 }
                 None => {
                     self.playing = false;
@@ -1558,13 +1573,9 @@ impl Tape {
         // still arriving. Under a block it is folded into the pulses instead,
         // where it either carries them over the threshold or does not.
         if self.silent && self.quality.noise && self.pending.is_none() {
-            let under = if self.raw_level { 1.0 } else { -1.0 };
-            let under = if self.filter_y.abs() > 0.9 {
-                under
-            } else {
-                0.0
-            };
-            return self.hiss_reaches_the_reader(now, under);
+            // Nothing under it: a silence is no signal, so the hiss is all
+            // there is on the line.
+            return self.hiss_reaches_the_reader(now, 0.0);
         }
         self.level
     }
@@ -1601,6 +1612,7 @@ impl Tape {
                         return Some(Pulse {
                             len: pilot as u32,
                             level: None,
+                            silent: false,
                         });
                     }
                 }
@@ -1613,6 +1625,7 @@ impl Tape {
                     return Some(Pulse {
                         len: sync as u32,
                         level: None,
+                        silent: false,
                     });
                 }
                 Phase::Sync2 => {
@@ -1628,6 +1641,7 @@ impl Tape {
                     return Some(Pulse {
                         len: sync as u32,
                         level: None,
+                        silent: false,
                     });
                 }
                 Phase::Data { byte, bit, second } => {
@@ -1695,7 +1709,11 @@ impl Tape {
                             second: true,
                         }
                     };
-                    return Some(Pulse { len, level: None });
+                    return Some(Pulse {
+                        len,
+                        level: None,
+                        silent: false,
+                    });
                 }
                 Phase::Tone { left } => {
                     let len = match &self.blocks[self.block] {
@@ -1709,6 +1727,7 @@ impl Tape {
                         return Some(Pulse {
                             len: len as u32,
                             level: None,
+                            silent: false,
                         });
                     }
                 }
@@ -1723,6 +1742,7 @@ impl Tape {
                             return Some(Pulse {
                                 len: len as u32,
                                 level: None,
+                                silent: false,
                             });
                         }
                         None => self.phase = Phase::Next,
@@ -1785,7 +1805,11 @@ impl Tape {
                         pulse: if second { pulse + 1 } else { pulse },
                         second: !second,
                     };
-                    return Some(Pulse { len, level: None });
+                    return Some(Pulse {
+                        len,
+                        level: None,
+                        silent: false,
+                    });
                 }
                 Phase::Direct { byte, bit } => {
                     let (data, t, used_bits, pause_ms) = match &self.blocks[self.block] {
@@ -1828,6 +1852,7 @@ impl Tape {
                     return Some(Pulse {
                         len: t as u32,
                         level: Some(level),
+                        silent: false,
                     });
                 }
                 // The edge that finishes the last pulse of the block. Every
@@ -1847,6 +1872,7 @@ impl Tape {
                     return Some(Pulse {
                         len: T_PER_MS,
                         level: None,
+                        silent: false,
                     });
                 }
                 Phase::BlockPause { ms } => {
@@ -1861,6 +1887,7 @@ impl Tape {
                         return Some(Pulse {
                             len,
                             level: Some(false),
+                            silent: true,
                         });
                     }
                 }
@@ -1932,6 +1959,7 @@ impl Tape {
                     Some(Pulse {
                         len: ms as u32 * T_PER_MS,
                         level: Some(false),
+                        silent: true,
                     })
                 }
             }
