@@ -254,6 +254,31 @@ A ZX81 test had the old behaviour written into it, expecting fifteen bit-gaps
 from sixteen bits because "the last of whose gaps is swallowed by the pause".
 It gets sixteen now.
 
+## Bleepload
+
+Firebird's and Rainbird's, and the easiest of the four: Bubble Bobble,
+Starglider and Starglider 2 all load without anything having to be done for
+them. It shows on the tape as a couple of hundred small blocks — about 270
+bytes each with six to thirteen milliseconds between them — rather than a few
+large ones, and the pair of sync pulses swaps round from one tape to the next:
+Bubble Bobble's are 735 then 667, Starglider's 667 then 735, Starglider 2's
+714 twice with its blocks wrapped in groups and a four-millisecond pause and a
+long tone in front.
+
+Host frames from `LOAD ""` to the tape stopping, played against hurried:
+
+| | played | Max speed | Ludicrous |
+| --- | --- | --- | --- |
+| Bubble Bobble | 21,475 | 1,074 | 41 |
+| Starglider | 19,529 | 977 | 36 |
+| Starglider 2 | 24,473 | 1,224 | 46 |
+
+Bubble Bobble is worth knowing about when reading a test: it waits at its menu
+inside the ROM's keyboard scan, which is where BASIC waits too, so where the
+machine is executing says nothing about whether the game loaded. What says it
+is the picture — a report line is a hundred-odd bytes of screen, a menu is a
+thousand.
+
 ## The EAR line is never dead
 
 Reading port $FE bit 6 with no tape playing does not give zero: the machine

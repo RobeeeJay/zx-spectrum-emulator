@@ -1,9 +1,15 @@
-//! Loading a game whose loader is its own, as quickly as that can be done.
+//! Loading games whose loaders are their own.
 //!
-//! Speedlock reads the tape itself and decrypts every byte as it goes, so its
-//! blocks cannot be handed over the way the ROM's can. What Ludicrous speed
-//! does for it is let the machine run: the tape still plays, but the emulator
-//! is not held to twenty-four frames of work a host frame while it does.
+//! Four of them, which between them cover most of what a commercial tape did:
+//! Speedlock (Head over Heels, Daley Thompson's Decathlon), Alkatraz (Cobra,
+//! 720 Degrees), Bleepload (Bubble Bobble, Starglider, Starglider 2), and the
+//! ROM's own for the blocks in front of them.
+//!
+//! None of their blocks can be handed over the way the ROM's can: they read
+//! the tape themselves, and some of them decrypt every byte as it arrives.
+//! What Ludicrous speed does for them is let the machine run — the tape still
+//! plays, but the emulator is not held to twenty-four frames of work a host
+//! frame while it does.
 
 use std::time::Instant;
 use zx_rustrum::flashload;
@@ -14,6 +20,10 @@ use zx_rustrum::ui::{App, Roms};
 const HEAD_OVER_HEELS: &str = "tapes/Head over Heels (1987)(Ocean)[48-128K].tzx";
 const DALEY: &str = "tapes/Daley Thompson's Decathlon - Day 1 (1984)(Ocean Software).zip";
 const COBRA: &str = "tapes/Cobra (1986)(Ocean Software).zip";
+const BUBBLE_BOBBLE: &str = "tapes/Bubble Bobble (1987)(Firebird Software)[48-128K].zip";
+const STARGLIDER: &str = "tapes/Starglider (1986)(Rainbird Software).zip";
+const STARGLIDER_2: &str =
+    "tapes/Starglider 2 - The Egrons Strike Back (1989)(Rainbird Software)[48-128K].zip";
 const SEVEN_TWENTY: &str = "tapes/720 Degrees (1986)(U.S. Gold).zip";
 
 fn tape(name: &str) -> Option<Tape> {
@@ -156,10 +166,14 @@ fn starts_after_loading(name: &str) {
     for _ in 0..600 {
         spec.run(FRAME_T);
     }
+    // What says it loaded is the picture. A machine that has fallen back to
+    // BASIC has the report line and nothing else; a game that has loaded has
+    // its title or its menu. Where the machine is executing says less than it
+    // looks: Bubble Bobble waits at its menu inside the ROM's keyboard scan,
+    // which is where BASIC waits too.
     assert!(
-        !(0xFC00..=0xFFFF).contains(&spec.cpu.pc) && !(0x0000..=0x3FFF).contains(&spec.cpu.pc),
-        "{name} should be running the game, not in a loader or back in the \
-         ROM at ${:04X}",
+        !(0xFC00..=0xFFFF).contains(&spec.cpu.pc),
+        "{name} should not still be in a loader at ${:04X}",
         spec.cpu.pc
     );
     let drawn = (0x4000..0x5800u16)
@@ -342,4 +356,25 @@ fn the_last_pause_is_hurried_through_as_well() {
         "the silence should be got through in a hurry: {hurried} host frames \
          against {played}"
     );
+}
+
+/// Bleepload — Firebird's and Rainbird's — is a couple of hundred blocks of
+/// about 270 bytes each with a few milliseconds between them, and the two
+/// sync pulses swap round from one tape to the next: Bubble Bobble's are
+/// 735 then 667, Starglider's the other way about.
+#[test]
+fn bubble_bobble_loads() {
+    starts_after_loading(BUBBLE_BOBBLE);
+}
+
+#[test]
+fn starglider_loads() {
+    starts_after_loading(STARGLIDER);
+}
+
+/// Starglider 2 wraps its blocks in groups and puts a four-millisecond pause
+/// and a long tone in front of them.
+#[test]
+fn starglider_2_loads() {
+    starts_after_loading(STARGLIDER_2);
 }
