@@ -135,21 +135,12 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
              the block list is at the bottom of, so they are put away when \
              nobody is using them.",
         );
-        // Which of the two things Fastload is doing, since they are not the
-        // same thing: a game with a loader of its own is read to, not handed
-        // to.
-        // Which loader is reading, while one is. Nothing is said when blocks
-        // are being handed to the ROM instead: that is what the switch says it
-        // does, and a line that only ever repeated it was noise.
-        if flash {
-            if let Some(core) = app.loader_reading() {
-                ui.label(
-                    egui::RichText::new(format!("{core} is reading"))
-                        .small()
-                        .color(theme::DIM),
-                );
-            }
-        }
+        // Nothing is said here about who is reading the tape. The name of the
+        // loop the machine is in was on this row for a while, and it flashed:
+        // a loader is in its sampler for part of every byte and somewhere else
+        // for the rest, so the line came and went several times a second. What
+        // the loop is called is still worth knowing — `flashload::sampler`
+        // knows it — but not at that rate and not there.
     });
 }
 

@@ -186,10 +186,13 @@ the `RRA` first. Digital Integration's counts B *down*, does not load the
 port's high byte at all — whatever was last on the bus will do — and closes
 with an absolute jump.
 
-Knowing which loop it is buys one thing: the tape window says who is reading
-("Digital Integration's sampler is reading") rather than only that somebody
-is. It is not what makes a tape load. Nothing about a game's own loader can be
-answered the way the ROM's can, for the reason below.
+Knowing which loop it is does not make a tape load: nothing about a game's own
+loader can be answered the way the ROM's can, for the reason below. It was on
+the tape window for a while as a caption — "Digital Integration's sampler is
+reading" — and that came straight back out again, because a loader is inside
+its sampler for part of every byte and somewhere else for the rest, so the line
+flashed several times a second. `flashload::sampler` still knows, and the tests
+below are what ask it.
 
 ### What cannot be done, and why
 

@@ -233,3 +233,47 @@ fn the_scope_can_be_put_away() {
         "and pressing it again should bring it back"
     );
 }
+
+/// Nothing on the speed row says who is reading the tape.
+///
+/// The name of the sampling loop the machine was in used to be there, and it
+/// flashed: a loader is inside its sampler for part of every byte and
+/// somewhere else for the rest, so the line came and went several times a
+/// second. What the loop is called is still known — that is what
+/// `flashload::sampler` is for — but a caption that blinks at reading speed is
+/// worse than no caption.
+#[test]
+fn the_speed_row_does_not_caption_the_loader() {
+    let mut h = harness();
+    h.get_by_label("Fastload").click();
+    h.run_steps(2);
+
+    // A loader's sampling loop under the program counter, which is what used
+    // to put the caption on the row.
+    let core = [
+        0x04u8, 0xC8, 0x3E, 0x7F, 0xDB, 0xFE, 0x1F, 0xD0, 0xA9, 0xE6, 0x20, 0x28, 0xF3,
+    ];
+    for (offset, byte) in core.iter().enumerate() {
+        h.state_mut().spec.bus.poke(0x8000 + offset as u16, *byte);
+    }
+    h.state_mut().spec.cpu.pc = 0x8000;
+    h.run_steps(2);
+    assert!(
+        zx_rustrum::flashload::sampler(&h.state().spec).is_some(),
+        "the machine should be sitting in a loop the emulator knows"
+    );
+
+    let said: Vec<String> = h
+        .root()
+        .children_recursive()
+        .filter_map(|node| {
+            let node = node.accesskit_node();
+            node.value().map(|v| v.to_string())
+        })
+        .filter(|text| text.contains("reading") || text.contains("BREAK"))
+        .collect();
+    assert!(
+        said.is_empty(),
+        "the window should say nothing about who is reading: {said:?}"
+    );
+}
