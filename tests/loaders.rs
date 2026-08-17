@@ -1,10 +1,10 @@
 //! Loading games whose loaders are their own.
 //!
-//! Five of them, which between them cover most of what a commercial tape did:
+//! Six of them, which between them cover most of what a commercial tape did:
 //! Speedlock (Head over Heels, Daley Thompson's Decathlon), Alkatraz (Cobra,
 //! 720 Degrees), Bleepload (Bubble Bobble, Starglider, Starglider 2),
-//! Microsphere (Skool Daze, Contact Sam Cruise), and the ROM's own for the
-//! blocks in front of them.
+//! Microsphere (Skool Daze, Contact Sam Cruise), Paul Owens (Chase H.Q.), and
+//! the ROM's own for the blocks in front of them.
 //!
 //! None of their blocks can be handed over the way the ROM's can: they read
 //! the tape themselves, and some of them decrypt every byte as it arrives.
@@ -27,6 +27,7 @@ const STARGLIDER_2: &str =
     "tapes/Starglider 2 - The Egrons Strike Back (1989)(Rainbird Software)[48-128K].zip";
 const SKOOL_DAZE: &str = "tapes/Skool Daze (1985)(Microsphere).zip";
 const SAM_CRUISE: &str = "tapes/Contact Sam Cruise (1986)(Microsphere).zip";
+const CHASE_HQ: &str = "tapes/Chase H.Q. (1989)(Ocean Software)[48-128K].zip";
 const SEVEN_TWENTY: &str = "tapes/720 Degrees (1986)(U.S. Gold).zip";
 
 fn tape(name: &str) -> Option<Tape> {
@@ -396,4 +397,13 @@ fn skool_daze_loads() {
 #[test]
 fn contact_sam_cruise_loads() {
     starts_after_loading(SAM_CRUISE);
+}
+
+/// Paul Owens's, which Chase H.Q. uses: every block at the same settings —
+/// 2,196 pilot pulses, 667 and 735 for the sync, 735 and 1,590 a bit — and
+/// the levels sitting behind the game as four-byte blocks with their data,
+/// each announced by a text block in the tape itself.
+#[test]
+fn chase_hq_loads() {
+    starts_after_loading(CHASE_HQ);
 }

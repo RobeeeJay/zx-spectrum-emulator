@@ -297,6 +297,26 @@ Like Bleepload, neither needs anything the other loaders needed: both load
 with the closing edge taken out again and with the EAR line left dead.
 Checked, not assumed.
 
+## Paul Owens
+
+Chase H.Q.'s, and the tidiest to read: every block at the same settings — 2,196
+pilot pulses, 667 and 735 for the sync, 735 and 1,590 a bit — with the game in
+four blocks and then the levels behind it, each a four-byte block followed by
+its data and announced by a text block in the tape itself ("Level 1", "Level
+2", and so on).
+
+| | played | Max speed | Ludicrous |
+| --- | --- | --- | --- |
+| Chase H.Q. (48K) | over 36,000 | 2,223 | 78 |
+| Chase H.Q. (128K) | — | — | 91 |
+
+Played, it does not finish inside ten minutes of host time: the levels go on
+past the game, and the game says "STOP THE TAPE" long before the tape agrees.
+
+**It needs the closing edge**, like Alkatraz and unlike Bleepload and
+Microsphere: taken out again, Chase H.Q. ends with a report line and 134 bytes
+of screen. The EAR feedback it does not care about.
+
 ## The EAR line is never dead
 
 Reading port $FE bit 6 with no tape playing does not give zero: the machine
