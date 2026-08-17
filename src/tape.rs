@@ -915,6 +915,9 @@ pub struct Tape {
     raw_next: u64,
     /// The level change the reader is about to make, and when.
     pending: Option<(u64, bool)>,
+    /// Whether what is going past the head at the moment is a silence of the
+    /// deck's own making rather than something read off the tape.
+    silent: bool,
     /// Whether the head is on the tape. Pause leaves it there — the hiss
     /// carries on — and Stop lifts it, which is silence.
     pub head_down: bool,
@@ -943,10 +946,6 @@ pub const EDGE_HISTORY: usize = 16384;
 /// And how many samples of the signal's own shape, for drawing what the head
 /// made of it rather than what the reader made of that.
 const TRACE_SAMPLES: usize = 4096;
-
-/// How far back to fill in the hiss when the scope has not been looked at for
-/// a while: a screenful, not the whole time the tape sat there.
-const HISS_CATCHUP: u64 = 200_000;
 
 impl Tape {
     pub fn load(path: &Path) -> Result<Tape, String> {
@@ -1044,6 +1043,7 @@ impl Tape {
             filter_y: 0.0,
             raw_next: 0,
             pending: None,
+            silent: false,
             head_down: false,
             quiet_from: 0,
             trace: VecDeque::with_capacity(TRACE_SAMPLES),
@@ -1099,27 +1099,23 @@ impl Tape {
             self.filter_y = 0.0;
             return false;
         }
-        // A handful of samples since the last look, so the scope has a trace
-        // to draw rather than whatever was left over from the last block.
-        let last = self.trace.back().map(|(t, _)| *t).unwrap_or(now);
-        let span = now.saturating_sub(last).min(HISS_CATCHUP);
-        if span > 0 {
-            let step = (span / 24).max(64);
-            let mut at = last;
-            while at < now {
-                while self.trace.len() + 1 > TRACE_SAMPLES {
-                    self.trace.pop_front();
-                }
-                self.trace.push_back((at, self.quality.hiss(at)));
-                at += step;
-            }
-        }
-        let hiss = self.quality.hiss(now);
-        self.filter_y = hiss;
+        self.hiss_reaches_the_reader(now, 0.0)
+    }
+
+    /// What the reader makes of the hiss on top of the level the line is
+    /// holding.
+    ///
+    /// Noise is on the tape rather than in the signal, so it is there in the
+    /// silence between blocks and on a tape held still as much as it is under
+    /// a block. Turned up past the threshold it is edges, and a loader waiting
+    /// through a gap hears them.
+    fn hiss_reaches_the_reader(&mut self, now: u64, under: f32) -> bool {
+        let signal = under + self.quality.hiss(now);
+        self.filter_y = signal;
         let was = self.level;
-        self.level = if hiss > THRESHOLD {
+        self.level = if signal > THRESHOLD {
             true
-        } else if hiss < -THRESHOLD {
+        } else if signal < -THRESHOLD {
             false
         } else {
             was
@@ -1157,6 +1153,58 @@ impl Tape {
             self.trace.push_back((start + along as u64, y));
         }
         self.trace.push_back((end, settled));
+    }
+
+    /// The signal on the line across a window of time, at whatever resolution
+    /// the scope asks for.
+    ///
+    /// The deck keeps the signal's corners — a step, or the curve the head
+    /// rolls it into — and nothing more, because that is all the shape there
+    /// is. The hiss is put on here instead of being stored: it is white noise
+    /// and it has a value at every instant, so sampling it at the resolution
+    /// of the screen is both cheaper and truer than keeping a recording of it
+    /// that a scope would then have to draw between.
+    pub fn scope_samples(&self, from: u64, to: u64, count: usize) -> Vec<(u64, f32)> {
+        let count = count.max(2);
+        let span = to.saturating_sub(from).max(1);
+        // Nothing from before the tape stopped: that block has gone past the
+        // head and is not what is on the line now.
+        let floor = if self.playing { 0 } else { self.quiet_from };
+        let kept: Vec<(u64, f32)> = self
+            .trace
+            .iter()
+            .copied()
+            .filter(|(t, _)| *t >= floor)
+            .collect();
+
+        let mut at = 0usize;
+        (0..count)
+            .map(|step| {
+                let t = from + span * step as u64 / (count - 1) as u64;
+                while at + 1 < kept.len() && kept[at + 1].0 <= t {
+                    at += 1;
+                }
+                let level = match (kept.get(at), kept.get(at + 1)) {
+                    // Between two corners: the line is on its way from one to
+                    // the other.
+                    (Some(&(t0, y0)), Some(&(t1, y1))) if t >= t0 && t1 > t0 => {
+                        let along = (t - t0) as f32 / (t1 - t0) as f32;
+                        y0 + (y1 - y0) * along.clamp(0.0, 1.0)
+                    }
+                    // Past the last corner, or before the first: a tape that
+                    // is running is holding the level it last reached, and one
+                    // that is not is sitting at the middle of the screen.
+                    (Some(&(_, y)), _) if self.playing => y,
+                    _ => 0.0,
+                };
+                let hiss = if self.head_down {
+                    self.quality.hiss(t)
+                } else {
+                    0.0
+                };
+                (t, level + hiss)
+            })
+            .collect()
     }
 
     /// Record a level change for the oscilloscope and the mixer.
@@ -1439,6 +1487,7 @@ impl Tape {
                         None => self.raw_next,
                     };
                     self.pulses += 1;
+                    self.silent = forced.is_some();
                 }
                 None => {
                     self.playing = false;
@@ -1451,6 +1500,18 @@ impl Tape {
             if guard > 2_000_000 {
                 break;
             }
+        }
+        // Through a gap the tape is still going past the head, so the hiss is
+        // still arriving. Under a block it is folded into the pulses instead,
+        // where it either carries them over the threshold or does not.
+        if self.silent && self.quality.noise && self.pending.is_none() {
+            let under = if self.raw_level { 1.0 } else { -1.0 };
+            let under = if self.filter_y.abs() > 0.9 {
+                under
+            } else {
+                0.0
+            };
+            return self.hiss_reaches_the_reader(now, under);
         }
         self.level
     }

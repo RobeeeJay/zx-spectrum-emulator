@@ -443,8 +443,9 @@ fn a_paused_tape_goes_on_hissing() {
         edges > 20,
         "a loud hiss should keep crossing the reader's threshold: {edges} edges"
     );
+    let seen = tape.scope_samples(200_000, 300_000, 400);
     assert!(
-        tape.trace.iter().any(|(t, _)| *t > 100_000),
+        seen.iter().any(|(_, y)| y.abs() > 0.3),
         "the scope should be given the hiss to draw as well"
     );
 }
@@ -454,9 +455,10 @@ fn a_paused_tape_goes_on_hissing() {
 fn stopping_the_tape_takes_the_hiss_with_it() {
     let (tape, edges) = held_still(0.9, true);
     assert_eq!(edges, 0, "a stopped deck should be silent");
+    let seen = tape.scope_samples(200_000, 300_000, 400);
     assert!(
-        tape.trace.is_empty(),
-        "and the scope should have nothing left over to draw"
+        seen.iter().all(|(_, y)| *y == 0.0),
+        "and the scope should draw a flat line, not the last block"
     );
 }
 
@@ -466,8 +468,74 @@ fn stopping_the_tape_takes_the_hiss_with_it() {
 fn a_quiet_hiss_is_only_heard_by_the_scope() {
     let (tape, edges) = held_still(0.2, false);
     assert_eq!(edges, 0, "a quiet hiss should not be read as edges");
+    let seen = tape.scope_samples(200_000, 300_000, 400);
     assert!(
-        tape.trace.iter().any(|(t, y)| *t > 100_000 && *y != 0.0),
+        seen.iter().any(|(_, y)| y.abs() > 0.05),
         "but it should still be drawn"
+    );
+}
+
+/// Hiss is on the tape, so it is there in the gaps between blocks as well as
+/// under them — and on the scope it sits on top of the signal rather than
+/// instead of it.
+#[test]
+fn the_silence_between_blocks_hisses_too() {
+    let mut tape = Tape::from_blocks(
+        "t".into(),
+        vec![
+            Block::PureTone {
+                len: 2168,
+                count: 40,
+            },
+            Block::Pause(1000),
+            Block::PureTone {
+                len: 2168,
+                count: 40,
+            },
+        ],
+    );
+    tape.quality = Quality {
+        noise: true,
+        noise_level: 0.9,
+        ..Quality::default()
+    };
+    tape.play(0);
+
+    // Through the tone first: the hiss rides on the pulses, which are still
+    // the pulses.
+    let tone_end = 2168 * 40;
+    let mut level = tape.level_at(0);
+    let mut edges = 0;
+    for t in (0..tone_end).step_by(64) {
+        if tape.level_at(t) != level {
+            edges += 1;
+            level = !level;
+        }
+    }
+    assert!(
+        (35..=45).contains(&edges),
+        "a loud hiss should not take the tone apart: {edges} edges from 40 \
+         pulses"
+    );
+    let under_signal = tape.scope_samples(tone_end / 2, tone_end / 2 + 20_000, 400);
+    assert!(
+        under_signal.iter().any(|(_, y)| y.abs() > 1.05),
+        "and it should show on the scope on top of the pulses"
+    );
+
+    // Then through the gap, where there is nothing but the hiss.
+    let gap_from = tone_end + 10_000;
+    let mut level = tape.level_at(gap_from);
+    let mut in_the_gap = 0;
+    for t in (gap_from..gap_from + 300_000).step_by(64) {
+        if tape.level_at(t) != level {
+            in_the_gap += 1;
+            level = !level;
+        }
+    }
+    assert!(
+        in_the_gap > 20,
+        "a loud hiss in the gap should be edges the machine can hear: \
+         {in_the_gap}"
     );
 }

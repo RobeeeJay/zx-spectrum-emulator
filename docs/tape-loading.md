@@ -386,10 +386,19 @@ loaders.
 ### Hiss
 
 **Noise** is the third switch: tape hiss, two grains at different rates so it is
-not a tone, scaled by its own slider. It rides under the signal, and it is
-there through the silence between blocks and on a tape held still — a real deck
-hisses from the moment the head touches the tape, not from the moment there is
-something to read.
+not a tone, scaled by its own slider. It is white noise laid over whatever the
+line is holding — under a block's pulses, through the silence between blocks,
+and on a tape held still. A real deck hisses from the moment the head touches
+the tape, not from the moment there is something to read, so in a gap the hiss
+is all there is and a loader waiting through one hears it.
+
+The hiss is not recorded, it is added where it is wanted. The deck keeps the
+signal's corners and nothing else, because that is all the shape there is;
+white noise has a value at every instant, so `Tape::scope_samples` resamples
+the corners across the window the scope is showing — one sample a pixel — and
+puts the hiss on at that resolution. Storing it instead would mean keeping
+thousands of samples a block and then drawing straight lines between them,
+which is a smoother and quieter hiss than the one the machine is hearing.
 
 Which is why Pause and Stop are no longer the same call. Pause holds the tape
 still with the head down, so the hiss carries on and the scope has something to
@@ -408,6 +417,9 @@ A deck standing still draws a flat line across the middle, or the hiss if the
 tape is only paused. It used to hold the last block's reader level right across
 the screen — a line at the top or the bottom that meant nothing, since a deck
 that is not moving is not reading anything.
+
+The Quality row is two lines: Speed and Noise on the first, Alignment and its
+two sliders on the second.
 
 Both ends of every pulse matter: with one sample apiece the corners have
 nothing joining them and a line drawn through them is a triangle wave, which is

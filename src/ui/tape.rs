@@ -158,6 +158,20 @@ fn quality(app: &mut App, ui: &mut egui::Ui) {
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
             );
         });
+        theme::toggle(ui, &mut app.quality.noise, "Noise").on_hover_text(
+            "Tape hiss, there from the moment the head goes down: under the \
+             signal, through the silence between blocks, and on a tape held \
+             at pause. Stop lifts the head and it goes. Turned up past what \
+             the reader calls an edge, the machine starts hearing it.",
+        );
+        ui.add_enabled_ui(app.quality.noise, |ui| {
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.noise_level, 0.0..=1.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            )
+            .on_hover_text("How loud the hiss is");
+        });
     });
 
     ui.horizontal_wrapped(|ui| {
@@ -188,20 +202,6 @@ fn quality(app: &mut App, ui: &mut egui::Ui) {
                     .custom_formatter(|v, _| format!("±{:.0}%", v * 100.0)),
             )
             .on_hover_text("How far the corner wanders as the tape runs");
-        });
-        theme::toggle(ui, &mut app.quality.noise, "Noise").on_hover_text(
-            "Tape hiss, there from the moment the head goes down: under the \
-             signal, through the silence between blocks, and on a tape held \
-             at pause. Stop lifts the head and it goes. Turned up past what \
-             the reader calls an edge, the machine starts hearing it.",
-        );
-        ui.add_enabled_ui(app.quality.noise, |ui| {
-            theme::slider(
-                ui,
-                egui::Slider::new(&mut app.quality.noise_level, 0.0..=1.0)
-                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-            )
-            .on_hover_text("How loud the hiss is");
         });
     });
 }
@@ -398,32 +398,19 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
     // rounding no longer reaches the reader's threshold an edge goes missing.
     let trace = Stroke::new(1.5, theme::LCD_FG);
     let y_of_signal = |y: f32| y_mid - y.clamp(-1.0, 1.0) * (y_low - y_high) * 0.5;
-    // Nothing from before the tape stopped: that block has gone past the head
-    // and is not what is on the line now.
-    let from = if tape.playing {
-        t0
-    } else {
-        t0.max(tape.quiet_from)
-    };
+    // A sample for every pixel across the screen, since the hiss has a value
+    // at every instant and drawing between two of them would smooth it away.
+    // A deck with nothing on it draws a flat line down the middle rather than
+    // leaving the last thing it saw on the screen.
+    let columns = (rect.width().round() as usize).clamp(2, 2048);
     let shape: Vec<Pos2> = tape
-        .trace
-        .iter()
-        .filter(|(t, _)| *t >= from && *t <= t1)
-        .map(|(t, y)| Pos2::new(x_of(*t), y_of_signal(*y)))
+        .scope_samples(t0, t1, columns)
+        .into_iter()
+        .map(|(t, y)| Pos2::new(x_of(t), y_of_signal(y)))
         .collect();
-    if shape.len() > 1 {
-        painter.add(egui::Shape::line(shape, trace));
+    painter.add(egui::Shape::line(shape, trace));
+    if tape.playing {
         drew = true;
-    } else {
-        // A quiet line is still a line: a deck with nothing on it sits at the
-        // middle of the screen rather than showing whatever was there last.
-        painter.line_segment(
-            [
-                Pos2::new(rect.left(), y_mid),
-                Pos2::new(rect.right(), y_mid),
-            ],
-            trace,
-        );
     }
 
     // Trigger marker.
