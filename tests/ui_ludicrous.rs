@@ -33,11 +33,12 @@ fn harness<'a>() -> Harness<'a, App> {
     h
 }
 
-/// One of three rather than two switches: picking one puts the others out, and
-/// picking the fastest brings the machine's own speed with it, since a game
-/// with a loader of its own has to be played to whatever else happens.
+/// Two switches rather than three: picking one puts the other out, picking the
+/// same one again puts it away, and neither on is the tape's own speed. The
+/// fastest brings the machine's own speed with it, since a game with a loader
+/// of its own has to be played to whatever else happens.
 #[test]
-fn the_three_speeds_are_one_at_a_time() {
+fn the_speeds_are_one_at_a_time_and_switch_off_again() {
     let mut h = harness();
     h.state_mut().spec.bus.tape_boost = false;
     h.run_steps(2);
@@ -45,9 +46,13 @@ fn the_three_speeds_are_one_at_a_time() {
         !h.state().tape_flash() && !h.state().tape_boost(),
         "it should start at the tape's own speed"
     );
+    assert!(
+        h.query_by_label("Normal").is_none(),
+        "there is no button for the tape's own speed: it is neither switch on"
+    );
 
-    // Straight from Normal to the fastest, so that bringing the machine's own
-    // speed with it is this button's doing and not the one before it.
+    // Straight to the fastest, so that bringing the machine's own speed with
+    // it is this button's doing and not another's.
     h.get_by_label("Ludicrous").click();
     h.run_steps(2);
     assert!(
@@ -63,25 +68,21 @@ fn the_three_speeds_are_one_at_a_time() {
         "Max should hurry the machine and hand nothing over"
     );
 
-    h.get_by_label("Normal").click();
+    h.get_by_label("Max").click();
     h.run_steps(2);
     assert!(
         !h.state().tape_flash() && !h.state().tape_boost(),
-        "and Normal should put both away"
+        "and pressing it again should put it away"
     );
 }
 
-/// The transport is the deck's own buttons; the three speeds are about the
-/// emulator rather than about the tape, so they are a row of their own with
-/// their own label rather than the tail of the transport row.
+/// The speeds sit with the transport rather than on a row of their own.
 ///
-/// The geometry alone cannot say this: the tape window is narrower than the
-/// two rows together, so the switches wrapped below the transport even when
-/// they were part of it. What the row is worth testing for is that it is one
-/// row — its label and all three of them on a line, and none of the deck's
-/// buttons with them.
+/// They are how fast the tape is got through, which is part of working the
+/// deck; the row they had to themselves cost a line of a window whose height
+/// the block list is what is left of.
 #[test]
-fn the_speed_switches_are_a_row_of_their_own() {
+fn the_speeds_sit_with_the_transport() {
     let h = harness();
     let top = |label: &str| -> f32 {
         h.get_by_label(label)
@@ -91,35 +92,13 @@ fn the_speed_switches_are_a_row_of_their_own() {
             .y0 as f32
     };
 
-    // A plain label's text is in the node's value rather than its label, so
-    // the row's own label is looked for by walking the tree. Group labels are
-    // drawn in capitals, and the main window has a Speed group of its own, so
-    // what is being asked is whether *one* of them is on this row.
     // Anchored on Ludicrous: the main window's speed dropdown has a "Max" of
     // its own, and the tape window's is not the only one in the tree.
-    let switches = top("Ludicrous");
-    let labelled = h
-        .root()
-        .children_recursive()
-        .filter_map(|node| {
-            let node = node.accesskit_node();
-            (node.value().as_deref() == Some("SPEED")).then(|| node.bounding_box())?
-        })
-        .any(|box_| (box_.y0 as f32 - switches).abs() < 0.5);
-    assert!(
-        labelled,
-        "the row the speed switches are on should have its own label"
-    );
-    assert!(
-        (top("Normal") - switches).abs() < 0.5 && (top("Max") - switches).abs() < 0.5,
-        "and all three should be on it"
-    );
-
-    let row = switches;
+    let row = top("Ludicrous");
     for label in ["|◀ Start", "▶ Play", "■ Stop", "▶▶ Forward"] {
         assert!(
-            (top(label) - row).abs() > 0.5,
-            "{label} belongs to the transport and should not be on the speed row"
+            (top(label) - row).abs() < 0.5,
+            "{label} and the speeds should be on one row"
         );
     }
 }
@@ -138,17 +117,18 @@ fn a_zx81_is_not_offered_it() {
     );
 }
 
-/// The Quality row: two switches for the deck's failings, and the sliders that
-/// say how bad each is.
+/// The Quality row: what the deck does wrong, and how much of it.
+///
+/// The motor has no switch of its own — two sliders at nothing is a motor that
+/// is behaving — so what is tested is that the sliders reach the deck.
 #[test]
 fn the_quality_row_sets_the_decks_failings() {
     let mut h = harness();
-    assert!(!h.state().quality.speed, "it should start behaving");
-    assert!(!h.state().quality.alignment);
-
-    h.get_by_label("Speed").click();
-    h.run_steps(2);
-    assert!(h.state().quality.speed, "the Speed switch did nothing");
+    assert!(!h.state().quality.alignment, "it should start behaving");
+    assert!(
+        h.query_by_label("Speed").is_none(),
+        "the motor's switch is gone: its sliders say it"
+    );
 
     h.get_by_label("Alignment").click();
     h.run_steps(2);
@@ -163,10 +143,7 @@ fn the_quality_row_sets_the_decks_failings() {
     h.state_mut().quality.alignment_offset = 0.15;
     h.state_mut().advance(1.0 / 50.0);
     let deck = h.state().spec.bus.tape.as_ref().expect("a tape").quality;
-    assert!(
-        deck.speed && deck.alignment,
-        "the deck should have been told: {deck:?}"
-    );
+    assert!(deck.alignment, "the deck should have been told: {deck:?}");
     assert!(
         (deck.wow - 0.03).abs() < 0.001 && (deck.alignment_offset - 0.15).abs() < 0.001,
         "and told how far: {deck:?}"

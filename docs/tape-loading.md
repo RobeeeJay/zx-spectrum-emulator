@@ -320,15 +320,18 @@ of screen. The EAR feedback it does not care about.
 ## A deck that is not quite right
 
 The tape window's Quality row makes the deck behave the way a real one did.
-Three switches, four sliders, and nothing random about any of it: the wobbles
-are sine waves read off the T-state clock and the grain and hiss are hashed
-from it, so a given moment always gets the same treatment and a load can be
+Two switches, four sliders, and nothing random about any of it: the wobbles are
+sine waves read off the T-state clock and the grain and hiss are hashed from
+it, so a given moment always gets the same treatment and a load can be
 repeated.
 
-**Speed** is wow and flutter, scaling every pulse: a waver at 0.037 Hz with a
-slower drift at 0.012 Hz under it and a little flutter at 1.4 Hz over the top —
-periods of half a minute down to a second, which is what a tape does. The
-slider is how far it wanders, as a fraction of the right speed.
+**Wow** and **flutter** scale every pulse, and have a slider each because a
+deck can have either. Wow is the reel turning out of true — 0.037 Hz with a
+slower drift at 0.012 Hz under it, so a period of tens of seconds — and flutter
+is the capstan and the tape's own stiffness, at 1.4 Hz with a little at 6.3 Hz
+over it. Each goes to five per cent of the right speed, which is already a deck
+nobody would keep. There is no switch in front of them: two sliders at nothing
+is a motor that is behaving.
 
 **Alignment** is a head out of square with the tape. It reads the top of the
 track a moment before the bottom, and the two cancel each other the shorter the
@@ -385,8 +388,8 @@ loaders.
 
 ### Hiss
 
-**Noise** is the third switch: tape hiss, two grains at different rates so it is
-not a tone, scaled by its own slider. It is white noise laid over whatever the
+**Noise** sits to the right of them: tape hiss, two grains at different rates
+so it is not a tone, scaled by its own slider. It is white noise laid over whatever the
 line is holding — under a block's pulses, through the silence between blocks,
 and on a tape held still. A real deck hisses from the moment the head touches
 the tape, not from the moment there is something to read, so in a gap the hiss
@@ -424,8 +427,11 @@ tape is only paused. It used to hold the last block's reader level right across
 the screen — a line at the top or the bottom that meant nothing, since a deck
 that is not moving is not reading anything.
 
-The Quality row is two lines: Speed and Noise on the first, Alignment and its
-two sliders on the second.
+The Quality row is two lines: the wow and flutter sliders and then Noise on the
+first, Alignment and its two sliders on the second. The tape window's default
+height went up with all this, to 900: the block list is what is left after the
+cassette, the transport, the quality rows and the scope, and another slider row
+had taken the last of it.
 
 Both ends of every pulse matter: with one sample apiece the corners have
 nothing joining them and a line drawn through them is a triangle wave, which is

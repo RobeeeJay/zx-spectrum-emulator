@@ -72,68 +72,6 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
-/// How fast the tape is got through, on a line of its own: the transport is
-/// the deck's own buttons, and these two are about the emulator rather than
-/// about the tape.
-fn speeds(app: &mut App, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        // No slider in this row, so nothing in it is taller than a button and
-        // the row needs no height claimed in advance.
-        theme::group_label(ui, "Speed");
-
-        // One of three rather than two switches: they were never independent
-        // anyway, since hurrying a tape means running the machine flat out as
-        // well, and a pair of toggles left "Ludicrous without Max" to be
-        // explained away.
-        let (boost, flash) = (app.tape_boost(), app.tape_flash());
-        let now = if flash {
-            Hurry::Ludicrous
-        } else if boost {
-            Hurry::Max
-        } else {
-            Hurry::Normal
-        };
-
-        if theme::selectable(ui, now == Hurry::Normal, "Normal")
-            .on_hover_text("Play the tape at the speed it was recorded at.")
-            .clicked()
-        {
-            app.set_hurry(Hurry::Normal);
-        }
-        if theme::selectable(ui, now == Hurry::Max, "Max")
-            .on_hover_text("Run the machine as fast as it will go while the tape moves.")
-            .clicked()
-        {
-            app.set_hurry(Hurry::Max);
-        }
-        ui.add_enabled_ui(!app.on_zx81(), |ui| {
-            if theme::selectable(ui, now == Hurry::Ludicrous, "Ludicrous")
-                .on_hover_text(
-                    "Hand each block straight to the ROM's loader instead of playing \
-                     it, so a tape loads in the time it takes to copy it, and run the \
-                     machine flat out for the blocks that cannot be handed over. Games \
-                     with a loader of their own read the tape themselves: those load at \
-                     whatever speed the machine is running at.",
-                )
-                .clicked()
-            {
-                app.set_hurry(Hurry::Ludicrous);
-            }
-        });
-
-        // Which of the two things it is doing, since they are not the same
-        // thing: a game with a loader of its own is read to, not handed to.
-        if flash {
-            let what = if app.loader_is_reading() {
-                "the game's own loader is reading the tape"
-            } else {
-                "handing blocks to the ROM"
-            };
-            ui.label(egui::RichText::new(what).small().color(theme::DIM));
-        }
-    });
-}
-
 /// How well the deck is behaving: the motor's steadiness and the head's
 /// alignment, both of which a real one only ever had so much of.
 ///
@@ -145,26 +83,24 @@ fn quality(app: &mut App, ui: &mut egui::Ui) {
         ui.set_min_height(theme::ROW_H);
         ui.spacing_mut().slider_width = 76.0;
         theme::group_label(ui, "Quality");
-        theme::toggle(ui, &mut app.quality.speed, "Speed").on_hover_text(
-            "Let the motor waver, as a real one does: wow over a turn of the \
-             reel and a little flutter over the top of it, wandering across \
-             seconds rather than shaking. Loaders measure the tape against \
-             their own clock, so enough of this and they lose it.",
+        theme::slider(
+            ui,
+            egui::Slider::new(&mut app.quality.wow, 0.0..=0.05)
+                .custom_formatter(|v, _| format!("wow {:.1}%", v * 100.0)),
+        )
+        .on_hover_text(
+            "Wow: the reel turning out of true, over seconds. Loaders measure \
+             the tape against their own clock, so enough of it and they lose \
+             it.",
         );
-        ui.add_enabled_ui(app.quality.speed, |ui| {
-            theme::slider(
-                ui,
-                egui::Slider::new(&mut app.quality.wow, 0.0..=0.05)
-                    .custom_formatter(|v, _| format!("wow {:.1}%", v * 100.0)),
-            )
-            .on_hover_text("The slow one: the reel turning out of true, over seconds");
-            theme::slider(
-                ui,
-                egui::Slider::new(&mut app.quality.flutter, 0.0..=0.05)
-                    .custom_formatter(|v, _| format!("flut {:.1}%", v * 100.0)),
-            )
-            .on_hover_text("The quick one: the capstan and the tape's own stiffness");
-        });
+        theme::slider(
+            ui,
+            egui::Slider::new(&mut app.quality.flutter, 0.0..=0.05)
+                .custom_formatter(|v, _| format!("flut {:.1}%", v * 100.0)),
+        )
+        .on_hover_text(
+            "Flutter: the capstan and the tape's own stiffness, over a fraction of a second",
+        );
         theme::toggle(ui, &mut app.quality.noise, "Noise").on_hover_text(
             "Tape hiss, there from the moment the head goes down: under the \
              signal, through the silence between blocks, and on a tape held \
@@ -258,9 +194,60 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         {
             action = Some(1);
         }
+
+        // How fast the tape is got through, beside the buttons that move it:
+        // it is part of working the deck rather than a setting about it.
+        // Neither switch on is ordinary speed, so there is no button for it.
+        let (boost, flash) = (app.tape_boost(), app.tape_flash());
+        let now = if flash {
+            Hurry::Ludicrous
+        } else if boost {
+            Hurry::Max
+        } else {
+            Hurry::Normal
+        };
+        ui.separator();
+        if theme::selectable(ui, now == Hurry::Max, "Max")
+            .on_hover_text("Run the machine as fast as it will go while the tape moves.")
+            .clicked()
+        {
+            app.set_hurry(if now == Hurry::Max {
+                Hurry::Normal
+            } else {
+                Hurry::Max
+            });
+        }
+        ui.add_enabled_ui(!app.on_zx81(), |ui| {
+            if theme::selectable(ui, now == Hurry::Ludicrous, "Ludicrous")
+                .on_hover_text(
+                    "Hand each block straight to the ROM's loader instead of playing \
+                     it, so a tape loads in the time it takes to copy it, and run the \
+                     machine flat out for the blocks that cannot be handed over. Games \
+                     with a loader of their own read the tape themselves: those load at \
+                     whatever speed the machine is running at.",
+                )
+                .clicked()
+            {
+                app.set_hurry(if now == Hurry::Ludicrous {
+                    Hurry::Normal
+                } else {
+                    Hurry::Ludicrous
+                });
+            }
+        });
+        // Which of the two things Ludicrous is doing, since they are not the
+        // same thing: a game with a loader of its own is read to, not handed
+        // to.
+        if flash {
+            let what = if app.loader_is_reading() {
+                "the game's own loader is reading"
+            } else {
+                "handing blocks over"
+            };
+            ui.label(egui::RichText::new(what).small().color(theme::DIM));
+        }
     });
 
-    speeds(app, ui);
     quality(app, ui);
 
     if let Some(dir) = action {

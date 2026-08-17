@@ -710,8 +710,6 @@ struct Pulse {
 /// a given moment always gets the same treatment and a load can be repeated.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quality {
-    /// Whether the motor wavers.
-    pub speed: bool,
     /// Wow: the slow one, a couple of turns of the reel, as a fraction of the
     /// right speed.
     pub wow: f32,
@@ -774,7 +772,6 @@ fn grain(at: u64) -> f32 {
 impl Default for Quality {
     fn default() -> Self {
         Self {
-            speed: false,
             wow: 0.0,
             flutter: 0.0,
             alignment: false,
@@ -809,7 +806,9 @@ impl Quality {
     /// are slow enough to hear as a waver rather than as a buzz, which is what
     /// a tape does.
     fn wavered(&self, len: u32, at: u64) -> u32 {
-        if !self.speed {
+        // Two sliders at nothing is a motor that is behaving, so there is no
+        // switch in front of them.
+        if self.wow <= 0.0 && self.flutter <= 0.0 {
             return len;
         }
         let seconds = at as f32 / crate::machine::CPU_HZ as f32;

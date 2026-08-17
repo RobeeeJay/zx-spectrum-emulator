@@ -71,7 +71,6 @@ fn intervals_from(tape: &mut Tape, from: u64, to: u64) -> Vec<u64> {
 #[test]
 fn a_wavering_motor_wanders_slowly() {
     let wobbly = Quality {
-        speed: true,
         wow: 0.05,
         ..Quality::default()
     };
@@ -232,7 +231,6 @@ fn the_corner_comes_down_and_wanders() {
 #[test]
 fn a_bad_deck_is_bad_in_the_same_way_every_time() {
     let quality = Quality {
-        speed: true,
         wow: 0.04,
         flutter: 0.02,
         alignment: true,
@@ -561,12 +559,10 @@ fn wow_wanders_and_flutter_warbles() {
     };
 
     let wow_only = Quality {
-        speed: true,
         wow: 0.05,
         ..Quality::default()
     };
     let flutter_only = Quality {
-        speed: true,
         flutter: 0.05,
         ..Quality::default()
     };
