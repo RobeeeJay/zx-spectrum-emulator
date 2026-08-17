@@ -56,6 +56,57 @@ fn ludicrous_speed_switches_on_and_brings_max_speed_with_it() {
     assert!(!h.state().tape_flash(), "it should switch off again");
 }
 
+/// The transport is the deck's own buttons; the two speed switches are about
+/// the emulator rather than about the tape, so they are a row of their own
+/// with their own label rather than the tail of the transport row.
+///
+/// The geometry alone cannot say this: the tape window is narrower than the
+/// two rows together, so the switches wrapped below the transport even when
+/// they were part of it. What the row is worth testing for is that it is one
+/// row — its label and both switches on a line, and none of the deck's
+/// buttons with them.
+#[test]
+fn the_speed_switches_are_a_row_of_their_own() {
+    let h = harness();
+    let top = |label: &str| -> f32 {
+        h.get_by_label(label)
+            .accesskit_node()
+            .bounding_box()
+            .expect("it should be somewhere")
+            .y0 as f32
+    };
+
+    // A plain label's text is in the node's value rather than its label, so
+    // the row's own label is looked for by walking the tree. Group labels are
+    // drawn in capitals, and the main window has a Speed group of its own, so
+    // what is being asked is whether *one* of them is on this row.
+    let switches = top("Max speed");
+    let labelled = h
+        .root()
+        .children_recursive()
+        .filter_map(|node| {
+            let node = node.accesskit_node();
+            (node.value().as_deref() == Some("SPEED")).then(|| node.bounding_box())?
+        })
+        .any(|box_| (box_.y0 as f32 - switches).abs() < 0.5);
+    assert!(
+        labelled,
+        "the row the speed switches are on should have its own label"
+    );
+    assert!(
+        (top("Ludicrous speed") - switches).abs() < 0.5,
+        "and both switches should be on it"
+    );
+
+    let row = switches;
+    for label in ["|◀ Start", "▶ Play", "■ Stop", "▶▶ Forward"] {
+        assert!(
+            (top(label) - row).abs() > 0.5,
+            "{label} belongs to the transport and should not be on the speed row"
+        );
+    }
+}
+
 /// The ZX81's ROM is a different one and has no LD-BYTES to answer, so there
 /// is nothing to offer.
 #[test]
