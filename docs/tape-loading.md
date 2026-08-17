@@ -427,11 +427,11 @@ tape is only paused. It used to hold the last block's reader level right across
 the screen — a line at the top or the bottom that meant nothing, since a deck
 that is not moving is not reading anything.
 
-The Quality row is two lines: the wow and flutter sliders and then Noise on the
-first, Alignment and its two sliders on the second. The tape window's default
-height went up with all this, to 900: the block list is what is left after the
-cassette, the transport, the quality rows and the scope, and another slider row
-had taken the last of it.
+The tape window's default height went up with all this, to 960: the block list
+is what is left after the cassette, the five rows of controls and the scope,
+and the extra rows had taken the last of it. In the test harness that showed up
+as the list's clip rectangle coming out inside out, and no row could be
+hovered at all.
 
 Both ends of every pulse matter: with one sample apiece the corners have
 nothing joining them and a line drawn through them is a triangle wave, which is
@@ -477,22 +477,20 @@ Feeding a trailing tone into the deck by hand fixes it too, and gives the same
 table — $9000 reads `77 04 C3 B7 92 DD 7E 0A` either way — so the check is
 asking whether the line is alive rather than measuring what is on it.
 
-## Two switches, one at a time
+## Three speeds, one at a time
 
-Max and Fastload sit at the right-hand end of the transport row, beside the
-buttons that move the tape: how fast the tape is got through is part of working
-the deck. There is no Normal button — neither switch on is the tape's own
-speed — and pressing the switch that is on puts it away.
+Normal, Max CPU and Fastload, as one control rather than a pair of toggles.
+They were never independent: handing blocks over means running the machine flat
+out for the ones that cannot be handed over, so a pair left "Fastload without
+Max CPU" to be explained away. Fastload is not offered on a ZX81, whose ROM has
+no LD-BYTES to answer.
 
-They were three buttons on a row of their own with a Speed label in front of
-them. The row cost a line of a window whose height the block list is what is
-left of, and a button for "no" is a button for nothing.
-
-The two are not independent: hurrying a tape means running the machine flat out
-as well, since a game with a loader of its own has to be played to whatever
-else is happening, so picking Fastload brings Max with it rather than leaving
-"Fastload without Max" to be explained away. Fastload is not offered on a ZX81,
-whose ROM has no LD-BYTES to answer.
+The top of the window is five labelled rows, in this order: **Playback** —
+start, rewind, play, stop, forward; **Speed** — the three above; **Quality** —
+wow and flutter; **Alignment** — where the corner sits and how far it wanders;
+**Noise** — how loud the hiss is. A row each rather than sharing: the window is
+a fixed width, and a row that wraps puts a slider under the switch it has
+nothing to do with.
 
 ## The silence at the end counts too
 

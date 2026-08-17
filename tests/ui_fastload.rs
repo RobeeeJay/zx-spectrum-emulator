@@ -33,12 +33,11 @@ fn harness<'a>() -> Harness<'a, App> {
     h
 }
 
-/// Two switches rather than three: picking one puts the other out, picking the
-/// same one again puts it away, and neither on is the tape's own speed. The
-/// fastest brings the machine's own speed with it, since a game with a loader
-/// of its own has to be played to whatever else happens.
+/// One of three rather than two switches: picking one puts the others out, and
+/// picking the fastest brings the machine's own speed with it, since a game
+/// with a loader of its own has to be played to whatever else happens.
 #[test]
-fn the_speeds_are_one_at_a_time_and_switch_off_again() {
+fn the_three_speeds_are_one_at_a_time() {
     let mut h = harness();
     h.state_mut().spec.bus.tape_boost = false;
     h.run_steps(2);
@@ -46,13 +45,9 @@ fn the_speeds_are_one_at_a_time_and_switch_off_again() {
         !h.state().tape_flash() && !h.state().tape_boost(),
         "it should start at the tape's own speed"
     );
-    assert!(
-        h.query_by_label("Normal").is_none(),
-        "there is no button for the tape's own speed: it is neither switch on"
-    );
 
-    // Straight to the fastest, so that bringing the machine's own speed with
-    // it is this button's doing and not another's.
+    // Straight from Normal to the fastest, so that bringing the machine's own
+    // speed with it is this button's doing and not the one before it.
     h.get_by_label("Fastload").click();
     h.run_steps(2);
     assert!(
@@ -61,28 +56,31 @@ fn the_speeds_are_one_at_a_time_and_switch_off_again() {
          played to"
     );
 
-    h.get_by_label("Max").click();
+    h.get_by_label("Max CPU").click();
     h.run_steps(2);
     assert!(
         h.state().tape_boost() && !h.state().tape_flash(),
-        "Max should hurry the machine and hand nothing over"
+        "Max CPU should hurry the machine and hand nothing over"
     );
 
-    h.get_by_label("Max").click();
+    h.get_by_label("Normal").click();
     h.run_steps(2);
     assert!(
         !h.state().tape_flash() && !h.state().tape_boost(),
-        "and pressing it again should put it away"
+        "and Normal should put both away"
     );
 }
 
-/// The speeds sit with the transport rather than on a row of their own.
+/// The top of the window is five rows, each with its own label and nothing of
+/// anybody else's on it: what the deck is doing, how fast it is being got
+/// through, and then one row for each of the three things a real deck does
+/// wrong.
 ///
-/// They are how fast the tape is got through, which is part of working the
-/// deck; the row they had to themselves cost a line of a window whose height
-/// the block list is what is left of.
+/// The geometry alone cannot say this — the window is narrower than any two of
+/// the rows together, so they would stack anyway — so what is asked is that
+/// each label is on a line with the things that belong to it, in order.
 #[test]
-fn the_speeds_sit_with_the_transport() {
+fn the_top_of_the_window_is_five_labelled_rows() {
     let h = harness();
     let top = |label: &str| -> f32 {
         h.get_by_label(label)
@@ -91,16 +89,54 @@ fn the_speeds_sit_with_the_transport() {
             .expect("it should be somewhere")
             .y0 as f32
     };
+    // A plain label's text is in the node's value rather than its label, and
+    // group labels are drawn in capitals. The main window has rows of its own,
+    // so what is asked is whether *one* of each is on the row in question.
+    let rows_of = |text: &str| -> Vec<f32> {
+        h.root()
+            .children_recursive()
+            .filter_map(|node| {
+                let node = node.accesskit_node();
+                (node.value().as_deref() == Some(text)).then(|| node.bounding_box())?
+            })
+            .map(|box_| box_.y0 as f32)
+            .collect()
+    };
+    let labelled =
+        |text: &str, row: f32| -> bool { rows_of(text).iter().any(|y| (y - row).abs() < 0.5) };
 
-    // Anchored on Fastload: the main window's speed dropdown has a "Max" of
-    // its own, and the tape window's is not the only one in the tree.
-    let row = top("Fastload");
-    for label in ["|◀ Start", "▶ Play", "■ Stop", "▶▶ Forward"] {
+    let playback = top("|◀ Start");
+    let speed = top("Fastload");
+    let alignment = top("Alignment");
+    let noise = top("Noise");
+    // The wow and flutter row has no switch on it, so it is found by its own
+    // label: the one between the speeds and the alignment.
+    let quality = rows_of("QUALITY")
+        .into_iter()
+        .find(|y| *y > speed && *y < alignment)
+        .expect("the wow and flutter row should carry the Quality label");
+
+    assert!(
+        labelled("PLAYBACK", playback) && labelled("SPEED", speed),
+        "the transport and the speeds should each have their own label"
+    );
+    for label in ["▶▶ Forward", "■ Stop"] {
         assert!(
-            (top(label) - row).abs() < 0.5,
-            "{label} and the speeds should be on one row"
+            (top(label) - playback).abs() < 0.5,
+            "{label} belongs with the transport"
         );
     }
+    for label in ["Normal", "Max CPU"] {
+        assert!(
+            (top(label) - speed).abs() < 0.5,
+            "{label} belongs with the speeds"
+        );
+    }
+    assert!(
+        playback < speed && speed < quality && quality < alignment && alignment < noise,
+        "and they should be in that order down the window: {playback} {speed} \
+         {quality} {alignment} {noise}"
+    );
 }
 
 /// The ZX81's ROM is a different one and has no LD-BYTES to answer, so there

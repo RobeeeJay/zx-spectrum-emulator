@@ -72,16 +72,72 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
-/// How well the deck is behaving: the motor's steadiness and the head's
-/// alignment, both of which a real one only ever had so much of.
+/// How fast the tape is got through, on a row of its own: three switches, one
+/// at a time, and no way of asking for two of them.
+fn speeds(app: &mut App, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Speed");
+        // One of three rather than a pair of toggles: they were never
+        // independent, since handing blocks over means running the machine
+        // flat out for the ones that cannot be handed over, and a pair left
+        // "Fastload without Max CPU" to be explained away.
+        let (boost, flash) = (app.tape_boost(), app.tape_flash());
+        let now = if flash {
+            Hurry::Fastload
+        } else if boost {
+            Hurry::Max
+        } else {
+            Hurry::Normal
+        };
+        if theme::selectable(ui, now == Hurry::Normal, "Normal")
+            .on_hover_text("Play the tape at the speed it was recorded at.")
+            .clicked()
+        {
+            app.set_hurry(Hurry::Normal);
+        }
+        if theme::selectable(ui, now == Hurry::Max, "Max CPU")
+            .on_hover_text("Run the machine as fast as it will go while the tape moves.")
+            .clicked()
+        {
+            app.set_hurry(Hurry::Max);
+        }
+        ui.add_enabled_ui(!app.on_zx81(), |ui| {
+            if theme::selectable(ui, now == Hurry::Fastload, "Fastload")
+                .on_hover_text(
+                    "Hand each block straight to the ROM's loader instead of playing \
+                     it, so a tape loads in the time it takes to copy it, and run the \
+                     machine flat out for the blocks that cannot be handed over. Games \
+                     with a loader of their own read the tape themselves: those load at \
+                     whatever speed the machine is running at.",
+                )
+                .clicked()
+            {
+                app.set_hurry(Hurry::Fastload);
+            }
+        });
+        // Which of the two things Fastload is doing, since they are not the
+        // same thing: a game with a loader of its own is read to, not handed
+        // to.
+        if flash {
+            let what = if app.loader_is_reading() {
+                "the game's own loader is reading"
+            } else {
+                "handing blocks over"
+            };
+            ui.label(egui::RichText::new(what).small().color(theme::DIM));
+        }
+    });
+}
+
+/// How well the deck is behaving: the motor's steadiness, the head's alignment
+/// and the tape's own hiss, none of which a real one ever had all of.
 ///
-/// Two lines rather than one. The window is a fixed width and the switches and
-/// their sliders do not fit across it, and a row that wraps puts a slider
+/// A row each. The window is a fixed width, and a row that wraps puts a slider
 /// under the switch it has nothing to do with.
 fn quality(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(theme::ROW_H);
-        ui.spacing_mut().slider_width = 76.0;
+        ui.spacing_mut().slider_width = 110.0;
         theme::group_label(ui, "Quality");
         theme::slider(
             ui,
@@ -96,30 +152,16 @@ fn quality(app: &mut App, ui: &mut egui::Ui) {
         theme::slider(
             ui,
             egui::Slider::new(&mut app.quality.flutter, 0.0..=0.05)
-                .custom_formatter(|v, _| format!("flut {:.1}%", v * 100.0)),
+                .custom_formatter(|v, _| format!("flutter {:.1}%", v * 100.0)),
         )
         .on_hover_text(
             "Flutter: the capstan and the tape's own stiffness, over a fraction of a second",
         );
-        theme::toggle(ui, &mut app.quality.noise, "Noise").on_hover_text(
-            "Tape hiss, there from the moment the head goes down: under the \
-             signal, through the silence between blocks, and on a tape held \
-             at pause. Stop lifts the head and it goes. Turned up past what \
-             the reader calls an edge, the machine starts hearing it.",
-        );
-        ui.add_enabled_ui(app.quality.noise, |ui| {
-            theme::slider(
-                ui,
-                egui::Slider::new(&mut app.quality.noise_level, 0.0..=1.0)
-                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-            )
-            .on_hover_text("How loud the hiss is");
-        });
     });
 
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(theme::ROW_H);
-        ui.spacing_mut().slider_width = 96.0;
+        ui.spacing_mut().slider_width = 110.0;
         theme::toggle(ui, &mut app.quality.alignment, "Alignment").on_hover_text(
             "Put the head out of square with the tape. It then reads the top \
              of the track a moment before the bottom, and the two cancel each \
@@ -147,6 +189,25 @@ fn quality(app: &mut App, ui: &mut egui::Ui) {
             .on_hover_text("How far the corner wanders as the tape runs");
         });
     });
+
+    ui.horizontal_wrapped(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 110.0;
+        theme::toggle(ui, &mut app.quality.noise, "Noise").on_hover_text(
+            "Tape hiss, there from the moment the head goes down: under the \
+             signal, through the silence between blocks, and on a tape held \
+             at pause. Stop lifts the head and it goes. Turned up past what \
+             the reader calls an edge, the machine starts hearing it.",
+        );
+        ui.add_enabled_ui(app.quality.noise, |ui| {
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.noise_level, 0.0..=1.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            )
+            .on_hover_text("How loud the hiss is");
+        });
+    });
 }
 
 fn transport(app: &mut App, ui: &mut egui::Ui) {
@@ -155,6 +216,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
     let playing = app.tape_ref().is_some_and(|t| t.playing);
 
     ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Playback");
         if ui
             .button("|◀ Start")
             .on_hover_text("Back to the start of the tape")
@@ -194,60 +256,9 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         {
             action = Some(1);
         }
-
-        // How fast the tape is got through, beside the buttons that move it:
-        // it is part of working the deck rather than a setting about it.
-        // Neither switch on is ordinary speed, so there is no button for it.
-        let (boost, flash) = (app.tape_boost(), app.tape_flash());
-        let now = if flash {
-            Hurry::Fastload
-        } else if boost {
-            Hurry::Max
-        } else {
-            Hurry::Normal
-        };
-        ui.separator();
-        if theme::selectable(ui, now == Hurry::Max, "Max")
-            .on_hover_text("Run the machine as fast as it will go while the tape moves.")
-            .clicked()
-        {
-            app.set_hurry(if now == Hurry::Max {
-                Hurry::Normal
-            } else {
-                Hurry::Max
-            });
-        }
-        ui.add_enabled_ui(!app.on_zx81(), |ui| {
-            if theme::selectable(ui, now == Hurry::Fastload, "Fastload")
-                .on_hover_text(
-                    "Hand each block straight to the ROM's loader instead of playing \
-                     it, so a tape loads in the time it takes to copy it, and run the \
-                     machine flat out for the blocks that cannot be handed over. Games \
-                     with a loader of their own read the tape themselves: those load at \
-                     whatever speed the machine is running at.",
-                )
-                .clicked()
-            {
-                app.set_hurry(if now == Hurry::Fastload {
-                    Hurry::Normal
-                } else {
-                    Hurry::Fastload
-                });
-            }
-        });
-        // Which of the two things Fastload is doing, since they are not the
-        // same thing: a game with a loader of its own is read to, not handed
-        // to.
-        if flash {
-            let what = if app.loader_is_reading() {
-                "the game's own loader is reading"
-            } else {
-                "handing blocks over"
-            };
-            ui.label(egui::RichText::new(what).small().color(theme::DIM));
-        }
     });
 
+    speeds(app, ui);
     quality(app, ui);
 
     if let Some(dir) = action {
