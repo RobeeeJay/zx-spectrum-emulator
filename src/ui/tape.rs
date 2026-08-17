@@ -200,7 +200,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         // Neither switch on is ordinary speed, so there is no button for it.
         let (boost, flash) = (app.tape_boost(), app.tape_flash());
         let now = if flash {
-            Hurry::Ludicrous
+            Hurry::Fastload
         } else if boost {
             Hurry::Max
         } else {
@@ -218,7 +218,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
             });
         }
         ui.add_enabled_ui(!app.on_zx81(), |ui| {
-            if theme::selectable(ui, now == Hurry::Ludicrous, "Ludicrous")
+            if theme::selectable(ui, now == Hurry::Fastload, "Fastload")
                 .on_hover_text(
                     "Hand each block straight to the ROM's loader instead of playing \
                      it, so a tape loads in the time it takes to copy it, and run the \
@@ -228,14 +228,14 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
                 )
                 .clicked()
             {
-                app.set_hurry(if now == Hurry::Ludicrous {
+                app.set_hurry(if now == Hurry::Fastload {
                     Hurry::Normal
                 } else {
-                    Hurry::Ludicrous
+                    Hurry::Fastload
                 });
             }
         });
-        // Which of the two things Ludicrous is doing, since they are not the
+        // Which of the two things Fastload is doing, since they are not the
         // same thing: a game with a loader of its own is read to, not handed
         // to.
         if flash {

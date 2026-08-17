@@ -278,14 +278,14 @@ pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("Max", MAX_SPEED),
 ];
 
-/// How much emulated time Ludicrous speed will do in one host frame before it
+/// How much emulated time Fastload will do in one host frame before it
 /// stops to draw, in frames of the machine's own.
-const LUDICROUS_FRAMES: u32 = 24;
+const FASTLOAD_FRAMES: u32 = 24;
 
 /// And how much of the host's time it will spend doing it. The window has to
 /// go on answering while it works, so it stops to draw twenty times a second —
 /// which is still a hundred times the machine time Max speed manages.
-const LUDICROUS_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
+const FASTLOAD_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// How much of a hurry the tape is loaded in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -295,7 +295,7 @@ pub enum Hurry {
     /// The machine flat out while the tape moves.
     Max,
     /// And blocks handed to the ROM's loader rather than played at all.
-    Ludicrous,
+    Fastload,
 }
 
 /// How long a write stays marked before it has blended into the colour it
@@ -1934,7 +1934,7 @@ impl App {
     ///
     /// Told by the sampling loop it is sitting in, which nearly every loader
     /// shares — see [`crate::flashload::at_sampler`]. Blocks cannot be handed
-    /// to one of those, so what Ludicrous speed does for them is let the
+    /// to one of those, so what Fastload does for them is let the
     /// machine run.
     pub fn loader_is_reading(&self) -> bool {
         self.zx81.is_none() && crate::flashload::at_sampler(&self.spec)
@@ -1953,7 +1953,7 @@ impl App {
                 self.set_tape_flash(false);
                 *self.tape_boost_mut() = true;
             }
-            Hurry::Ludicrous => {
+            Hurry::Fastload => {
                 self.set_tape_flash(true);
                 *self.tape_boost_mut() = true;
             }
@@ -2200,7 +2200,7 @@ impl App {
 
         // Cap the work per host frame so "Max" speed cannot lock up the UI.
         //
-        // Ludicrous speed lifts the cap while a tape is moving, and keeps the
+        // Fastload lifts the cap while a tape is moving, and keeps the
         // window answering by watching the clock instead: a game with a loader
         // of its own reads the tape itself, and the only thing that gets it
         // loaded quickly is letting the machine run. Twenty-four frames of
@@ -2209,7 +2209,7 @@ impl App {
         // about one.
         // Right to the end of the tape, silence included. Max speed comes back
         // to normal for the pause the tape ends on, so that a loader finishing
-        // sounds and looks as it should; Ludicrous speed is a promise to get
+        // sounds and looks as it should; Fastload is a promise to get
         // it over with, and Out Run Europa ends with twenty-two seconds of
         // silence that nothing is waiting for.
         let flat_out = self.spec.bus.tape_flash && self.tape_ref().is_some_and(|tape| tape.playing);
@@ -2218,7 +2218,7 @@ impl App {
         // off — Max speed comes back to normal for the last pause — and the
         // budget it leaves is a fraction of a frame.
         let budget = if flat_out {
-            self.spec.bus.frame_t() * LUDICROUS_FRAMES
+            self.spec.bus.frame_t() * FASTLOAD_FRAMES
         } else {
             budget.min(self.spec.bus.frame_t() * 24)
         };
@@ -2229,7 +2229,7 @@ impl App {
         if flat_out {
             // However much is left of the budget, stop when the host frame is
             // spent: the picture and the buttons still have to happen.
-            while started.elapsed() < LUDICROUS_SLICE
+            while started.elapsed() < FASTLOAD_SLICE
                 && matches!(self.last_stop, Some(Stop::Budget))
                 && self.tape_ref().is_some_and(|tape| tape.playing)
             {

@@ -83,14 +83,14 @@ this block", not "error".
 
 ## Three speeds
 
-**Normal.** The pulses are played and the ROM counts them. 1,500 baud, so a
+**Normal**, which is neither switch on. The pulses are played and the ROM counts them. 1,500 baud, so a
 full tape is minutes.
 
 **Max speed.** The CPU is run as fast as the emulator will go while the tape
 moves. This shortens the wait; it cannot remove it, because the pulses still
 take as long as they take in machine time.
 
-**Ludicrous speed** (`src/flashload.rs`). The call to LD-BYTES is answered
+**Fastload** (`src/flashload.rs`). The call to LD-BYTES is answered
 rather than run: the next block with the flag byte asked for is copied into
 memory, the registers are left as the routine would have left them, and the
 return is taken there and then. Border Break loads in two emulated frames
@@ -112,7 +112,7 @@ Three things it has to get right, all of them found by loading a real tape:
 
 It only helps where the ROM is doing the loading. A game with a loader of its
 own is reading the port and counting its own pulses; nothing here can help it,
-which is why switching Ludicrous on switches Max speed on with it. Measured:
+which is why switching Fastload on switches Max speed on with it. Measured:
 Border Break 2,605 emulated frames → 2; Anabasis, which loads a small BASIC
 stub and then reads the rest itself, 18,722 → 18,149.
 
@@ -191,10 +191,10 @@ in closed form for a saving of a few instructions a bit, which is not worth it.
 
 ### What is done instead
 
-Ludicrous speed lifts the work cap while a tape is moving. Max speed is held to
+Fastload lifts the work cap while a tape is moving. Max speed is held to
 twenty-four frames of machine time a host frame so that fast-forward cannot
 lock up the window; with a tape loading, that cap is what a person is waiting
-on. Ludicrous keeps working until fifty milliseconds of the host's own time
+on. Fastload keeps working until fifty milliseconds of the host's own time
 have gone, then stops to draw, so the window still answers twenty times a
 second.
 
@@ -203,7 +203,7 @@ Measured on Daley Thompson's Decathlon, from `LOAD ""` to the tape stopping:
 | | host frames | what that is at 60 Hz |
 | --- | --- | --- |
 | Max speed | 615 | about ten seconds |
-| Ludicrous speed | 11 | about a fifth of a second |
+| Fastload | 11 | about a fifth of a second |
 
 And it loads the same game: comparing all of memory at the moment the tape
 stops, the loading screen's pixels and everything above the screen are
@@ -267,7 +267,7 @@ long tone in front.
 
 Host frames from `LOAD ""` to the tape stopping, played against hurried:
 
-| | played | Max speed | Ludicrous |
+| | played | Max speed | Fastload |
 | --- | --- | --- | --- |
 | Bubble Bobble | 21,475 | 1,074 | 41 |
 | Starglider | 19,529 | 977 | 36 |
@@ -288,7 +288,7 @@ it the other way about: a 244-byte turbo block carrying the loader, and then
 49,465 bytes as an *ordinary standard block*, read by the game rather than by
 the ROM, which is why nothing can be handed over for it.
 
-| | played | Max speed | Ludicrous |
+| | played | Max speed | Fastload |
 | --- | --- | --- | --- |
 | Skool Daze | 14,906 | 746 | 30 |
 | Contact Sam Cruise | 18,180 | 910 | 35 |
@@ -305,7 +305,7 @@ four blocks and then the levels behind it, each a four-byte block followed by
 its data and announced by a text block in the tape itself ("Level 1", "Level
 2", and so on).
 
-| | played | Max speed | Ludicrous |
+| | played | Max speed | Fastload |
 | --- | --- | --- | --- |
 | Chase H.Q. (48K) | over 36,000 | 2,223 | 78 |
 | Chase H.Q. (128K) | — | — | 91 |
@@ -477,18 +477,27 @@ Feeding a trailing tone into the deck by hand fixes it too, and gives the same
 table — $9000 reads `77 04 C3 B7 92 DD 7E 0A` either way — so the check is
 asking whether the line is alive rather than measuring what is on it.
 
-## Three speeds, one at a time
+## Two switches, one at a time
 
-Normal, Max and Ludicrous, as one control rather than two switches. They were
-never independent: hurrying a tape means running the machine flat out as well,
-since a game with a loader of its own has to be played to whatever else is
-happening, so a pair of toggles left "Ludicrous without Max" to be explained
-away. Ludicrous is not offered on a ZX81, whose ROM has no LD-BYTES to answer.
+Max and Fastload sit at the right-hand end of the transport row, beside the
+buttons that move the tape: how fast the tape is got through is part of working
+the deck. There is no Normal button — neither switch on is the tape's own
+speed — and pressing the switch that is on puts it away.
+
+They were three buttons on a row of their own with a Speed label in front of
+them. The row cost a line of a window whose height the block list is what is
+left of, and a button for "no" is a button for nothing.
+
+The two are not independent: hurrying a tape means running the machine flat out
+as well, since a game with a loader of its own has to be played to whatever
+else is happening, so picking Fastload brings Max with it rather than leaving
+"Fastload without Max" to be explained away. Fastload is not offered on a ZX81,
+whose ROM has no LD-BYTES to answer.
 
 ## The silence at the end counts too
 
 Max speed comes back to normal speed for the pause a tape ends on, so that a
-loader finishing sounds and looks as it should. That leaves Ludicrous speed
+loader finishing sounds and looks as it should. That left Fastload
 crawling through it, because the budget it was capping came from the speed
 setting, and with the boost off that budget is a fraction of a frame: Out Run
 Europa ends with twenty-two seconds of silence, and 1,264 of its 1,341 host
@@ -532,14 +541,14 @@ time rather than once a session.
 
 Gauntlet III is also a 128K release, and it fails on a 48K the way it would on
 a real one. It loads on a 128K at every speed: 12,072 host frames played, 711
-at Max speed, 140 at Ludicrous. Shadow Dancer does the same thing and asks for
-side B — 13,385 host frames played, 670 at Max, 26 at Ludicrous — and Out Run
+at Max speed, 140 at Fastload. Shadow Dancer does the same thing and asks for
+side B — 13,385 host frames played, 670 at Max, 26 at Fastload — and Out Run
 Europa asks to have the tape stopped, which is what its twenty-two seconds of
 trailing silence are for.
 
 ## The ZX81
 
 A ZX81 tape is a different format and the ZX81's ROM has no LD-BYTES, so
-Ludicrous speed is a Spectrum switch only and is disabled while a ZX81 is
+Fastload is a Spectrum switch only and is disabled while a ZX81 is
 selected. The ZX81 loads at about fifty bytes a second, which makes Max speed
 matter more there than anywhere else.

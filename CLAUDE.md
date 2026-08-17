@@ -194,7 +194,7 @@ asks for more input than it holds has come adrift, and the toolbar says so
 rather than letting the picture look authentic. `recordings/` is gitignored for
 the same reason as `tapes/`.
 
-**Ludicrous speed answers the ROM instead of playing to it.** A tape loads at
+**Fastload answers the ROM instead of playing to it.** A tape loads at
 1,500 baud however fast the machine is run — the pulses take as long as they
 take — so Max speed shortens the wait and cannot remove it. `src/flashload.rs`
 removes it: when the machine calls LD-BYTES at $0556, the next block with the

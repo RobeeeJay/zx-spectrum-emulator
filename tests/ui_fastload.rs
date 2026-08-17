@@ -53,11 +53,11 @@ fn the_speeds_are_one_at_a_time_and_switch_off_again() {
 
     // Straight to the fastest, so that bringing the machine's own speed with
     // it is this button's doing and not another's.
-    h.get_by_label("Ludicrous").click();
+    h.get_by_label("Fastload").click();
     h.run_steps(2);
     assert!(
         h.state().tape_flash() && h.state().tape_boost(),
-        "Ludicrous should do both: a game with its own loader still has to be \
+        "Fastload should do both: a game with its own loader still has to be \
          played to"
     );
 
@@ -92,9 +92,9 @@ fn the_speeds_sit_with_the_transport() {
             .y0 as f32
     };
 
-    // Anchored on Ludicrous: the main window's speed dropdown has a "Max" of
+    // Anchored on Fastload: the main window's speed dropdown has a "Max" of
     // its own, and the tape window's is not the only one in the tree.
-    let row = top("Ludicrous");
+    let row = top("Fastload");
     for label in ["|◀ Start", "▶ Play", "■ Stop", "▶▶ Forward"] {
         assert!(
             (top(label) - row).abs() < 0.5,
@@ -112,7 +112,7 @@ fn a_zx81_is_not_offered_it() {
     h.run_steps(3);
 
     assert!(
-        h.get_by_label("Ludicrous").accesskit_node().is_disabled(),
+        h.get_by_label("Fastload").accesskit_node().is_disabled(),
         "a ZX81 has no such routine to hand blocks to"
     );
 }

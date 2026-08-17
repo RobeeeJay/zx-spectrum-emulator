@@ -8,7 +8,7 @@
 //!
 //! None of their blocks can be handed over the way the ROM's can: they read
 //! the tape themselves, and some of them decrypt every byte as it arrives.
-//! What Ludicrous speed does for them is let the machine run — the tape still
+//! What Fastload does for them is let the machine run — the tape still
 //! plays, but the emulator is not held to twenty-four frames of work a host
 //! frame while it does.
 
@@ -201,7 +201,7 @@ fn a_speedlock_tape_takes_a_fraction_of_the_host_frames() {
         return;
     };
 
-    let run = |ludicrous: bool| -> (u32, std::time::Duration) {
+    let run = |fastload: bool| -> (u32, std::time::Duration) {
         let roms = Roms {
             rom48: Some(rom.clone()),
             ..Roms::default()
@@ -215,7 +215,7 @@ fn a_speedlock_tape_takes_a_fraction_of_the_host_frames() {
         app.spec.reset();
         app.running = true;
         app.spec.bus.tape_boost = true;
-        app.spec.bus.tape_flash = ludicrous;
+        app.spec.bus.tape_flash = fastload;
         start_loading(&mut app.spec, tape.clone());
         let mut host = 0u32;
         let mut worst = std::time::Duration::ZERO;
@@ -295,7 +295,7 @@ fn seven_twenty_degrees_loads() {
 /// The silence at the end of a tape is got through too.
 ///
 /// Max speed comes back to normal for the pause a tape ends on, so that a
-/// loader finishing sounds and looks as it should. Ludicrous speed is a
+/// loader finishing sounds and looks as it should. Fastload is a
 /// promise to get it over with, and Out Run Europa ends with twenty-two
 /// seconds of it — which used to be twenty-two seconds of watching a stopped
 /// picture, a thousand host frames of doing nothing at all.
@@ -316,7 +316,7 @@ fn the_last_pause_is_hurried_through_as_well() {
         }],
     );
 
-    let run = |ludicrous: bool| -> u32 {
+    let run = |fastload: bool| -> u32 {
         let roms = Roms {
             rom48: Some(rom.clone()),
             ..Roms::default()
@@ -335,7 +335,7 @@ fn the_last_pause_is_hurried_through_as_well() {
         app.spec.reset();
         app.running = true;
         app.spec.bus.tape_boost = true;
-        app.spec.bus.tape_flash = ludicrous;
+        app.spec.bus.tape_flash = fastload;
         for _ in 0..60 {
             app.advance(1.0 / 60.0);
         }
