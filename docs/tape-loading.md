@@ -325,13 +325,12 @@ sine waves read off the T-state clock and the grain and hiss are hashed from
 it, so a given moment always gets the same treatment and a load can be
 repeated.
 
-**Wow** and **flutter** scale every pulse, and have a slider each because a
-deck can have either. Wow is the reel turning out of true — 0.037 Hz with a
+**Wobble** is the motor, and wow and flutter scale every pulse. They have a
+slider each because a deck can have either. Wow is the reel turning out of true — 0.037 Hz with a
 slower drift at 0.012 Hz under it, so a period of tens of seconds — and flutter
 is the capstan and the tape's own stiffness, at 1.4 Hz with a little at 6.3 Hz
 over it. Each goes to five per cent of the right speed, which is already a deck
-nobody would keep. There is no switch in front of them: two sliders at nothing
-is a motor that is behaving.
+nobody would keep.
 
 **Alignment** is a head out of square with the tape. It reads the top of the
 track a moment before the bottom, and the two cancel each other the shorter the
@@ -427,10 +426,10 @@ tape is only paused. It used to hold the last block's reader level right across
 the screen — a line at the top or the bottom that meant nothing, since a deck
 that is not moving is not reading anything.
 
-The tape window's default height went up with all this, to 960: the block list
-is what is left after the cassette, the five rows of controls and the scope,
-and the extra rows had taken the last of it. In the test harness that showed up
-as the list's clip rectangle coming out inside out, and no row could be
+The tape window's default height went up with all this, to 900: the block list
+is what is left after the cassette, the rows of controls and the scope, and at
+780 the quality rows had taken the last of it. In the test harness that showed
+up as the list's clip rectangle coming out inside out, and no row could be
 hovered at all.
 
 Both ends of every pulse matter: with one sample apiece the corners have
@@ -485,12 +484,15 @@ out for the ones that cannot be handed over, so a pair left "Fastload without
 Max CPU" to be explained away. Fastload is not offered on a ZX81, whose ROM has
 no LD-BYTES to answer.
 
-The top of the window is five labelled rows, in this order: **Playback** —
-start, rewind, play, stop, forward; **Speed** — the three above; **Quality** —
-wow and flutter; **Alignment** — where the corner sits and how far it wanders;
-**Noise** — how loud the hiss is. A row each rather than sharing: the window is
-a fixed width, and a row that wraps puts a slider under the switch it has
-nothing to do with.
+The top of the window is two labelled rows — **Playback**, which is start,
+rewind, play, stop and forward, and **Speed**, which is the three above — and
+five when the **Quality** switch on the speed row is on: **Wobble** with the
+wow and flutter sliders, **Alignment** with where the corner sits and how far
+it wanders, and **Noise** with how loud the hiss is. A row each rather than
+sharing: the window is a fixed width, and a row that wraps puts a slider under
+the switch it has nothing to do with. They are put away by default because they
+are three rows of a window the block list is at the bottom of, and most of the
+time a deck that behaves is what is wanted.
 
 ## The silence at the end counts too
 

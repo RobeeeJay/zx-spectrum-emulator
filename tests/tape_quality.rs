@@ -71,6 +71,7 @@ fn intervals_from(tape: &mut Tape, from: u64, to: u64) -> Vec<u64> {
 #[test]
 fn a_wavering_motor_wanders_slowly() {
     let wobbly = Quality {
+        wobble: true,
         wow: 0.05,
         ..Quality::default()
     };
@@ -231,6 +232,7 @@ fn the_corner_comes_down_and_wanders() {
 #[test]
 fn a_bad_deck_is_bad_in_the_same_way_every_time() {
     let quality = Quality {
+        wobble: true,
         wow: 0.04,
         flutter: 0.02,
         alignment: true,
@@ -559,10 +561,12 @@ fn wow_wanders_and_flutter_warbles() {
     };
 
     let wow_only = Quality {
+        wobble: true,
         wow: 0.05,
         ..Quality::default()
     };
     let flutter_only = Quality {
+        wobble: true,
         flutter: 0.05,
         ..Quality::default()
     };
@@ -587,5 +591,26 @@ fn wow_wanders_and_flutter_warbles() {
     assert!(
         slow > quick,
         "and wow the slow one: {slow:.0}T against {quick:.0}T over seconds"
+    );
+}
+
+/// The motor's switch is a switch: with it off the sliders are wherever they
+/// were left and the tape still plays at the speed it was recorded at.
+#[test]
+fn a_motor_with_its_switch_off_runs_true() {
+    let mut tape = tone_tape(Quality {
+        wobble: false,
+        wow: 0.05,
+        flutter: 0.05,
+        ..Quality::default()
+    });
+    let gaps = intervals(&mut tape, CPU_HZ as u64);
+    let odd = gaps.iter().filter(|g| **g != 2168).count();
+    assert_eq!(
+        odd,
+        0,
+        "every pulse should still be 2168 T-states: {} of {} are not",
+        odd,
+        gaps.len()
     );
 }

@@ -71,17 +71,23 @@ fn the_three_speeds_are_one_at_a_time() {
     );
 }
 
-/// The top of the window is five rows, each with its own label and nothing of
-/// anybody else's on it: what the deck is doing, how fast it is being got
-/// through, and then one row for each of the three things a real deck does
-/// wrong.
+/// The top of the window is two rows, and five with the deck's failings on
+/// show: what the deck is doing, how fast it is being got through, and then
+/// one row for each of the three things a real deck does wrong.
 ///
 /// The geometry alone cannot say this — the window is narrower than any two of
 /// the rows together, so they would stack anyway — so what is asked is that
 /// each label is on a line with the things that belong to it, in order.
 #[test]
 fn the_top_of_the_window_is_five_labelled_rows() {
-    let h = harness();
+    let mut h = harness();
+    assert!(
+        h.query_by_label("Alignment").is_none(),
+        "the deck's failings should be put away until they are asked for"
+    );
+    h.get_by_label("Quality").click();
+    h.run_steps(2);
+    let h = h;
     let top = |label: &str| -> f32 {
         h.get_by_label(label)
             .accesskit_node()
@@ -109,16 +115,15 @@ fn the_top_of_the_window_is_five_labelled_rows() {
     let speed = top("Fastload");
     let alignment = top("Alignment");
     let noise = top("Noise");
-    // The wow and flutter row has no switch on it, so it is found by its own
-    // label: the one between the speeds and the alignment.
-    let quality = rows_of("QUALITY")
-        .into_iter()
-        .find(|y| *y > speed && *y < alignment)
-        .expect("the wow and flutter row should carry the Quality label");
+    let quality = top("Wobble");
 
     assert!(
         labelled("PLAYBACK", playback) && labelled("SPEED", speed),
         "the transport and the speeds should each have their own label"
+    );
+    assert!(
+        (top("Quality") - speed).abs() < 0.5,
+        "and the switch that shows the failings belongs with the speeds"
     );
     for label in ["▶▶ Forward", "■ Stop"] {
         assert!(
@@ -161,10 +166,12 @@ fn a_zx81_is_not_offered_it() {
 fn the_quality_row_sets_the_decks_failings() {
     let mut h = harness();
     assert!(!h.state().quality.alignment, "it should start behaving");
-    assert!(
-        h.query_by_label("Speed").is_none(),
-        "the motor's switch is gone: its sliders say it"
-    );
+    h.get_by_label("Quality").click();
+    h.run_steps(2);
+
+    h.get_by_label("Wobble").click();
+    h.run_steps(2);
+    assert!(h.state().quality.wobble, "the Wobble switch did nothing");
 
     h.get_by_label("Alignment").click();
     h.run_steps(2);

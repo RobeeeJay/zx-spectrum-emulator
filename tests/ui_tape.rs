@@ -707,6 +707,9 @@ fn the_noise_switch_tells_the_deck_to_hiss() {
     h.run_steps(2);
     assert!(!h.state().quality.noise, "it should start quiet");
 
+    // The deck's failings are put away until they are asked for.
+    h.get_by_label("Quality").click();
+    h.run_steps(2);
     h.get_by_label("Noise").click();
     h.run_steps(2);
     assert!(h.state().quality.noise, "the Noise switch did nothing");

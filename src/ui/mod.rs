@@ -3057,9 +3057,10 @@ impl App {
                     ViewportBuilder::default().with_title("Tape"),
                     [300.0, 120.0],
                     // Tall enough that the block list still has rows in it
-                    // under everything above it: the cassette, the five rows
-                    // of controls and the scope.
-                    [720.0, 960.0],
+                    // under everything above it: the cassette, the two rows of
+                    // controls — five with the deck's failings on show — and
+                    // the scope.
+                    [720.0, 900.0],
                 ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -3067,7 +3068,7 @@ impl App {
                     }
                     let ctx = ui.ctx().clone();
                     self.fix_width(&ctx, cassette::WINDOW_W);
-                    if self.place_window("tape", &ctx, [260.0, 120.0], [cassette::WINDOW_W, 940.0])
+                    if self.place_window("tape", &ctx, [260.0, 120.0], [cassette::WINDOW_W, 880.0])
                     {
                         // Built around the cassette: the height is the user's
                         // to drag, the width is not.

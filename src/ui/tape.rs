@@ -30,6 +30,10 @@ pub struct TapeWindowState {
     /// The block the list last asked to scroll into view, for tests and for
     /// anyone wondering why the list jumped.
     pub scroll_requested_for: Option<usize>,
+    /// Whether the deck's failings are on show. They are three rows of a
+    /// window whose height the block list is what is left of, and most of the
+    /// time a deck that behaves is what is wanted.
+    pub show_quality: bool,
 }
 
 impl Default for TapeWindowState {
@@ -43,6 +47,7 @@ impl Default for TapeWindowState {
             right_spin: 0.0,
             spun_at: 0.0,
             scroll_requested_for: None,
+            show_quality: false,
         }
     }
 }
@@ -115,6 +120,13 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
                 app.set_hurry(Hurry::Fastload);
             }
         });
+        ui.separator();
+        theme::toggle(ui, &mut app.tape.show_quality, "Quality").on_hover_text(
+            "Show what the deck does wrong: the motor's wobble, the head's \
+             alignment and the tape's hiss. They are three rows of a window \
+             the block list is at the bottom of, so they are put away when \
+             nobody is using them.",
+        );
         // Which of the two things Fastload is doing, since they are not the
         // same thing: a game with a loader of its own is read to, not handed
         // to.
@@ -135,28 +147,33 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
 /// A row each. The window is a fixed width, and a row that wraps puts a slider
 /// under the switch it has nothing to do with.
 fn quality(app: &mut App, ui: &mut egui::Ui) {
+    if !app.tape.show_quality {
+        return;
+    }
+
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(theme::ROW_H);
         ui.spacing_mut().slider_width = 110.0;
-        theme::group_label(ui, "Quality");
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut app.quality.wow, 0.0..=0.05)
-                .custom_formatter(|v, _| format!("wow {:.1}%", v * 100.0)),
-        )
-        .on_hover_text(
-            "Wow: the reel turning out of true, over seconds. Loaders measure \
-             the tape against their own clock, so enough of it and they lose \
-             it.",
+        theme::toggle(ui, &mut app.quality.wobble, "Wobble").on_hover_text(
+            "Let the motor waver, as a real one does. Loaders measure the tape \
+             against their own clock, so enough of it and they lose it.",
         );
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut app.quality.flutter, 0.0..=0.05)
-                .custom_formatter(|v, _| format!("flutter {:.1}%", v * 100.0)),
-        )
-        .on_hover_text(
-            "Flutter: the capstan and the tape's own stiffness, over a fraction of a second",
-        );
+        ui.add_enabled_ui(app.quality.wobble, |ui| {
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.wow, 0.0..=0.05)
+                    .custom_formatter(|v, _| format!("wow {:.1}%", v * 100.0)),
+            )
+            .on_hover_text("Wow: the reel turning out of true, over seconds");
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.flutter, 0.0..=0.05)
+                    .custom_formatter(|v, _| format!("flutter {:.1}%", v * 100.0)),
+            )
+            .on_hover_text(
+                "Flutter: the capstan and the tape's own stiffness, over a fraction of a second",
+            );
+        });
     });
 
     ui.horizontal_wrapped(|ui| {
