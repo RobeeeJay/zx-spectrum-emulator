@@ -193,7 +193,9 @@ fn block_bytes(block: Option<&Block>) -> Option<&[u8]> {
 fn seek_past(spec: &mut Spectrum, block: usize) {
     let now = spec.bus.total_t();
     if let Some(tape) = spec.bus.tape.as_mut() {
-        tape.seek(block + 1);
+        // To the silence behind the block, not past it: that silence is what
+        // the program does its work in before the next block starts.
+        tape.seek_to_pause_after(block);
         // Playing from the end rewinds — which, having just handed over the
         // last block of the tape, started the whole thing loading again.
         if tape.playing && !tape.finished() {

@@ -116,6 +116,15 @@ which is why switching Ludicrous on switches Max speed on with it. Measured:
 Border Break 2,605 emulated frames → 2; Anabasis, which loads a small BASIC
 stub and then reads the rest itself, 18,722 → 18,149.
 
+**The silence behind a block belongs to the block**, and is left on the tape
+when the bytes are handed over. That pause is what the program does its work in
+before the next block starts — loading its own loader, say — and taking it away
+breaks games that need it. Cobra's Alkatraz loader has under two seconds of
+pilot to catch and never caught it; with the pause left in it finds all 256 of
+the pilot pulses it looks for, exactly as it does when the tape is played. So a
+flash-loaded tape is not instant: it is the pauses plus a memcpy, about a second
+for Border Break against fifty-two.
+
 **A stopped deck is a stopped deck.** Blocks are only handed over while the
 tape is running: `LOAD ""` with the deck paused waits for Play, as it should.
 Without that check the whole tape ran through the moment the ROM asked for its
@@ -213,6 +222,33 @@ accurately and run the CPU fast. Two things make that work:
 - **The floating bus** giving back what the ULA has on it. Sidewize will not
   even start without it: it looks for the beam by reading port $40FF and never
   enables interrupts until the byte it wants comes back.
+
+## Alkatraz, and where Cobra and 720 Degrees stand
+
+Alkatraz — Cobra, 720 Degrees — uses the same sampling core as everything else,
+at $F031 in Cobra, but with no `LD A,$7F` before the `IN`, so the port's high
+byte is whatever the accumulator held. Its own reading is at $EFA4: eight turns
+of `CALL $F021` with `LD B,$D7` before each and `LD A,$E4 / CP B` after, so a
+pulse pair either side of about 13 turns of the loop is a nought or a one. It
+finds its block by measuring 256 pilot pulses ($EF6E), each of which has to
+come out above $C6 counting up from $9C.
+
+What is known to work: the deck's pulses are right (1130 and 565 T-states for
+Cobra, 1067 and 626 for 720, against the block's own figures); the sampling
+loop costs 59 T-states a turn as its instructions say it should; the pilot
+search passes all 256 of its measurements; and the whole first turbo block is
+assembled byte for byte as the file holds it — 4,051 bytes of 4,052, the last
+being its checksum. Both of the loader's checks on that block pass: the 16-bit
+sum at $EF4C comes out $DBFD, which is what it wants.
+
+**Neither game loads.** After that block the loader asks for another 4,049
+bytes without searching for a pilot again, and the tape has an eleven-second
+pause there, so it times out with one byte left to read and lands on $F067 —
+which wipes itself, plays 224 beeps through the ROM's beeper at $03B5, and
+resets. Taking the pauses out of the tape by hand gets Cobra further, into its
+own code at $FB1B rather than back to BASIC, so the pause is implicated; but
+inventing a tape without the silence the dump records is not a fix, and what
+the loader expects to find in that gap is not yet known.
 
 ## The EAR line is never dead
 

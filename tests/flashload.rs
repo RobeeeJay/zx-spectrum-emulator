@@ -91,8 +91,9 @@ fn a_block_with_the_wrong_flag_is_stepped_over() {
     assert_eq!(spec.cpu.f & 0x01, 1, "and reported success");
     assert_eq!(
         spec.bus.tape.as_ref().unwrap().block,
-        2,
-        "the deck should be on the block after the one handed over"
+        1,
+        "the deck should be on the block it handed over, playing the pause \
+         behind it, with the header before it stepped past"
     );
 }
 
@@ -172,6 +173,49 @@ fn nothing_is_handed_over_unless_it_is_switched_on() {
     assert_ne!(
         spec.cpu.pc, 0x1234,
         "the machine should be running the routine, not past it"
+    );
+}
+
+/// The silence behind a block belongs to the block.
+///
+/// A block hands the machine its bytes and then a pause, and that pause is
+/// what the program does its work in — starting the game's own loader, say —
+/// before the next block begins. Handing the bytes over and jumping straight
+/// to the next block's pilot takes that time away. Cobra's loader has under
+/// two seconds of pilot to catch and never caught it: with the pause left in
+/// it finds all 256 of the pilot pulses it wants, exactly as it does when the
+/// tape is played.
+#[test]
+fn the_pause_behind_a_block_is_left_on_the_tape() {
+    let mut spec = machine(vec![block(0xFF, &[1, 2, 3, 4]), block(0xFF, &[5, 6, 7, 8])]);
+    call_loader(&mut spec, 0xFF, 0x8000, 4);
+
+    let tape = spec.bus.tape.as_ref().expect("a tape");
+    assert_eq!(
+        tape.block, 0,
+        "the deck should still be on the block it handed over, playing its pause"
+    );
+    assert!(
+        tape.playing,
+        "and still running: the pause is part of the tape"
+    );
+
+    // And the next block does not start until that pause has played. A
+    // thousand milliseconds is about three and a half million T-states.
+    let started = spec.bus.total_t();
+    while spec.bus.tape.as_ref().unwrap().block == 0 {
+        spec.bus.tstates += 1000;
+        let now = spec.bus.total_t();
+        spec.bus.tape.as_mut().unwrap().level_at(now);
+        assert!(
+            now - started < 10_000_000,
+            "the pause should end eventually"
+        );
+    }
+    let waited = spec.bus.total_t() - started;
+    assert!(
+        waited > 3_000_000,
+        "the pause behind the block should have played: only {waited} T-states passed"
     );
 }
 
@@ -346,9 +390,12 @@ fn a_real_tape_loads_in_a_frame_or_two() {
     let (slow_frames, slow_pc, slow_drawn) = run(false, tape.clone());
     let (fast_frames, fast_pc, fast_drawn) = run(true, tape);
 
+    // Not instant: the pauses between the blocks are real tape and are still
+    // played, because a loader that needs that gap to get going has to have
+    // it. What goes is the four minutes of pulses.
     assert!(
-        fast_frames < 10,
-        "the tape should be over in a frame or two, not {fast_frames}"
+        fast_frames < 100,
+        "the tape should be over in a second or so, not {fast_frames} frames"
     );
     assert!(
         slow_frames > 1000,

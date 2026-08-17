@@ -1013,6 +1013,36 @@ impl Tape {
         self.pulses = 0;
     }
 
+    /// Position the deck at the silence that ends a block, as though it had
+    /// just been played.
+    ///
+    /// What a block hands the machine is not only its bytes: the pause behind
+    /// them is what gives the program time to get going before the next block
+    /// starts. Handing the bytes over and jumping straight to the next block's
+    /// pilot takes that time away, and a loader that needs it — Cobra's has
+    /// under two seconds of pilot to catch — never gets started.
+    pub fn seek_to_pause_after(&mut self, block: usize) {
+        self.pause_span = None;
+        self.level = false;
+        if block >= self.blocks.len() {
+            self.block = self.blocks.len();
+            self.phase = Phase::Finished;
+            return;
+        }
+        self.block = block;
+        let ms = match &self.blocks[block] {
+            Block::Standard { pause_ms, .. } => *pause_ms,
+            Block::Turbo { pause_ms, .. } => *pause_ms,
+            Block::PureData { pause_ms, .. } => *pause_ms,
+            _ => 0,
+        };
+        self.phase = if ms == 0 {
+            Phase::Next
+        } else {
+            Phase::BlockPause { ms }
+        };
+    }
+
     /// Jump straight to a block, e.g. from the tape window.
     pub fn seek(&mut self, block: usize) {
         self.pause_span = None;
