@@ -33,6 +33,17 @@ logo is drawn in code rather than decoded from a file.
 **Prose:** plain, no salesmanship, British spelling. Say what happened,
 including what did not work.
 
+## What is written down elsewhere
+
+Two files hold what has been learned about the hardware, so this one can stay a
+set of decisions rather than a manual:
+
+- [`docs/timing.md`](docs/timing.md) — T-states, contention, the floating bus,
+  snow, the painted frame and how recordings are paced. What was measured
+  against what, and what is still open.
+- [`docs/tape-loading.md`](docs/tape-loading.md) — the tape formats and their
+  traps, the ROM loader's contract, and the three loading speeds.
+
 ## Boundaries
 
 - `roms/` and `tapes/` are gitignored: the images and games are still under
