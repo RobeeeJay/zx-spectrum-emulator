@@ -324,31 +324,45 @@ Two switches, three sliders, and nothing random about any of it: both wobbles
 are sine waves read off the T-state clock, so a given moment always gets the
 same treatment and a load can be repeated.
 
-**Speed** is wow and flutter — a slow waver over a turn of the capstan at 2.7
-Hz with a quicker one at 31 Hz over the top of it — scaling every pulse. The
-slider is how far it wanders, as a fraction of the right speed.
+**Speed** is wow and flutter, scaling every pulse: a waver at 0.11 Hz with a
+slower drift at 0.037 Hz under it and a little flutter at 4.3 Hz over the top.
+Those are periods of seconds and tens of seconds, which is what a tape does —
+the first version wavered at 2.7 Hz and sounded like a machine rather than a
+cassette. The slider is how far it wanders, as a fraction of the right speed.
 
-**Alignment** is a head out of square with the tape. It then reads the top of
-the track a moment before the bottom, and the two cancel each other the shorter
-the wavelength gets: a low-pass filter whose corner comes down the further out
-of square it is. Modelled as a first-order corner — the amplitude falling off
-as `1/√(1+(f/fc)²)`, a pulse with less than half of it left being one the
-reader cannot see at all, and what survives held up by the filter's own group
-delay, which is longer for a short pulse than a long one, so the gaps between
-edges shift even where nothing has been swallowed. The corner runs from 30 kHz
-square to 600 Hz at the far end of the slider, and the second slider wanders it
-up and down as the tape runs.
+**Alignment** is a head out of square with the tape. It reads the top of the
+track a moment before the bottom, and the two cancel each other the shorter the
+wavelength gets: a low-pass whose corner comes down the further out of square
+it is, from 30 kHz square to 300 Hz at the end of the slider. The second slider
+wanders that corner up and down, slowly — a head creeps, it does not shake.
 
-What that does is take the quick loaders first, which is what a misaligned deck
-did to a shelf of tapes:
+It is the filter itself rather than a rule about it. A one-pole corner charges
+towards the level the tape is holding, `y = u + (y₀ - u)e^(-t/τ)`, and the
+reader flips when that gets past its threshold. So the roll-off is gradual in
+the way a real one is:
+
+| corner | short pulses (400 T) | long ones (800 T) | edges lost |
+| --- | --- | --- | --- |
+| square | 400 | 800 | none |
+| 3.8 kHz | 395 | 805 | none |
+| 2.4 kHz | 385 | 815 | none |
+| 1.7 kHz | 375 | 825 | none |
+| 1.3 kHz | — | 1200 | every short one |
+
+The edges creep first — short pulses squeezed, long ones stretched, because the
+filter holds a short pulse up more than a long one — and only when the swing no
+longer reaches the reader's threshold do they start going missing. A reader
+needs that threshold or it would chatter on noise, and it is what decides that
+a rolled-off signal has become too small to read.
+
+What that does to real tapes is take the quick loaders first, which is what a
+misaligned deck did to a shelf of them:
 
 | corner | Skool Daze (bits at 422 T, 4.1 kHz) | Chase H.Q. (bits at 735 T, 2.4 kHz) |
 | --- | --- | --- |
-| 30 kHz (square) | loads | loads |
-| 9.3 kHz | loads | loads |
 | 4.2 kHz | loads | loads |
-| 2.9 kHz | loads | loads |
-| 1.9 kHz | **fails** | loads |
+| 1.9 kHz | loads | loads |
+| 1.2 kHz | **fails** | loads |
 
 And the motor, measured on Skool Daze: it loads with the speed wavering 2, 5
 and 10 per cent, and fails at 20. What breaks a loader there is the total

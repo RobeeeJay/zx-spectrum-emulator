@@ -45,79 +45,141 @@ fn a_steady_deck_puts_out_a_steady_tone() {
     assert_eq!(odd, 0, "every pulse should be 2168 T-states: {gaps:?}");
 }
 
-/// A wavering motor stretches and squeezes the tone, and does it slowly: the
-/// pulse either side of one is nearly the same length, and the pulse a second
-/// away is not.
+/// The intervals between edges over a window of the tape.
+fn intervals_from(tape: &mut Tape, from: u64, to: u64) -> Vec<u64> {
+    let mut out = Vec::new();
+    let mut level = tape.level_at(0);
+    let mut last = 0u64;
+    let mut t = 0u64;
+    while t < to {
+        let now = tape.level_at(t);
+        if now != level {
+            if last > 0 && t >= from {
+                out.push(t - last);
+            }
+            last = t;
+            level = now;
+        }
+        t += 4;
+    }
+    out
+}
+
+/// The motor wanders, and does it slowly: a tape wavers over seconds, not
+/// milliseconds. Pulses a moment apart are much the same length; pulses
+/// seconds apart are not.
 #[test]
-fn a_wavering_motor_stretches_the_tone() {
-    let mut tape = tone_tape(Quality {
+fn a_wavering_motor_wanders_slowly() {
+    let wobbly = Quality {
         speed: true,
         speed_wobble: 0.1,
         ..Quality::default()
-    });
-    let gaps = intervals(&mut tape, CPU_HZ as u64);
+    };
+    let second = CPU_HZ as u64;
 
-    let shortest = *gaps.iter().min().expect("some pulses");
-    let longest = *gaps.iter().max().expect("some pulses");
+    let mean_at = |at: u64| -> f64 {
+        let mut tape = tone_tape(wobbly);
+        let gaps = intervals_from(&mut tape, at, at + second / 20);
+        gaps.iter().sum::<u64>() as f64 / gaps.len().max(1) as f64
+    };
+    let means: Vec<f64> = (0..7).map(|s| mean_at(s * second)).collect();
+    let low = means.iter().cloned().fold(f64::MAX, f64::min);
+    let high = means.iter().cloned().fold(0.0, f64::max);
     assert!(
-        shortest < 2100 && longest > 2240,
-        "ten per cent either way of 2168 should show: {shortest} to {longest}"
+        high - low > 100.0,
+        "the motor should wander over seconds: {means:?}"
     );
-    // Neighbouring pulses stay close: this is a motor, not noise.
-    let jumps = gaps.windows(2).filter(|w| w[0].abs_diff(w[1]) > 60).count();
+
+    let mut tape = tone_tape(wobbly);
+    let gaps = intervals_from(&mut tape, 0, second / 20);
+    let jumpy = gaps.windows(2).filter(|w| w[0].abs_diff(w[1]) > 8).count();
     assert!(
-        jumps * 20 < gaps.len(),
-        "the speed should wander rather than jump: {jumps} jumps in {}",
+        jumpy * 20 < gaps.len(),
+        "and waver rather than shake: {jumpy} jumps in {} pulses",
         gaps.len()
     );
 }
 
-/// A tape of one tone at `len` T-states a pulse, and how many edges come out
-/// of a stretch of it.
-fn edges_at(len: u16, quality: Quality, until: u64) -> usize {
-    let mut tape = Tape::from_blocks("t".into(), vec![Block::PureTone { len, count: 20_000 }]);
-    tape.quality = quality;
-    tape.play(0);
-    intervals(&mut tape, until).len()
-}
-
-/// A head out of square is a low-pass filter, and what it takes first is the
-/// quick loaders: at a corner between the two, a tone at ROM speed comes
-/// through and one at turbo speed does not.
+/// A head out of square rolls the signal off rather than cutting it. The edges
+/// creep first — short pulses squeezed, long ones stretched, none lost — and
+/// only when the swing stops reaching the reader's threshold do they start
+/// going missing.
 #[test]
-fn a_head_out_of_square_swallows_the_quick_pulses_first() {
-    // Far enough out that the corner sits near 2 kHz. A pilot pulse of 2168
-    // T-states is half a cycle of 807 Hz and comes through; a turbo bit of
-    // 400 is half a cycle of 4,375 Hz and does not.
-    let out = Quality {
+fn a_head_out_of_square_rolls_off_rather_than_cutting() {
+    let mixed = |quality: Quality| -> Vec<u64> {
+        let mut tape = Tape::from_blocks(
+            "t".into(),
+            vec![Block::PureData {
+                data: vec![0b1010_1010; 400],
+                zero: 400,
+                one: 800,
+                used_bits: 8,
+                pause_ms: 0,
+            }],
+        );
+        tape.quality = quality;
+        tape.play(0);
+        intervals(&mut tape, CPU_HZ as u64 / 4)
+    };
+    let mean_of = |gaps: &[u64], short: bool| -> f64 {
+        let picked: Vec<u64> = gaps
+            .iter()
+            .copied()
+            .filter(|g| (*g < 600) == short)
+            .collect();
+        picked.iter().sum::<u64>() as f64 / picked.len().max(1) as f64
+    };
+
+    let square = mixed(Quality::default());
+    assert_eq!(
+        mean_of(&square, true),
+        400.0,
+        "a square head changes nothing"
+    );
+    assert_eq!(mean_of(&square, false), 800.0);
+
+    let mut squeezed = Vec::new();
+    for offset in [0.45f32, 0.55, 0.62] {
+        let gaps = mixed(Quality {
+            alignment: true,
+            alignment_offset: offset,
+            ..Quality::default()
+        });
+        let short_count = |g: &[u64]| g.iter().filter(|g| **g < 600).count();
+        assert_eq!(
+            short_count(&gaps),
+            short_count(&square),
+            "no quick pulse should be lost yet at this corner"
+        );
+        let (short, long) = (mean_of(&gaps, true), mean_of(&gaps, false));
+        assert!(
+            short < 400.0 && long > 800.0,
+            "short pulses should be squeezed and long ones stretched: \
+             {short:.0} and {long:.0}"
+        );
+        squeezed.push(short);
+    }
+    assert!(
+        squeezed[0] > squeezed[2],
+        "and further out should squeeze them further: {squeezed:?}"
+    );
+
+    let gone = mixed(Quality {
         alignment: true,
         alignment_offset: 0.7,
         ..Quality::default()
-    };
-    let corner = out.cutoff(0);
+    });
     assert!(
-        (1500.0..2500.0).contains(&corner),
-        "the corner should sit between the two speeds, not {corner:.0} Hz"
-    );
-
-    let tenth = zx_rustrum::machine::CPU_HZ as u64 / 10;
-    let rom_speed = edges_at(2168, out, tenth);
-    let turbo = edges_at(400, out, tenth);
-    let turbo_square = edges_at(400, Quality::default(), tenth);
-
-    assert!(
-        rom_speed > 130,
-        "a ROM-speed tone should still come through: {rom_speed} edges"
-    );
-    assert!(
-        turbo * 4 < turbo_square,
-        "and a turbo one should not: {turbo} edges against {turbo_square} with \
-         the head square"
+        gone.len() * 3 < square.len() * 2,
+        "by this far out the quick pulses should be going missing: {} edges \
+         against {}",
+        gone.len(),
+        square.len()
     );
 }
 
-/// The corner comes down as the head goes further out, and wanders when it is
-/// asked to.
+/// The corner comes down as the head goes further out, and wanders — slowly,
+/// as a head creeps rather than shakes.
 #[test]
 fn the_corner_comes_down_and_wanders() {
     let square = Quality {
@@ -144,18 +206,19 @@ fn the_corner_comes_down_and_wanders() {
         alignment_wobble: 0.3,
         ..bit_out
     };
-    let over_a_second: Vec<f32> = (0..20)
-        .map(|i| wandering.cutoff(i * zx_rustrum::machine::CPU_HZ as u64 / 20))
+    // Over half a minute, which is the sort of time it takes.
+    let corners: Vec<f32> = (0..30)
+        .map(|i| wandering.cutoff(i * CPU_HZ as u64))
         .collect();
-    let low = over_a_second.iter().cloned().fold(f32::MAX, f32::min);
-    let high = over_a_second.iter().cloned().fold(0.0, f32::max);
+    let low = corners.iter().cloned().fold(f32::MAX, f32::min);
+    let high = corners.iter().cloned().fold(0.0, f32::max);
     assert!(
         high > low * 1.4,
         "the corner should wander up and down: {low:.0} to {high:.0} Hz"
     );
     assert_eq!(
         bit_out.cutoff(0),
-        bit_out.cutoff(12345),
+        bit_out.cutoff(123_456),
         "and stand still when it is not asked to wander"
     );
 }

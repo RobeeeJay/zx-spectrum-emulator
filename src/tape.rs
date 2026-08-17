@@ -730,11 +730,14 @@ pub struct Quality {
 /// turbo loaders are up around 4.5 kHz, so the useful part of the range is
 /// between the two.
 const CUTOFF_SQUARE: f32 = 30_000.0;
-const CUTOFF_WORST: f32 = 600.0;
+const CUTOFF_WORST: f32 = 300.0;
 
-/// With less than half the signal left, the reader cannot tell there was an
-/// edge at all: the pulse is swallowed and joins the one behind it.
-const READABLE: f32 = 0.5;
+/// How much of the signal the reader wants before it believes the line has
+/// changed. A comparator has to have some of this or it would chatter on the
+/// noise, and it is what decides that a rolled-off signal has become too
+/// small to read: the filtered wave swings less and less as the corner comes
+/// down, and when it stops reaching this the edges stop arriving.
+const THRESHOLD: f32 = 0.45;
 
 impl Quality {
     /// The filter's corner, in Hz, at absolute T-state `at`.
@@ -744,42 +747,75 @@ impl Quality {
             return base;
         }
         let seconds = at as f32 / crate::machine::CPU_HZ as f32;
-        let wander = (seconds * std::f32::consts::TAU * 1.3).sin();
+        // Slower than the motor's wander: a head creeps, it does not shake.
+        let wander = (seconds * std::f32::consts::TAU * 0.08).sin();
         base * (1.0 + self.alignment_wobble * wander)
     }
 
     /// What the motor does to a pulse of `len` T-states.
+    ///
+    /// Wow first — a couple of turns of the reel, which is a period of
+    /// seconds rather than milliseconds — with a little flutter over it. Both
+    /// are slow enough to hear as a waver rather than as a buzz, which is what
+    /// a tape does.
     fn wavered(&self, len: u32, at: u64) -> u32 {
         if !self.speed {
             return len;
         }
         let seconds = at as f32 / crate::machine::CPU_HZ as f32;
-        let wow = (seconds * std::f32::consts::TAU * 2.7).sin();
-        let flutter = (seconds * std::f32::consts::TAU * 31.0).sin() * 0.3;
-        (len as f32 * (1.0 + self.speed_wobble * (wow + flutter) / 1.3)).max(1.0) as u32
+        let wow = (seconds * std::f32::consts::TAU * 0.11).sin();
+        let slower = (seconds * std::f32::consts::TAU * 0.037).sin() * 0.6;
+        let flutter = (seconds * std::f32::consts::TAU * 4.3).sin() * 0.15;
+        let waver = (wow + slower + flutter) / 1.75;
+        (len as f32 * (1.0 + self.speed_wobble * waver)).max(1.0) as u32
     }
 
-    /// What the head does to it: how much of the signal is left, and how late
-    /// what is left arrives.
+    /// The filter's time constant at `at`, in T-states.
+    fn tau(&self, at: u64) -> f32 {
+        crate::machine::CPU_HZ as f32 / (std::f32::consts::TAU * self.cutoff(at).max(20.0))
+    }
+
+    /// Put one pulse through the head and hand back what the reader makes of
+    /// it: when it decides the line has changed, if it decides that within the
+    /// pulse at all, and where the filter is left afterwards.
     ///
-    /// A first-order corner, which is what one cancellation looks like from a
-    /// distance: the amplitude falls off as the wavelength shortens, and what
-    /// survives is held up by the filter's own delay. The delay matters
-    /// because it is not the same for every pulse — a short one is held up
-    /// more than a long one — so the gaps between edges stop being what was
-    /// recorded even where nothing has been swallowed.
-    fn through_the_head(&self, len: u32, at: u64) -> (f32, i32) {
+    /// This is the filter itself rather than a rule about it. A one-pole
+    /// corner charges towards the level the tape is holding —
+    /// `y = u + (y₀ - u)e^(-t/τ)` — and the reader flips when that gets past
+    /// its threshold. So a signal only a little rolled off flips late; one
+    /// rolled off further flips later still; one whose swing no longer reaches
+    /// the threshold does not flip at all, and leaves the next pulse starting
+    /// from wherever this one left it. Nothing steps off a cliff: the edges
+    /// creep, then some of them go missing, then most of them do.
+    ///
+    /// `reader` is which way the reader currently has the line, since that is
+    /// what decides which threshold it is watching for.
+    fn through_the_head(
+        &self,
+        len: u32,
+        at: u64,
+        from: f32,
+        to: f32,
+        reader: bool,
+    ) -> (Option<u32>, f32) {
         if !self.alignment {
-            return (1.0, 0);
+            return (Some(0), to);
         }
-        let cutoff = self.cutoff(at).max(50.0);
-        // A pulse is half a cycle.
-        let hz = crate::machine::CPU_HZ as f32 / (2.0 * len as f32);
-        let ratio = hz / cutoff;
-        let left = 1.0 / (1.0 + ratio * ratio).sqrt();
-        let delay = crate::machine::CPU_HZ as f32
-            / (std::f32::consts::TAU * cutoff * (1.0 + ratio * ratio));
-        (left, delay as i32)
+        let tau = self.tau(at);
+        let span = len as f32;
+        let settled = to + (from - to) * (-span / tau).exp();
+        // The reader is watching for the threshold on the other side of where
+        // it has the line now; a pulse heading the way it already thinks the
+        // line is going cannot change its mind.
+        let want = if reader { -THRESHOLD } else { THRESHOLD };
+        let crossing =
+            if (to - want).abs() > f32::EPSILON && (from - want).signum() != (to - want).signum() {
+                let t = tau * ((to - from) / (to - want)).ln();
+                (t >= 0.0 && t < span).then_some(t as u32)
+            } else {
+                None
+            };
+        (crossing, settled)
     }
 }
 
@@ -805,9 +841,15 @@ pub struct Tape {
     pause_span: Option<(u64, u64)>,
     /// How well the deck is behaving.
     pub quality: Quality,
-    /// How late the head held the last pulse up, so the next can be moved by
-    /// the difference rather than by the whole of it.
-    last_delay: i32,
+    /// The tape's own level, which is not what the reader sees once the head
+    /// is out of square.
+    raw_level: bool,
+    /// Where the filter has charged to, between -1 and 1.
+    filter_y: f32,
+    /// When the current pulse ends, whatever the reader made of it.
+    raw_next: u64,
+    /// The level change the reader is about to make, and when.
+    pending: Option<(u64, bool)>,
     /// Total pulses emitted, for the UI.
     pub pulses: u64,
     /// Recent level changes as (absolute T-state, new level), for the
@@ -914,7 +956,10 @@ impl Tape {
             clock: 0,
             pause_span: None,
             quality: Quality::default(),
-            last_delay: 0,
+            raw_level: false,
+            filter_y: 0.0,
+            raw_next: 0,
+            pending: None,
             pulses: 0,
             edges: VecDeque::with_capacity(EDGE_HISTORY),
             pending_edges: Vec::new(),
@@ -931,6 +976,10 @@ impl Tape {
         // No edge is recorded here: the first generated pulse starts at `now`
         // and records its own leading edge.
         self.next_edge = now;
+        self.raw_next = now;
+        self.pending = None;
+        self.raw_level = false;
+        self.filter_y = 0.0;
     }
 
     pub fn stop(&mut self) {
@@ -1148,6 +1197,9 @@ impl Tape {
         self.block = block.min(self.blocks.len());
         self.phase = Phase::Enter;
         self.level = false;
+        self.raw_level = false;
+        self.filter_y = 0.0;
+        self.pending = None;
     }
 
     pub fn finished(&self) -> bool {
@@ -1173,36 +1225,44 @@ impl Tape {
         // Guard against a huge jump (e.g. after a long pause) taking forever.
         let mut guard = 0u32;
         while now >= self.next_edge && self.playing {
+            // A change the reader is due to make part way through the pulse
+            // it is in the middle of.
+            if let Some((at, level)) = self.pending {
+                if now >= at {
+                    self.pending = None;
+                    self.next_edge = self.raw_next;
+                    if level != self.level {
+                        self.level = level;
+                        self.push_edge(at);
+                    }
+                    continue;
+                }
+            }
             match self.next_pulse() {
                 Some(p) => {
-                    let edge_at = self.next_edge;
-                    let len = self.quality.wavered(p.len.max(1), self.next_edge);
-                    let (left, delay) = self.quality.through_the_head(len, self.next_edge);
-                    // A pulse the head has all but cancelled is not an edge
-                    // the reader can see: it goes by without the line
-                    // changing and joins the pulse behind it. A forced level
-                    // is the deck's own doing — the silence behind a block —
-                    // rather than something read off the tape, so the head
-                    // cannot swallow that.
-                    let seen = p.level.is_some() || left >= READABLE;
-                    let new_level = if seen {
-                        p.level.unwrap_or(!self.level)
+                    let start = self.raw_next.max(self.next_edge);
+                    let len = self.quality.wavered(p.len.max(1), start);
+                    let forced = p.level;
+                    let raw = forced.unwrap_or(!self.raw_level);
+                    self.raw_level = raw;
+                    let to = if raw { 1.0 } else { -1.0 };
+                    let (crossing, settled) = if forced.is_some() {
+                        // The deck's own doing — the silence behind a block —
+                        // rather than something read off the tape, so the head
+                        // has nothing to say about it and the line settles.
+                        (Some(0), to)
                     } else {
-                        self.level
+                        self.quality
+                            .through_the_head(len, start, self.filter_y, to, self.level)
                     };
-                    let changed = new_level != self.level;
-                    self.level = new_level;
-                    // The filter holds a short pulse up more than a long one,
-                    // so what moves an edge is the difference between this
-                    // pulse's delay and the last one's.
-                    let shift = delay - self.last_delay;
-                    self.last_delay = delay;
-                    let len = (len as i32 + shift).max(1) as u32;
-                    self.next_edge = self.next_edge.saturating_add(len as u64);
+                    self.filter_y = settled;
+                    self.raw_next = start.saturating_add(len as u64);
+                    self.pending = crossing.map(|at| (start.saturating_add(at as u64), raw));
+                    self.next_edge = match self.pending {
+                        Some((at, _)) => at.min(self.raw_next),
+                        None => self.raw_next,
+                    };
                     self.pulses += 1;
-                    if changed {
-                        self.push_edge(edge_at);
-                    }
                 }
                 None => {
                     self.playing = false;

@@ -412,7 +412,7 @@ fn chase_hq_loads() {
 ///
 /// Skool Daze writes its bits in 422 and 843 T-states, which is 4.1 kHz at the
 /// short end; Chase H.Q. uses 735 and 1,590, which is 2.4 kHz. Bring the
-/// filter's corner down to about 2 kHz and the first stops loading while the
+/// filter's corner down to about 1.2 kHz and the first stops loading while the
 /// second does not notice — which is what a misaligned deck did to a shelf of
 /// tapes, and why the fast loaders were the ones people had trouble with.
 #[test]
@@ -426,7 +426,7 @@ fn a_misaligned_head_stops_the_quick_loader_and_not_the_slow_one() {
     };
     let corner = out_of_square.cutoff(0);
     assert!(
-        (1500.0..2500.0).contains(&corner),
+        (1000.0..1500.0).contains(&corner),
         "the corner should sit between the two loaders, not {corner:.0} Hz"
     );
 
