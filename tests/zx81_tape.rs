@@ -145,16 +145,18 @@ fn every_half_pulse_is_the_same_length_and_each_bit_ends_with_a_gap() {
 
     let gap = ZX81_HALF_PULSE as u64 + ZX81_BIT_GAP as u64;
     // The first run is the leading edge at t=0, and the last is the block's
-    // pause running on from the final bit's gap; the rest are one or the other.
+    // silence; the rest are one or the other.
     for r in &runs[1..runs.len() - 1] {
         assert!(
             *r == ZX81_HALF_PULSE as u64 || *r == gap,
             "unexpected run of {r}T"
         );
     }
-    // Two bytes went out — the name and the data — so sixteen bits, the last
-    // of whose gaps is swallowed by the pause.
-    assert_eq!(runs.iter().filter(|r| **r == gap).count(), 15);
+    // Two bytes went out — the name and the data — so sixteen bits, and every
+    // one of them gets its gap. The last used to lose it: the silence behind
+    // a block is at the low level, so a block ending low ended with no change
+    // at all and the last bit was never finished.
+    assert_eq!(runs.iter().filter(|r| **r == gap).count(), 16);
 }
 
 #[test]

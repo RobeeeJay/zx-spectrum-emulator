@@ -676,6 +676,11 @@ enum Phase {
         pulse: u8,
         second: bool,
     },
+    /// The millisecond that finishes the block's last pulse, before the
+    /// silence proper.
+    PauseEdge {
+        ms: u16,
+    },
     /// Silence at the end of a block.
     BlockPause {
         ms: u16,
@@ -970,7 +975,7 @@ impl Tape {
                     seg.data * byte.min(len) as u64 / len as u64
                 }
             }
-            Phase::BlockPause { .. } => seg.pilot + seg.sync + seg.data,
+            Phase::PauseEdge { .. } | Phase::BlockPause { .. } => seg.pilot + seg.sync + seg.data,
             Phase::Next | Phase::Finished => match self.pause_span {
                 // Still in the silence this block ends with.
                 Some((from, to)) if self.clock < to && to > from => {
@@ -1039,7 +1044,7 @@ impl Tape {
         self.phase = if ms == 0 {
             Phase::Next
         } else {
-            Phase::BlockPause { ms }
+            Phase::PauseEdge { ms }
         };
     }
 
@@ -1197,7 +1202,11 @@ impl Tape {
                     };
                     if byte >= data.len() || bit >= bits_here {
                         if byte >= data.len() {
-                            self.phase = Phase::BlockPause { ms: pause_ms };
+                            self.phase = if pause_ms > 0 {
+                                Phase::PauseEdge { ms: pause_ms }
+                            } else {
+                                Phase::Next
+                            };
                             continue;
                         }
                         self.phase = Phase::Data {
@@ -1270,7 +1279,11 @@ impl Tape {
                         }
                     };
                     if byte >= data.len() {
-                        self.phase = Phase::BlockPause { ms: pause_ms };
+                        self.phase = if pause_ms > 0 {
+                            Phase::PauseEdge { ms: pause_ms }
+                        } else {
+                            Phase::Next
+                        };
                         continue;
                     }
                     // Bits go out most significant first, each as a burst of
@@ -1331,7 +1344,11 @@ impl Tape {
                         8
                     };
                     if byte >= data.len() {
-                        self.phase = Phase::BlockPause { ms: pause_ms };
+                        self.phase = if pause_ms > 0 {
+                            Phase::PauseEdge { ms: pause_ms }
+                        } else {
+                            Phase::Next
+                        };
                         continue;
                     }
                     if bit >= bits_here {
@@ -1350,10 +1367,29 @@ impl Tape {
                         level: Some(level),
                     });
                 }
+                // The edge that finishes the last pulse of the block. Every
+                // pulse ends with the line changing, and the last one is no
+                // different — but the silence behind it is at the low level,
+                // so a block whose last pulse was already low used to end with
+                // no change at all. A loader waiting for that edge waits for
+                // ever: Cobra's reads all eight bits of its last byte and then
+                // hangs on the closing edge of the last one, and its
+                // protection takes the silence for a snapped tape.
+                //
+                // The reference calls it a millisecond of the current level
+                // before the pause proper, which is the same thing said the
+                // other way round.
+                Phase::PauseEdge { ms } => {
+                    self.phase = Phase::BlockPause { ms };
+                    return Some(Pulse {
+                        len: T_PER_MS,
+                        level: None,
+                    });
+                }
                 Phase::BlockPause { ms } => {
                     self.phase = Phase::Next;
-                    if ms > 0 {
-                        let len = ms as u32 * T_PER_MS;
+                    let len = (ms as u32).saturating_sub(1) * T_PER_MS;
+                    if len > 0 {
                         // The pause is played as one long silent pulse. Noting
                         // when it runs is what lets the block's progress keep
                         // moving through it rather than sticking at the end of

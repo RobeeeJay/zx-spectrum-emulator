@@ -223,32 +223,36 @@ accurately and run the CPU fast. Two things make that work:
   even start without it: it looks for the beam by reading port $40FF and never
   enables interrupts until the byte it wants comes back.
 
-## Alkatraz, and where Cobra and 720 Degrees stand
+## Every pulse ends with an edge, including the last one of a block
 
-Alkatraz — Cobra, 720 Degrees — uses the same sampling core as everything else,
-at $F031 in Cobra, but with no `LD A,$7F` before the `IN`, so the port's high
-byte is whatever the accumulator held. Its own reading is at $EFA4: eight turns
-of `CALL $F021` with `LD B,$D7` before each and `LD A,$E4 / CP B` after, so a
-pulse pair either side of about 13 turns of the loop is a nought or a one. It
-finds its block by measuring 256 pilot pulses ($EF6E), each of which has to
-come out above $C6 counting up from $9C.
+The silence behind a block is at the low level. A block whose last pulse left
+the line low therefore used to end with no change at all: the deck went
+straight from the final data pulse to holding the line low, which it already
+was. A loader waiting for the edge that closes that pulse waits for ever.
 
-What is known to work: the deck's pulses are right (1130 and 565 T-states for
-Cobra, 1067 and 626 for 720, against the block's own figures); the sampling
-loop costs 59 T-states a turn as its instructions say it should; the pilot
-search passes all 256 of its measurements; and the whole first turbo block is
-assembled byte for byte as the file holds it — 4,051 bytes of 4,052, the last
-being its checksum. Both of the loader's checks on that block pass: the 16-bit
-sum at $EF4C comes out $DBFD, which is what it wants.
+The deck now finishes the last pulse first — a millisecond at the level the
+pulse toggles to, and then the silence — which is the same thing the TZX
+reference says when it describes the pause as beginning with a millisecond of
+the current level.
 
-**Neither game loads.** After that block the loader asks for another 4,049
-bytes without searching for a pilot again, and the tape has an eleven-second
-pause there, so it times out with one byte left to read and lands on $F067 —
-which wipes itself, plays 224 beeps through the ROM's beeper at $03B5, and
-resets. Taking the pauses out of the tape by hand gets Cobra further, into its
-own code at $FB1B rather than back to BASIC, so the pause is implicated; but
-inventing a tape without the silence the dump records is not a fix, and what
-the loader expects to find in that gap is not yet known.
+**That is what stopped Cobra and 720 Degrees loading**, and it looked nothing
+like a tape fault. Alkatraz reads all eight bits of the block's last byte,
+waits for the closing edge, times out, and jumps to $F067: which wipes its own
+code with an `LDDR`, plays 224 beeps through the ROM's beeper at $03B5, and
+resets the machine. Everything before that is correct — the pilot search passes
+all 256 of its measurements, the whole block is assembled byte for byte, and
+both of the loader's checks on it pass — so the failure arrives long after the
+mistake, wearing a copy-protection costume.
+
+Two measurements settled it. The byte the loader wanted was on the tape: it
+asked 258 T-states after finishing the previous one, with 12,316 T-states of
+data still to come. And following the last read edge by edge showed all eight
+bits arriving — 1135 and 1117 T-states for a one, 546 and 542 for a nought —
+and then nothing at all where the sixteenth pulse should have been closed.
+
+A ZX81 test had the old behaviour written into it, expecting fifteen bit-gaps
+from sixteen bits because "the last of whose gaps is swallowed by the pause".
+It gets sixteen now.
 
 ## The EAR line is never dead
 

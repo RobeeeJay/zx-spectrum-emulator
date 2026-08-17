@@ -474,3 +474,63 @@ fn a_custom_info_block_is_stepped_over_whole() {
         other => panic!("expected the standard block, got {other:?}"),
     }
 }
+
+/// Every pulse ends with the line changing, including the last one of a block.
+///
+/// The silence behind a block is at the low level, so a block whose last pulse
+/// was already low used to end with no change at all — and a loader waiting
+/// for that closing edge waited for ever. Cobra's Alkatraz loader reads all
+/// eight bits of its last byte and then hangs on it, and its protection takes
+/// the silence for a snapped tape: it wipes itself, beeps, and resets the
+/// machine.
+#[test]
+fn the_last_pulse_of_a_block_is_finished_before_the_silence() {
+    use zx_rustrum::tape::{Block, Tape};
+
+    // One byte of zeros: an even number of pulses, so the line is back where
+    // it started — low — when the data runs out.
+    let mut tape = Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureData {
+            data: vec![0x00],
+            zero: 500,
+            one: 1000,
+            used_bits: 8,
+            pause_ms: 100,
+        }],
+    );
+    tape.play(0);
+
+    // Every level change the deck makes, and when.
+    let mut edges = Vec::new();
+    let mut level = tape.level_at(0);
+    for t in (0..500_000u64).step_by(10) {
+        let now = tape.level_at(t);
+        if now != level {
+            edges.push(t);
+            level = now;
+        }
+    }
+
+    // Eight bits, two pulses each, is sixteen edges. The seventeenth finishes
+    // the sixteenth pulse at its own length; the eighteenth is the line
+    // dropping into the silence a millisecond later.
+    assert_eq!(
+        edges.len(),
+        17,
+        "expected fifteen changes within the sixteen pulses, the edge that \
+         closes the last of them, and the drop into silence, not {edges:?}"
+    );
+    let closing = edges[15] - edges[14];
+    assert!(
+        (490..=510).contains(&closing),
+        "the last pulse should be finished off after its own 500 T-states, \
+         not {closing}"
+    );
+    let silence = edges[16] - edges[15];
+    assert!(
+        (3490..=3510).contains(&silence),
+        "and the line drops into the silence a millisecond later, not after \
+         {silence} T-states"
+    );
+}

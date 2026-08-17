@@ -13,6 +13,8 @@ use zx_rustrum::ui::{App, Roms};
 
 const HEAD_OVER_HEELS: &str = "tapes/Head over Heels (1987)(Ocean)[48-128K].tzx";
 const DALEY: &str = "tapes/Daley Thompson's Decathlon - Day 1 (1984)(Ocean Software).zip";
+const COBRA: &str = "tapes/Cobra (1986)(Ocean Software).zip";
+const SEVEN_TWENTY: &str = "tapes/720 Degrees (1986)(U.S. Gold).zip";
 
 fn tape(name: &str) -> Option<Tape> {
     let bytes = std::fs::read(name).ok()?;
@@ -155,8 +157,9 @@ fn starts_after_loading(name: &str) {
         spec.run(FRAME_T);
     }
     assert!(
-        !(0xFC00..=0xFFFF).contains(&spec.cpu.pc),
-        "{name} should be running the game, not still in the loader at ${:04X}",
+        !(0xFC00..=0xFFFF).contains(&spec.cpu.pc) && !(0x0000..=0x3FFF).contains(&spec.cpu.pc),
+        "{name} should be running the game, not in a loader or back in the \
+         ROM at ${:04X}",
         spec.cpu.pc
     );
     let drawn = (0x4000..0x5800u16)
@@ -252,4 +255,21 @@ fn the_loader_core_is_recognised() {
         !flashload::at_sampler(&spec),
         "something that only looks like it is not it"
     );
+}
+
+/// Alkatraz — Cobra and 720 Degrees — loads too.
+///
+/// Its loader reads all eight bits of a block's last byte and then waits for
+/// the edge that closes the last pulse. A block whose last pulse leaves the
+/// line low used to end with no edge at all, because the silence behind it is
+/// low as well; the loader waited for ever, and its protection took that for a
+/// snapped tape and wiped itself.
+#[test]
+fn cobra_loads() {
+    starts_after_loading(COBRA);
+}
+
+#[test]
+fn seven_twenty_degrees_loads() {
+    starts_after_loading(SEVEN_TWENTY);
 }
