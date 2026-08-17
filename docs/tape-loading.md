@@ -365,11 +365,16 @@ misaligned deck did to a shelf of them:
 | 2.3 kHz | loads | loads |
 | 1.1 kHz | **fails** | loads |
 
-The scope shows it. The deck keeps the signal's own shape as well as the reader's
-edges — samples along each pulse's charging curve — so the trace rounds off as
-the corner comes down, the swing gets smaller, and the reader's squares are
-drawn faintly behind it. When the swing stops reaching the threshold, the place
+The scope shows it. The deck keeps the signal's own shape as well as the
+reader's edges — both ends of every pulse, and samples along the charging curve
+when the head has rolled it off — so the trace is a square wave when nothing
+has been done to it and rounds off as the corner comes down, with the reader's
+squares faintly behind. When the swing stops reaching the threshold, the place
 where an edge went missing is there to see.
+
+Both ends of every pulse matter: with one sample apiece the corners have
+nothing joining them and a line drawn through them is a triangle wave, which is
+what the scope drew until it was noticed.
 
 And the motor, measured on Skool Daze: it loads with the speed wavering 2, 5
 and 10 per cent, and fails at 20. What breaks a loader there is the total
@@ -410,6 +415,14 @@ anything to say about, and the loudspeaker feeds back into the input besides.
 Feeding a trailing tone into the deck by hand fixes it too, and gives the same
 table — $9000 reads `77 04 C3 B7 92 DD 7E 0A` either way — so the check is
 asking whether the line is alive rather than measuring what is on it.
+
+## Three speeds, one at a time
+
+Normal, Max and Ludicrous, as one control rather than two switches. They were
+never independent: hurrying a tape means running the machine flat out as well,
+since a game with a loader of its own has to be played to whatever else is
+happening, so a pair of toggles left "Ludicrous without Max" to be explained
+away. Ludicrous is not offered on a ZX81, whose ROM has no LD-BYTES to answer.
 
 ## The silence at the end counts too
 

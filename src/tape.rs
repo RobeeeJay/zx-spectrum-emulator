@@ -1006,19 +1006,26 @@ impl Tape {
     /// length. What the scope then draws is the signal as it arrives rather
     /// than the squares the reader makes of it.
     fn record_trace(&mut self, start: u64, len: u32, from: f32, to: f32, settled: f32) {
-        while self.trace.len() + 4 > TRACE_SAMPLES {
+        while self.trace.len() + 6 > TRACE_SAMPLES {
             self.trace.pop_front();
         }
+        let end = start + len as u64;
         if !self.quality.alignment || (settled - to).abs() < 0.01 {
+            // A step and then a hold. Both ends are needed: a single sample a
+            // pulse is a corner with nothing joining it to the next, and a
+            // line drawn through those is a triangle wave rather than a
+            // square one.
             self.trace.push_back((start, to));
+            self.trace.push_back((end, to));
             return;
         }
         let tau = self.quality.tau(start);
-        for step in 0..4 {
-            let along = len as f32 * step as f32 / 4.0;
+        for step in 0..5 {
+            let along = len as f32 * step as f32 / 5.0;
             let y = to + (from - to) * (-along / tau).exp();
             self.trace.push_back((start + along as u64, y));
         }
+        self.trace.push_back((end, settled));
     }
 
     /// Record a level change for the oscilloscope and the mixer.

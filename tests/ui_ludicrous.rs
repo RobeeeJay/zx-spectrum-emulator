@@ -33,37 +33,52 @@ fn harness<'a>() -> Harness<'a, App> {
     h
 }
 
-/// Ludicrous speed is a switch of its own, and it brings Max speed with it:
-/// a game with a loader of its own cannot be handed its blocks, so it still
-/// wants the machine run as fast as it will go.
+/// One of three rather than two switches: picking one puts the others out, and
+/// picking the fastest brings the machine's own speed with it, since a game
+/// with a loader of its own has to be played to whatever else happens.
 #[test]
-fn ludicrous_speed_switches_on_and_brings_max_speed_with_it() {
+fn the_three_speeds_are_one_at_a_time() {
     let mut h = harness();
     h.state_mut().spec.bus.tape_boost = false;
     h.run_steps(2);
-    assert!(!h.state().tape_flash(), "it should start switched off");
-
-    h.get_by_label("Ludicrous speed").click();
-    h.run_steps(2);
-    assert!(h.state().tape_flash(), "the switch did nothing");
     assert!(
-        h.state().tape_boost(),
-        "and it should have brought max speed with it"
+        !h.state().tape_flash() && !h.state().tape_boost(),
+        "it should start at the tape's own speed"
     );
 
-    h.get_by_label("Ludicrous speed").click();
+    // Straight from Normal to the fastest, so that bringing the machine's own
+    // speed with it is this button's doing and not the one before it.
+    h.get_by_label("Ludicrous").click();
     h.run_steps(2);
-    assert!(!h.state().tape_flash(), "it should switch off again");
+    assert!(
+        h.state().tape_flash() && h.state().tape_boost(),
+        "Ludicrous should do both: a game with its own loader still has to be \
+         played to"
+    );
+
+    h.get_by_label("Max").click();
+    h.run_steps(2);
+    assert!(
+        h.state().tape_boost() && !h.state().tape_flash(),
+        "Max should hurry the machine and hand nothing over"
+    );
+
+    h.get_by_label("Normal").click();
+    h.run_steps(2);
+    assert!(
+        !h.state().tape_flash() && !h.state().tape_boost(),
+        "and Normal should put both away"
+    );
 }
 
-/// The transport is the deck's own buttons; the two speed switches are about
-/// the emulator rather than about the tape, so they are a row of their own
-/// with their own label rather than the tail of the transport row.
+/// The transport is the deck's own buttons; the three speeds are about the
+/// emulator rather than about the tape, so they are a row of their own with
+/// their own label rather than the tail of the transport row.
 ///
 /// The geometry alone cannot say this: the tape window is narrower than the
 /// two rows together, so the switches wrapped below the transport even when
 /// they were part of it. What the row is worth testing for is that it is one
-/// row — its label and both switches on a line, and none of the deck's
+/// row — its label and all three of them on a line, and none of the deck's
 /// buttons with them.
 #[test]
 fn the_speed_switches_are_a_row_of_their_own() {
@@ -80,7 +95,9 @@ fn the_speed_switches_are_a_row_of_their_own() {
     // the row's own label is looked for by walking the tree. Group labels are
     // drawn in capitals, and the main window has a Speed group of its own, so
     // what is being asked is whether *one* of them is on this row.
-    let switches = top("Max speed");
+    // Anchored on Ludicrous: the main window's speed dropdown has a "Max" of
+    // its own, and the tape window's is not the only one in the tree.
+    let switches = top("Ludicrous");
     let labelled = h
         .root()
         .children_recursive()
@@ -94,8 +111,8 @@ fn the_speed_switches_are_a_row_of_their_own() {
         "the row the speed switches are on should have its own label"
     );
     assert!(
-        (top("Ludicrous speed") - switches).abs() < 0.5,
-        "and both switches should be on it"
+        (top("Normal") - switches).abs() < 0.5 && (top("Max") - switches).abs() < 0.5,
+        "and all three should be on it"
     );
 
     let row = switches;
@@ -116,9 +133,7 @@ fn a_zx81_is_not_offered_it() {
     h.run_steps(3);
 
     assert!(
-        h.get_by_label("Ludicrous speed")
-            .accesskit_node()
-            .is_disabled(),
+        h.get_by_label("Ludicrous").accesskit_node().is_disabled(),
         "a ZX81 has no such routine to hand blocks to"
     );
 }

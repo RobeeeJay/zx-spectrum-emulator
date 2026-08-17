@@ -4,7 +4,7 @@
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Sense, Stroke, Vec2};
 
-use crate::ui::{theme, App};
+use crate::ui::{theme, App, Hurry};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Trigger {
@@ -77,37 +77,47 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
 /// about the tape.
 fn speeds(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
+        // No slider in this row, so nothing in it is taller than a button and
+        // the row needs no height claimed in advance.
         theme::group_label(ui, "Speed");
-        let boost = app.tape_boost();
-        if ui
-            .selectable_label(boost, "Max speed")
-            .on_hover_text("Runs the CPU as fast as it will go while the tape moves.")
+
+        // One of three rather than two switches: they were never independent
+        // anyway, since hurrying a tape means running the machine flat out as
+        // well, and a pair of toggles left "Ludicrous without Max" to be
+        // explained away.
+        let (boost, flash) = (app.tape_boost(), app.tape_flash());
+        let now = if flash {
+            Hurry::Ludicrous
+        } else if boost {
+            Hurry::Max
+        } else {
+            Hurry::Normal
+        };
+
+        if theme::selectable(ui, now == Hurry::Normal, "Normal")
+            .on_hover_text("Play the tape at the speed it was recorded at.")
             .clicked()
         {
-            *app.tape_boost_mut() = !boost;
+            app.set_hurry(Hurry::Normal);
         }
-
-        // Faster than fast: the tape is not played at all, it is handed over.
-        // Only where there is a ROM with the routine in it to hand it to.
-        let flash = app.tape_flash();
+        if theme::selectable(ui, now == Hurry::Max, "Max")
+            .on_hover_text("Run the machine as fast as it will go while the tape moves.")
+            .clicked()
+        {
+            app.set_hurry(Hurry::Max);
+        }
         ui.add_enabled_ui(!app.on_zx81(), |ui| {
-            if ui
-                .selectable_label(flash, "Ludicrous speed")
+            if theme::selectable(ui, now == Hurry::Ludicrous, "Ludicrous")
                 .on_hover_text(
                     "Hand each block straight to the ROM's loader instead of playing \
-                     it, so a tape loads in the time it takes to copy it. Games with \
-                     a loader of their own read the tape themselves and cannot be \
-                     helped: those load at whatever speed the machine is running at.",
+                     it, so a tape loads in the time it takes to copy it, and run the \
+                     machine flat out for the blocks that cannot be handed over. Games \
+                     with a loader of their own read the tape themselves: those load at \
+                     whatever speed the machine is running at.",
                 )
                 .clicked()
             {
-                app.set_tape_flash(!flash);
-                // A game with a loader of its own still has to be played to,
-                // so switching this on switches the other on with it: this is
-                // meant to be the fastest way of loading anything.
-                if !flash {
-                    *app.tape_boost_mut() = true;
-                }
+                app.set_hurry(Hurry::Ludicrous);
             }
         });
 

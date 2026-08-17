@@ -294,3 +294,39 @@ fn the_scope_is_given_the_shape_of_the_signal() {
         square.trace.len()
     );
 }
+
+/// The scope is shown a square wave when nothing is done to it.
+///
+/// One sample a pulse is a corner with nothing joining it to the next, and a
+/// line drawn through those corners is a triangle wave — which is what the
+/// scope showed for a while. Each pulse needs both its ends.
+#[test]
+fn a_signal_nothing_has_touched_is_drawn_as_squares() {
+    let mut tape = Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureTone {
+            len: 800,
+            count: 200,
+        }],
+    );
+    tape.play(0);
+    tape.level_at(20_000);
+
+    let points: Vec<(u64, f32)> = tape.trace.iter().copied().skip(4).take(8).collect();
+    // Flat for the length of a pulse, then straight up or down at the end of
+    // it: the same T-state twice with the level either side of it.
+    for pair in points.chunks(2) {
+        let [(t0, y0), (t1, y1)] = pair else { continue };
+        assert_eq!(y0, y1, "the level should hold across the pulse");
+        assert_eq!(t1 - t0, 800, "for the whole pulse: {t0} to {t1}");
+        assert!(y0.abs() > 0.99, "at the rail, not between: {y0}");
+    }
+    let steps = points
+        .windows(2)
+        .filter(|w| w[0].0 == w[1].0 && w[0].1 != w[1].1)
+        .count();
+    assert!(
+        steps >= 3,
+        "and change in no time at all at the end of each: {points:?}"
+    );
+}

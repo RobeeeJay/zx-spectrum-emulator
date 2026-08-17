@@ -287,6 +287,17 @@ const LUDICROUS_FRAMES: u32 = 24;
 /// which is still a hundred times the machine time Max speed manages.
 const LUDICROUS_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// How much of a hurry the tape is loaded in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hurry {
+    /// At the speed it was recorded at.
+    Normal,
+    /// The machine flat out while the tape moves.
+    Max,
+    /// And blocks handed to the ROM's loader rather than played at all.
+    Ludicrous,
+}
+
 /// How long a write stays marked before it has blended into the colour it
 /// should be, in seconds of the user's time. Long enough to see where a write
 /// landed while the frame it landed in is still on screen.
@@ -1927,6 +1938,26 @@ impl App {
     /// machine run.
     pub fn loader_is_reading(&self) -> bool {
         self.zx81.is_none() && crate::flashload::at_sampler(&self.spec)
+    }
+
+    /// How much of a hurry a tape is loaded in. The three settle the two
+    /// switches underneath between them: hurrying a tape means running the
+    /// machine flat out as well, so they were never independent.
+    pub fn set_hurry(&mut self, hurry: Hurry) {
+        match hurry {
+            Hurry::Normal => {
+                self.set_tape_flash(false);
+                *self.tape_boost_mut() = false;
+            }
+            Hurry::Max => {
+                self.set_tape_flash(false);
+                *self.tape_boost_mut() = true;
+            }
+            Hurry::Ludicrous => {
+                self.set_tape_flash(true);
+                *self.tape_boost_mut() = true;
+            }
+        }
     }
 
     /// Whether whole blocks are handed to the ROM's loader rather than
