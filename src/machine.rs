@@ -972,6 +972,11 @@ impl SpectrumBus {
         if self.tape_playing() || self.tape.as_ref().is_some_and(|t| t.head_down) {
             self.tape_advance();
         }
+        // The hiss goes to the loudspeaker as a level rather than as edges: a
+        // quiet one never crosses the reader's threshold, so through a gap
+        // there would be nothing to hear, and a tape with the volume up hisses
+        // through its gaps.
+        self.audio.tape_hiss = self.tape.as_ref().map_or(0.0, |t| t.audible_hiss());
     }
 
     pub fn tape_playing(&self) -> bool {

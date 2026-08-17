@@ -392,6 +392,12 @@ and on a tape held still. A real deck hisses from the moment the head touches
 the tape, not from the moment there is something to read, so in a gap the hiss
 is all there is and a loader waiting through one hears it.
 
+It is heard as well as read. The reader only notices the hiss when it crosses
+its threshold, so a quiet one made no sound at all where the tape was silent —
+which is not what a tape sounds like with the volume up. The mixer is given the
+hiss as a level and makes the noise itself, a sample at a time, so it is there
+under the loading tone and through the gaps alike.
+
 The hiss is not recorded, it is added where it is wanted. The deck keeps the
 signal's corners and nothing else, because that is all the shape there is;
 white noise has a value at every instant, so `Tape::scope_samples` resamples
@@ -501,6 +507,10 @@ because the list is inside a scroll area whose layer is not the one
 `rect_contains_pointer` reckons against — it says no over every row. The row's
 own clip rectangle is checked too, so a row scrolled out of sight is not
 offered.
+
+A stop block that came from the list can go back out of it: hovering one offers
+**✖ Delete** instead. The stops are the only blocks the list makes, so they are
+the only ones it takes away — everything else is what the tape holds.
 
 ## A tape that stops itself
 

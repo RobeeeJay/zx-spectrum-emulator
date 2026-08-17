@@ -234,6 +234,12 @@ pub struct Audio {
 
     /// Current beeper amplitude, from the last OUT to port $FE.
     pub beeper: f32,
+    /// How loud the tape hisses, which is a level rather than a signal: the
+    /// noise itself is made here, a sample at a time.
+    pub tape_hiss: f32,
+    /// The noise generator's state. It need not repeat the way the deck's own
+    /// hiss does — nothing reads this but an ear.
+    hiss_state: u32,
     pub ay: Ay,
     pub ay_present: bool,
 
@@ -268,6 +274,8 @@ impl Audio {
             acc_t: 0.0,
             last_t: 0,
             beeper: 0.0,
+            tape_hiss: 0.0,
+            hiss_state: 0x1234_5678,
             ay: Ay::new(),
             ay_present: false,
             dc_x1: 0.0,
@@ -335,7 +343,7 @@ impl Audio {
             } else {
                 0.0
             };
-            self.acc += (self.beeper + ay_out) * chunk as f32;
+            self.acc += (self.beeper + ay_out + self.hiss()) * chunk as f32;
             self.acc_t += chunk;
             dt -= chunk;
             if self.acc_t >= self.t_per_sample - 1e-9 {
@@ -345,6 +353,19 @@ impl Audio {
                 self.acc_t = 0.0;
             }
         }
+    }
+
+    /// A sample of hiss: white noise at whatever the deck says it is worth.
+    fn hiss(&mut self) -> f32 {
+        if self.tape_hiss <= 0.0 {
+            return 0.0;
+        }
+        // xorshift, which is white enough for a hiss and costs nothing.
+        self.hiss_state ^= self.hiss_state << 13;
+        self.hiss_state ^= self.hiss_state >> 17;
+        self.hiss_state ^= self.hiss_state << 5;
+        let unit = (self.hiss_state >> 8) as f32 / (1 << 24) as f32 * 2.0 - 1.0;
+        unit * self.tape_hiss
     }
 
     fn push(&mut self, sample: f32) {

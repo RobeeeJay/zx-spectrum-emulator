@@ -781,3 +781,48 @@ fn a_row_offers_to_put_a_stop_in_front_of_its_block() {
          the row does"
     );
 }
+
+/// And a stop block's own row offers to take it out again.
+///
+/// The stops put in from the list are the only blocks the list makes, so they
+/// are the only ones it takes away: every other block is what the tape holds.
+#[test]
+fn a_stop_blocks_row_offers_to_delete_it() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![
+            Block::Pause(0),
+            Block::PureTone {
+                len: 2168,
+                count: 100,
+            },
+        ],
+    ));
+    let mut h = harness_for(app);
+    h.state_mut().tape_mut().unwrap().seek(1);
+    h.run_steps(2);
+
+    let over = h
+        .get_all_by_label_contains("1  Stop the tape")
+        .next()
+        .and_then(|node| node.accesskit_node().bounding_box())
+        .map(|box_| egui::pos2(box_.x0 as f32 + 20.0, box_.y0 as f32 + 4.0))
+        .expect("the stop block should be listed");
+    h.input_mut().events.push(egui::Event::PointerMoved(over));
+    h.run_steps(2);
+
+    assert!(
+        h.query_by_label("⏸ Pause before").is_none(),
+        "a stop block should not be offered another stop in front of it"
+    );
+    h.get_by_label("✖ Delete").click();
+    h.run_steps(2);
+
+    let deck = h.state().tape_ref().unwrap();
+    assert_eq!(deck.blocks.len(), 1, "the stop should have gone");
+    assert_eq!(
+        deck.block, 0,
+        "and the deck should still be on the tone, which has moved back one"
+    );
+}

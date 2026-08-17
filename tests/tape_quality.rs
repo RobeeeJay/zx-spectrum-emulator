@@ -72,7 +72,7 @@ fn intervals_from(tape: &mut Tape, from: u64, to: u64) -> Vec<u64> {
 fn a_wavering_motor_wanders_slowly() {
     let wobbly = Quality {
         speed: true,
-        speed_wobble: 0.1,
+        wow: 0.05,
         ..Quality::default()
     };
     let second = CPU_HZ as u64;
@@ -86,7 +86,7 @@ fn a_wavering_motor_wanders_slowly() {
     let low = means.iter().cloned().fold(f64::MAX, f64::min);
     let high = means.iter().cloned().fold(0.0, f64::max);
     assert!(
-        high - low > 100.0,
+        high - low > 50.0,
         "the motor should wander over seconds: {means:?}"
     );
 
@@ -233,7 +233,8 @@ fn the_corner_comes_down_and_wanders() {
 fn a_bad_deck_is_bad_in_the_same_way_every_time() {
     let quality = Quality {
         speed: true,
-        speed_wobble: 0.08,
+        wow: 0.04,
+        flutter: 0.02,
         alignment: true,
         alignment_offset: 0.1,
         alignment_wobble: 0.05,
@@ -537,5 +538,58 @@ fn the_silence_between_blocks_hisses_too() {
         in_the_gap > 20,
         "a loud hiss in the gap should be edges the machine can hear: \
          {in_the_gap}"
+    );
+}
+
+/// Wow and flutter are two different faults with two different rates, and the
+/// sliders are separate because a deck can have either. Wow is the reel, over
+/// seconds; flutter is the capstan, over a fraction of one.
+#[test]
+fn wow_wanders_and_flutter_warbles() {
+    let second = CPU_HZ as u64;
+    let spread_over = |quality: Quality, window: u64| -> f64 {
+        let mut tape = tone_tape(quality);
+        let means: Vec<f64> = (0..8)
+            .map(|step| {
+                let at = step * window;
+                let gaps = intervals_from(&mut tape, at, at + window);
+                gaps.iter().sum::<u64>() as f64 / gaps.len().max(1) as f64
+            })
+            .collect();
+        let low = means.iter().cloned().fold(f64::MAX, f64::min);
+        means.iter().cloned().fold(0.0, f64::max) - low
+    };
+
+    let wow_only = Quality {
+        speed: true,
+        wow: 0.05,
+        ..Quality::default()
+    };
+    let flutter_only = Quality {
+        speed: true,
+        flutter: 0.05,
+        ..Quality::default()
+    };
+
+    // Over a tenth of a second, flutter has moved and wow has hardly begun.
+    let tenth = second / 10;
+    let (slow, quick) = (
+        spread_over(wow_only, tenth),
+        spread_over(flutter_only, tenth),
+    );
+    assert!(
+        quick > slow * 3.0,
+        "flutter should be the quick one: {quick:.0}T against {slow:.0}T over \
+         a tenth of a second"
+    );
+
+    // Over seconds, wow has been round and is the larger of the two.
+    let (slow, quick) = (
+        spread_over(wow_only, second),
+        spread_over(flutter_only, second),
+    );
+    assert!(
+        slow > quick,
+        "and wow the slow one: {slow:.0}T against {quick:.0}T over seconds"
     );
 }

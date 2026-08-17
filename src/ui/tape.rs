@@ -143,7 +143,7 @@ fn speeds(app: &mut App, ui: &mut egui::Ui) {
 fn quality(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(theme::ROW_H);
-        ui.spacing_mut().slider_width = 96.0;
+        ui.spacing_mut().slider_width = 76.0;
         theme::group_label(ui, "Quality");
         theme::toggle(ui, &mut app.quality.speed, "Speed").on_hover_text(
             "Let the motor waver, as a real one does: wow over a turn of the \
@@ -154,9 +154,16 @@ fn quality(app: &mut App, ui: &mut egui::Ui) {
         ui.add_enabled_ui(app.quality.speed, |ui| {
             theme::slider(
                 ui,
-                egui::Slider::new(&mut app.quality.speed_wobble, 0.0..=0.25)
-                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-            );
+                egui::Slider::new(&mut app.quality.wow, 0.0..=0.05)
+                    .custom_formatter(|v, _| format!("wow {:.1}%", v * 100.0)),
+            )
+            .on_hover_text("The slow one: the reel turning out of true, over seconds");
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.flutter, 0.0..=0.05)
+                    .custom_formatter(|v, _| format!("flut {:.1}%", v * 100.0)),
+            )
+            .on_hover_text("The quick one: the capstan and the tape's own stiffness");
         });
         theme::toggle(ui, &mut app.quality.noise, "Noise").on_hover_text(
             "Tape hiss, there from the moment the head goes down: under the \
@@ -479,13 +486,20 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
         app.tape.last_block = Some(current);
         app.tape.scroll_to_current = true;
     }
-    let rows: Vec<(usize, String, bool)> = app
+    let rows: Vec<(usize, String, bool, bool)> = app
         .tape_ref()
         .unwrap()
         .blocks
         .iter()
         .enumerate()
-        .map(|(i, b)| (i, b.describe(), b.is_data()))
+        .map(|(i, b)| {
+            (
+                i,
+                b.describe(),
+                b.is_data(),
+                matches!(b, crate::tape::Block::Pause(0)),
+            )
+        })
         .collect();
 
     // How far through the block being played, to shade its row.
@@ -503,12 +517,13 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
 
     let mut clicked = None;
     let mut insert_before: Option<usize> = None;
+    let mut remove: Option<usize> = None;
     app.tape.scroll_requested_for = None;
     egui::ScrollArea::vertical()
         .id_salt("tape-blocks")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (i, text, is_data) in rows {
+            for (i, text, is_data, is_stop) in rows {
                 let is_current = i == current;
                 let mut rich = RichText::new(format!("{:3}  {text}", i + 1)).monospace();
                 if !is_data && !is_current {
@@ -560,7 +575,18 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                             .max_rect(strip.shrink2(egui::vec2(2.0, 0.0)))
                             .layout(egui::Layout::right_to_left(egui::Align::Center)),
                     );
-                    if over
+                    // A stop offers to go again: the ones put in from here are
+                    // the only blocks the list makes, so they are the only
+                    // ones it takes away.
+                    if is_stop {
+                        if over
+                            .button(RichText::new("✖ Delete").size(11.0))
+                            .on_hover_text("Take this stop-the-tape block out again")
+                            .clicked()
+                        {
+                            remove = Some(i);
+                        }
+                    } else if over
                         .button(RichText::new("⏸ Pause before").size(11.0))
                         .on_hover_text(
                             "Put a stop-the-tape block in front of this one, \
@@ -578,6 +604,11 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
 
     if let Some(i) = insert_before {
         app.tape_mut().unwrap().insert_stop_before(i);
+        return;
+    }
+
+    if let Some(i) = remove {
+        app.tape_mut().unwrap().remove_block(i);
         return;
     }
 

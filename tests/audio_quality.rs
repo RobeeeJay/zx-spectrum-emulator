@@ -237,3 +237,52 @@ fn a_steady_ay_tone_comes_out_at_the_right_pitch_and_without_jumps() {
         "largest jump {biggest_step} against amplitude {amplitude}"
     );
 }
+
+/// Hiss is a sound, not just a signal.
+///
+/// The reader only hears the hiss when it crosses its threshold, so a quiet
+/// one made no sound at all through a gap between blocks — where a real tape
+/// with the volume up hisses steadily. The mixer is given the hiss as a level
+/// and makes the noise itself, so it is audible where the tape is silent.
+#[test]
+fn a_hissing_tape_is_audible_through_a_silence() {
+    use zx_rustrum::tape::Quality;
+
+    let loudness = |noise: bool| -> f32 {
+        let mut spec = Spectrum::new();
+        spec.bus.rom.iter_mut().for_each(|b| *b = 0x00);
+        let q = queue();
+        spec.bus.audio.attach(q.clone(), 48_000.0);
+        spec.bus.audio.volume = 1.0;
+        // A silence: nothing on the tape to read at all.
+        let mut tape = Tape::from_blocks("quiet".into(), vec![Block::Pause(5000)]);
+        tape.quality = Quality {
+            noise,
+            noise_level: 0.8,
+            ..Quality::default()
+        };
+        tape.play(0);
+        spec.bus.tape = Some(tape);
+        for _ in 0..12 {
+            spec.run(spec.bus.frame_t());
+            spec.bus.tape_tick();
+        }
+        spec.bus.audio_sync();
+        spec.bus.audio.flush();
+        let s = samples(&q);
+        // The last of it, so the mixer's gain ramp is over.
+        let tail = &s[s.len().saturating_sub(4000)..];
+        tail.iter().map(|v| v.abs()).sum::<f32>() / tail.len().max(1) as f32
+    };
+
+    let quiet = loudness(false);
+    let hissing = loudness(true);
+    assert!(
+        quiet < 0.001,
+        "a silence with the noise off should be silent: {quiet:.4}"
+    );
+    assert!(
+        hissing > 0.005,
+        "and one with the noise on should be heard: {hissing:.4}"
+    );
+}

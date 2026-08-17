@@ -712,9 +712,12 @@ struct Pulse {
 pub struct Quality {
     /// Whether the motor wavers.
     pub speed: bool,
-    /// How far it wavers, as a fraction of the right speed: 0.05 is a deck
-    /// running five per cent fast and slow by turns.
-    pub speed_wobble: f32,
+    /// Wow: the slow one, a couple of turns of the reel, as a fraction of the
+    /// right speed.
+    pub wow: f32,
+    /// Flutter: the quick one, over the top of the wow and by the same
+    /// measure.
+    pub flutter: f32,
     /// Whether the head is out of square with the tape.
     pub alignment: bool,
     /// How far out, from square at 0 to hopeless at 1. What it sets is where
@@ -772,7 +775,8 @@ impl Default for Quality {
     fn default() -> Self {
         Self {
             speed: false,
-            speed_wobble: 0.0,
+            wow: 0.0,
+            flutter: 0.0,
             alignment: false,
             alignment_offset: 0.0,
             alignment_wobble: 0.0,
@@ -809,11 +813,17 @@ impl Quality {
             return len;
         }
         let seconds = at as f32 / crate::machine::CPU_HZ as f32;
-        let wow = (seconds * std::f32::consts::TAU * 0.037).sin();
-        let slower = (seconds * std::f32::consts::TAU * 0.012).sin() * 0.6;
-        let flutter = (seconds * std::f32::consts::TAU * 1.4).sin() * 0.15;
-        let waver = (wow + slower + flutter) / 1.75;
-        (len as f32 * (1.0 + self.speed_wobble * waver)).max(1.0) as u32
+        // Wow is the reel turning out of true: a period of seconds, with a
+        // slower drift under it.
+        let turn = (seconds * std::f32::consts::TAU * 0.037).sin();
+        let drift = (seconds * std::f32::consts::TAU * 0.012).sin() * 0.6;
+        let wow = self.wow * (turn + drift) / 1.6;
+        // Flutter is the capstan and the tape's own stiffness, which is quick
+        // enough to hear as a warble rather than as a waver.
+        let quick = (seconds * std::f32::consts::TAU * 1.4).sin();
+        let quicker = (seconds * std::f32::consts::TAU * 6.3).sin() * 0.4;
+        let flutter = self.flutter * (quick + quicker) / 1.4;
+        (len as f32 * (1.0 + wow + flutter)).max(1.0) as u32
     }
 
     /// The hiss at a given moment, between -1 and 1 before it is scaled.
@@ -1155,6 +1165,22 @@ impl Tape {
         self.trace.push_back((end, settled));
     }
 
+    /// How loud the hiss is to the loudspeaker, rather than to the reader.
+    ///
+    /// The reader only hears the hiss when it crosses its threshold, so a
+    /// quiet one is inaudible where the tape is silent — which is not what a
+    /// tape sounds like. The mixer is given the hiss itself instead, so it is
+    /// there through the gaps between blocks and under the signal, as it is on
+    /// a real deck with the volume up.
+    pub fn audible_hiss(&self) -> f32 {
+        if !self.head_down || !self.quality.noise {
+            return 0.0;
+        }
+        // Against the 0.08 the EAR line is worth in the mix: a hiss you can
+        // hear under a loading tone without it being the loudest thing there.
+        self.quality.noise_level * 0.06
+    }
+
     /// The signal on the line across a window of time, at whatever resolution
     /// the scope asks for.
     ///
@@ -1424,6 +1450,18 @@ impl Tape {
         self.blocks.insert(index, Block::Pause(0));
         if index <= self.block {
             self.block += 1;
+        }
+    }
+
+    /// Take a block out of the tape, which is only offered for the stop
+    /// blocks put in from the block list.
+    pub fn remove_block(&mut self, index: usize) {
+        if index >= self.blocks.len() {
+            return;
+        }
+        self.blocks.remove(index);
+        if index < self.block {
+            self.block -= 1;
         }
     }
 

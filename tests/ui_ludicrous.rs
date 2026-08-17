@@ -159,7 +159,7 @@ fn the_quality_row_sets_the_decks_failings() {
 
     // What the sliders are set to reaches the deck, which is where the pulses
     // are made.
-    h.state_mut().quality.speed_wobble = 0.07;
+    h.state_mut().quality.wow = 0.03;
     h.state_mut().quality.alignment_offset = 0.15;
     h.state_mut().advance(1.0 / 50.0);
     let deck = h.state().spec.bus.tape.as_ref().expect("a tape").quality;
@@ -168,7 +168,7 @@ fn the_quality_row_sets_the_decks_failings() {
         "the deck should have been told: {deck:?}"
     );
     assert!(
-        (deck.speed_wobble - 0.07).abs() < 0.001 && (deck.alignment_offset - 0.15).abs() < 0.001,
+        (deck.wow - 0.03).abs() < 0.001 && (deck.alignment_offset - 0.15).abs() < 0.001,
         "and told how far: {deck:?}"
     );
 }
