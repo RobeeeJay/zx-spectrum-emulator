@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::flow::{always_jumps, classify, Flow};
+use crate::flow::{always_jumps, always_returns, classify, Flow};
 
 /// Where a write landed. The Spectrum's memory map makes these worth counting
 /// separately: they are the difference between drawing, colouring and thinking.
@@ -147,6 +147,11 @@ pub struct Observed {
     /// past the exit, since `RET` is one byte and `JP nn` is three. It is
     /// where the next routine begins when one falls straight after another,
     /// so it has to be the end of the instruction rather than the start.
+    ///
+    /// Only the exits that always end the routine are here. A taken `RET Z`
+    /// ends the call it is in and nothing more: the next call through may fall
+    /// straight past it, so it is not where the routine stops. Counting those
+    /// drew every guarded routine as far as its first test.
     pub after: Vec<u16>,
     pub ports_in: Vec<u16>,
     pub ports_out: Vec<u16>,
@@ -718,8 +723,9 @@ impl Observer {
                 if let Some(entry) = self.current() {
                     // RET is one byte; RETI and RETN carry the ED prefix.
                     let length = if opcode[0] == 0xED { 2 } else { 1 };
+                    let ends_it = always_returns(opcode);
                     let stats = self.stats(entry);
-                    note_exit(stats, pc_before, pc_before.wrapping_add(length));
+                    note_exit(stats, pc_before, pc_before.wrapping_add(length), ends_it);
                 }
                 self.leave(sp_before)
             }
@@ -757,7 +763,7 @@ impl Observer {
             0xDD | 0xFD => 2,
             _ => 1,
         };
-        note_exit(stats, from, from.wrapping_add(length));
+        note_exit(stats, from, from.wrapping_add(length), true);
 
         // Entered like anything else, so it is counted, timed and joined to
         // whoever called the routine it jumped out of.
@@ -876,12 +882,20 @@ impl DataKind {
 }
 
 /// Note where a routine ended and where the byte after that instruction is.
-fn note_exit(stats: &mut Observed, at: u16, after: u16) {
+///
+/// `ends_it` says whether the instruction always ends the routine — a plain
+/// `RET`, or a jump that always jumps — as against a conditional one, which
+/// ended *this* call and leaves the routine carrying on underneath. Both are
+/// exits and both are worth knowing; only the first is a boundary, or a
+/// routine would be drawn as far as its first test and no further.
+fn note_exit(stats: &mut Observed, at: u16, after: u16, ends_it: bool) {
     if stats.exits.len() >= 8 || stats.exits.contains(&at) {
         return;
     }
     stats.exits.push(at);
-    stats.after.push(after);
+    if ends_it {
+        stats.after.push(after);
+    }
 }
 
 /// One IN or OUT instruction, and what it has been seen doing.

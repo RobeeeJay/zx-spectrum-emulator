@@ -42,6 +42,26 @@ pub fn always_jumps(opcode: [u8; 2]) -> bool {
     }
 }
 
+/// Whether an opcode is a return that always returns.
+///
+/// `RET`, `RETI` and `RETN`. A conditional `RET cc` is not one: it is an early
+/// way out taken when a flag says so, and the routine carries on underneath
+/// it. The distinction matters where a routine's *extent* is being worked out
+/// rather than where one call ended — a taken `RET Z` ends that call, and the
+/// next call through the same routine may fall straight past it. Treating it
+/// as the end drew the routine as far as its first test and no further.
+pub fn always_returns(opcode: [u8; 2]) -> bool {
+    match opcode[0] {
+        0xC9 => true,
+        // RETI and RETN, which are ED-prefixed.
+        0xED => matches!(
+            opcode[1],
+            0x4D | 0x45 | 0x55 | 0x5D | 0x65 | 0x6D | 0x75 | 0x7D
+        ),
+        _ => false,
+    }
+}
+
 /// Classify one executed instruction. `peek` reads the word at an address.
 pub fn classify(
     pc_before: u16,

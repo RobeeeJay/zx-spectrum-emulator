@@ -237,6 +237,15 @@ hedges in the wording when the evidence is thin ("possibly a protection
 check"), and a rule that always has an answer would be worse than none, so code
 with no tell is left unnamed.
 
+**A conditional way out is not where a routine ends.** A taken `RET Z` ends the
+call it is in; the next call through may fall straight past it, so the routine
+carries on underneath. Only the exits that always end it — a plain `RET`, or a
+jump that always jumps — are boundaries between blocks. Counting the
+conditional ones drew every guarded routine as far as its first test, which is
+how the coloured blocks in the debugger came to look smaller than the routines
+they were of. Both kinds are still recorded as exits: knowing where a routine
+can leave early is worth having, it is just not where it stops.
+
 **Each routine carries three numbers: how big it is, what it wrote and what it
 read.** The size is the distance between the lowest and highest address seen
 executing inside it — where the routine reaches, which is where to start
