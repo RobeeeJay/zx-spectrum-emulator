@@ -470,6 +470,11 @@ screen up and the tape run out at the "Stop the tape" that divides side A from
 the 128K version behind it. Pressing Play again plays the 128K side past it and
 changes nothing.
 
+**The 128K side of the same tape loads on a 128K machine**, which the user has
+confirmed; it is side A, the 48K version, that does not load on either machine.
+So it is not the tape, the Bleepload family, or the deck: three other Bleepload
+tapes load, and the far end of this one loads too.
+
 It was passing as a game that loads. The check was "the machine is not in a
 loader, and there is something on the screen": a loading screen is something on
 the screen, and the ROM is not the address range the check called a loader. The

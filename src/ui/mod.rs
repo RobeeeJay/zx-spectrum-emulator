@@ -402,7 +402,8 @@ pub struct App {
     pub composite: bool,
     /// The televised picture, kept between frames so it is not reallocated.
     crt_pixels: Vec<u8>,
-    /// Whether the texture that exists was made with the set on.
+    /// Whether the texture that exists was made with a gap under every line,
+    /// which is what decides its height.
     crt_drawn: bool,
     pub scale: f32,
     /// Show the whole overscan area, or crop the border to television size.
@@ -2416,6 +2417,22 @@ impl App {
         self.screen_tex.clone()
     }
 
+    /// How the picture is sampled when it is drawn.
+    ///
+    /// Nearest, so a pixel is a hard square, unless the set is on: a tube has
+    /// no pixel edges, and drawing one through a nearest sample beats against
+    /// the screen it is being shown on. That beat is where the moiré came
+    /// from — the line gaps and the herringbone are both about a pixel wide,
+    /// and a picture scaled by anything but a whole number samples some of
+    /// them twice and some not at all.
+    pub fn picture_filter(&self) -> TextureOptions {
+        if self.crt || self.composite {
+            TextureOptions::LINEAR
+        } else {
+            TextureOptions::NEAREST
+        }
+    }
+
     /// What the two switches ask of the picture.
     ///
     /// The tube gives every line a gap under it, which is what doubles the
@@ -2431,8 +2448,16 @@ impl App {
                 0.0
             },
             bleed: if self.composite { plain.bleed } else { 0.0 },
-            scanlines: if self.crt { plain.scanlines } else { 0.0 },
-            line_gaps: self.crt,
+            // Only where there is room to draw them. A gap under every line
+            // needs two rows of screen for every row of picture, and asking
+            // for them at a zoom that has not got two is asking for a moiré:
+            // some gaps drawn, some not, in a pattern of their own.
+            scanlines: if self.crt && self.scale >= 2.0 {
+                plain.scanlines
+            } else {
+                0.0
+            },
+            line_gaps: self.crt && self.scale >= 2.0,
         }
     }
 
@@ -2462,12 +2487,13 @@ impl App {
         }
         let view = self.view();
         let flash = self.flash_on();
-        if self.screen_pixels.len() != view.buffer_len() || self.crt != self.crt_drawn {
+        let gaps = self.crt_settings().line_gaps;
+        if self.screen_pixels.len() != view.buffer_len() || gaps != self.crt_drawn {
             self.screen_pixels = vec![0; view.buffer_len()];
             // The texture has to be remade at the new size, and switching the
             // set on or off doubles the height or halves it again.
             self.screen_tex = None;
-            self.crt_drawn = self.crt;
+            self.crt_drawn = gaps;
         }
         // Bring the painted frame up to where the beam has got to. It is
         // otherwise only caught up when the program writes to the screen, so a
@@ -2528,7 +2554,7 @@ impl App {
                 frame,
                 x0,
             );
-            let rows = if self.crt { 2 } else { 1 };
+            let rows = if set.line_gaps { 2 } else { 1 };
             ColorImage::from_rgba_unmultiplied(
                 [view.width(), view.height() * rows],
                 &self.crt_pixels,
@@ -2536,12 +2562,10 @@ impl App {
         } else {
             ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels)
         };
+        let filter = self.picture_filter();
         match &mut self.screen_tex {
-            Some(t) => t.set(img, TextureOptions::NEAREST),
-            None => {
-                self.screen_tex =
-                    Some(ctx.load_texture("spectrum-screen", img, TextureOptions::NEAREST))
-            }
+            Some(t) => t.set(img, filter),
+            None => self.screen_tex = Some(ctx.load_texture("spectrum-screen", img, filter)),
         }
     }
 

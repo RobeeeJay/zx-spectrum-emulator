@@ -229,6 +229,24 @@ Three things, none of them invented:
   number of cycles either, so it arrives somewhere else next time and the whole
   thing crawls.
 
+### Keeping it off the moiré
+
+Everything here is about a pixel across — the gap under each line, and a
+herringbone with a period of two and a half — so the picture beats against the
+screen it is shown on unless three things are watched:
+
+- **The set's picture is sampled smoothly**, and the machine's is not. A tube
+  has no pixel edges; drawing one through a nearest sample takes some gaps
+  twice and some not at all, which is a moiré over the whole screen. With both
+  switches off a pixel goes back to being a hard square.
+- **The line gaps are only drawn where there is room for them.** They need two
+  rows of screen for every row of picture, so below 2x zoom there are none:
+  asking for them at 1x is asking for a pattern of gaps rather than a line
+  structure.
+- **The herringbone is a few per cent** of the picture's brightness and no
+  more. Beyond that what shows is not the pattern a set had but the beat
+  between it and whatever the picture is being scaled by.
+
 The curve of the glass is geometry rather than pixels, and it is in where each
 quad *reads from* rather than in where it sits: the picture is a grid filling
 the same rectangle it always did, and each vertex takes its colour from a point

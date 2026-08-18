@@ -55,6 +55,10 @@ pub fn roll_per_frame() -> f64 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Crt {
     /// How much of the picture's brightness the interference swings, 0 to 1.
+    ///
+    /// A few per cent. It is a pattern about two and a half pixels across, so
+    /// any more of it and what shows is not the herringbone a set had but the
+    /// beat between that and whatever the picture is being scaled by.
     pub interference: f32,
     /// How far the colour is smeared sideways, in pixels. Composite video
     /// carries colour on a subcarrier with a fraction of the luminance's
@@ -71,7 +75,7 @@ pub struct Crt {
 impl Default for Crt {
     fn default() -> Self {
         Self {
-            interference: 0.05,
+            interference: 0.035,
             bleed: 2.5,
             scanlines: 0.35,
             line_gaps: true,

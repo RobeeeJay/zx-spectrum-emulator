@@ -312,6 +312,19 @@ fn composite_is_switched_apart_from_the_tube() {
         "and the tube does"
     );
 
+    // And the lines are only drawn where there is room for them: at 1x there
+    // is one row of screen for each row of picture, and a gap under every
+    // line would be a pattern of its own rather than a line structure.
+    h.state_mut().scale = 1.0;
+    h.run_steps(2);
+    let small = h.state().crt_settings();
+    assert!(
+        !small.line_gaps && small.scanlines == 0.0,
+        "no room for the line structure at 1x: {small:?}"
+    );
+    h.state_mut().scale = 2.0;
+    h.run_steps(2);
+
     // The tube on its own is the glass and nothing of the lead.
     h.get_by_label("Composite").click();
     h.run_steps(3);
@@ -325,4 +338,52 @@ fn composite_is_switched_apart_from_the_tube() {
         (0.0, 0.0),
         "and none of what the aerial lead does: {set:?}"
     );
+}
+
+/// The set's picture is sampled smoothly and the machine's is not.
+///
+/// A tube has no pixel edges, and drawing one through a nearest sample beats
+/// against the screen it is shown on: the line gaps and the herringbone are
+/// both about a pixel across, so a picture scaled by anything but a whole
+/// number takes some of them twice and some not at all, which is a moiré over
+/// the whole screen. With the set off, a pixel is a hard square again.
+#[test]
+fn the_set_is_sampled_smoothly_and_the_machine_is_not() {
+    use egui_kittest::kittest::Queryable;
+    use egui_kittest::Harness;
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{App, Roms};
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = false;
+    let mut h: Harness<'_, App> = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+    assert_eq!(
+        h.state().picture_filter(),
+        egui::TextureOptions::NEAREST,
+        "the ULA's pixels are squares"
+    );
+
+    for switch in ["CRT", "Composite"] {
+        h.get_by_label(switch).click();
+        h.run_steps(2);
+        assert_eq!(
+            h.state().picture_filter(),
+            egui::TextureOptions::LINEAR,
+            "{switch} should soften the picture"
+        );
+        h.get_by_label(switch).click();
+        h.run_steps(2);
+        assert_eq!(
+            h.state().picture_filter(),
+            egui::TextureOptions::NEAREST,
+            "and switching it off should give the squares back"
+        );
+    }
 }
