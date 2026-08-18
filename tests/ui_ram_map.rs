@@ -362,3 +362,168 @@ fn the_window_is_the_tape_windows_width_and_the_map_fills_it() {
          900"
     );
 }
+
+/// The view buttons look the same whether the pointer is over them or not.
+///
+/// egui's own selectable button paints no frame while it is unselected and the
+/// pointer is elsewhere, and paints one the moment the pointer arrives: the
+/// outline appears out of nowhere under the cursor, which is what "the buttons
+/// jump about" was. The theme's selectable draws its frame either way.
+///
+/// Layout says nothing about this — the button occupies the same rectangle
+/// throughout — so what is counted is what was painted over it.
+#[test]
+fn the_view_buttons_look_the_same_hovered_or_not() {
+    let frames_over = |h: &Harness<'_, App>, at: egui::Rect| -> usize {
+        h.output()
+            .shapes
+            .iter()
+            .filter(|clipped| matches!(clipped.shape, egui::Shape::Rect(_)))
+            .filter(|clipped| {
+                clipped
+                    .shape
+                    .visual_bounding_rect()
+                    .intersect(at)
+                    .is_positive()
+            })
+            .count()
+    };
+    let button = |h: &Harness<'_, App>| -> egui::Rect {
+        let b = h
+            .get_by_label("Address space")
+            .accesskit_node()
+            .bounding_box()
+            .expect("the view button should be somewhere");
+        egui::Rect::from_min_max(
+            egui::pos2(b.x0 as f32 + 2.0, b.y0 as f32 + 2.0),
+            egui::pos2(b.x1 as f32 - 2.0, b.y1 as f32 - 2.0),
+        )
+    };
+
+    let mut h = harness();
+    h.run_steps(3);
+    let at = button(&h);
+    let cold = frames_over(&h, at);
+    assert!(
+        cold > 0,
+        "the button should be framed with the pointer elsewhere"
+    );
+
+    h.input_mut()
+        .events
+        .push(egui::Event::PointerMoved(at.center()));
+    h.run_steps(3);
+    assert_eq!(
+        frames_over(&h, button(&h)),
+        cold,
+        "and the same number of shapes with the pointer on it"
+    );
+}
+
+/// The controls do not move as the pointer goes over the map.
+///
+/// The line under the map says what is beneath the pointer, and it is longer
+/// than the line that invites you to hover. In a window whose width is fixed,
+/// a line longer than the window made the content wider than its own viewport,
+/// which brought up a horizontal scrollbar, which took height from the map,
+/// which changed the map's size — and everything above it moved. The line is
+/// truncated to the width it has instead.
+#[test]
+fn hovering_the_map_does_not_move_the_controls() {
+    // At the width the window really is, where the readout has room to
+    // overflow: in a wide test window the line fits and nothing moves either
+    // way.
+    let narrow = || -> Harness<'static, App> {
+        let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+        app.show_ram_map = true;
+        app.show_debugger = false;
+        app.show_back_buffer = false;
+        app.show_tape = false;
+        app.running = false;
+        Harness::builder()
+            .with_size([zx_rustrum::ui::cassette::WINDOW_W, 900.0])
+            .build_ui_state(
+                |ui, app: &mut App| zx_rustrum::ui::ram_map::ui(app, ui),
+                app,
+            )
+    };
+    let mut h = narrow();
+    h.run_steps(3);
+    let boxes = |h: &Harness<'_, App>| -> Vec<(f32, f32)> {
+        ["Address space", "All memory", "Overlays", "Read", "Execute"]
+            .into_iter()
+            .map(|label| {
+                let b = h
+                    .get_by_label(label)
+                    .accesskit_node()
+                    .bounding_box()
+                    .expect("it should be somewhere");
+                (b.x0 as f32, b.y0 as f32)
+            })
+            .collect()
+    };
+    let before = boxes(&h);
+
+    // Over the map itself, which is under the controls and above the readout.
+    let below = h
+        .get_by_label("Execute")
+        .accesskit_node()
+        .bounding_box()
+        .map(|b| egui::pos2(b.x0 as f32 + 40.0, b.y1 as f32 + 120.0))
+        .expect("the map is below the Execute row");
+    h.input_mut().events.push(egui::Event::PointerMoved(below));
+    h.run_steps(3);
+
+    assert_eq!(
+        boxes(&h),
+        before,
+        "nothing above the map should have moved when the pointer went over it"
+    );
+    assert!(
+        h.state().ram.hover.is_some(),
+        "and the pointer should have been over the map, or this proves nothing"
+    );
+}
+
+/// The line that moves is the program counter, and it says so.
+///
+/// It was a bare white line running across the map, moving up and down as the
+/// machine ran: with nothing to name it, it reads as something wrong with the
+/// window rather than as the one part of the picture that is alive.
+#[test]
+fn the_moving_line_is_labelled_with_the_program_counter() {
+    let mut h = harness();
+    h.state_mut().spec.cpu.pc = 0x8123;
+    h.run_steps(3);
+
+    let painted: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        painted.iter().any(|t| t == "PC $8123"),
+        "the map should say what the moving line is: {painted:?}"
+    );
+
+    // And it goes when the overlays do.
+    h.get_by_label("Overlays").click();
+    h.run_steps(3);
+    let painted: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !painted.iter().any(|t| t.starts_with("PC $")),
+        "with the overlays off there should be no line to label: {painted:?}"
+    );
+}

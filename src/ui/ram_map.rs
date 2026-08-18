@@ -234,9 +234,19 @@ pub fn zoom_for(room: f32) -> f32 {
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.label("View:");
-        ui.selectable_value(&mut app.ram.view, View::AddressSpace, "Address space");
-        ui.selectable_value(&mut app.ram.view, View::AllMemory, "All memory")
-            .on_hover_text("Every RAM bank and ROM page, paged in or not");
+        // The theme's own selectable, not egui's: egui leaves the frame off an
+        // unselected button until the pointer arrives, and the stroke it then
+        // draws is a point on each side, so the button grows by two and shoves
+        // everything after it along the row.
+        if theme::selectable(ui, app.ram.view == View::AddressSpace, "Address space").clicked() {
+            app.ram.view = View::AddressSpace;
+        }
+        if theme::selectable(ui, app.ram.view == View::AllMemory, "All memory")
+            .on_hover_text("Every RAM bank and ROM page, paged in or not")
+            .clicked()
+        {
+            app.ram.view = View::AllMemory;
+        }
         ui.separator();
         theme::toggle(ui, &mut app.ram.show_overlays, "Overlays");
     });
@@ -379,9 +389,23 @@ pub fn hover_at(app: &App, x: u16, y: usize) -> Option<Hover> {
     }
 }
 
+/// What is under the pointer, on one line.
+///
+/// Truncated rather than allowed to run on. The window is a fixed width and
+/// the line is not: a reading longer than the window made the whole thing
+/// wider than its own viewport, which brought up a horizontal scrollbar,
+/// which took height from the map, which changed the map's size — and the
+/// controls above it moved as the pointer went over the map. That is what
+/// "the buttons jump about on hover" was.
 fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
+    let line = |ui: &mut egui::Ui, text: String| {
+        ui.add(egui::Label::new(egui::RichText::new(text).monospace()).truncate());
+    };
     let Some(hover) = app.ram.hover.clone() else {
-        ui.monospace("hover for details; click to show the address in the debugger");
+        line(
+            ui,
+            "hover for details; click to show the address in the debugger".into(),
+        );
         return;
     };
     let value = match hover.addr {
@@ -394,10 +418,11 @@ fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
         None => "not paged in".to_string(),
     };
     let t = app.tracker();
-    ui.monospace(format!(
+    let text = format!(
         "{} +${:04X} {}  = ${value:02X}   reads {}   writes {}",
         hover.what, hover.offset, where_, t.read_count[hover.phys], t.write_count[hover.phys],
-    ));
+    );
+    line(ui, text);
     if response.clicked() {
         if let Some(addr) = hover.addr {
             app.dbg.follow_pc = false;
@@ -430,11 +455,7 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
 
     if app.on_zx81() {
         zx81_overlays(app, painter, &band, &outline);
-        let py = row_y(app.cpu().pc as u32);
-        painter.line_segment(
-            [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
-            Stroke::new(1.0, Color32::WHITE),
-        );
+        program_counter(app, painter, rect, row_y(app.cpu().pc as u32));
         return;
     }
 
@@ -484,11 +505,25 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
         );
     }
 
-    // Where the CPU is right now.
-    let py = row_y(app.cpu().pc as u32);
+    program_counter(app, painter, rect, row_y(app.cpu().pc as u32));
+}
+
+/// Where the CPU is, as a line across the row it is executing in.
+///
+/// Labelled, like everything else drawn over the map. It was a bare white line
+/// that moved up and down as the machine ran, which reads as something wrong
+/// with the window rather than as the one part of the picture that is alive.
+fn program_counter(app: &App, painter: &egui::Painter, rect: Rect, y: f32) {
     painter.line_segment(
-        [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
+        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
         Stroke::new(1.0, Color32::WHITE),
+    );
+    painter.text(
+        egui::pos2(rect.right() - 3.0, y + 1.0),
+        egui::Align2::RIGHT_TOP,
+        format!("PC ${:04X}", app.cpu().pc),
+        egui::FontId::monospace(9.0),
+        Color32::WHITE,
     );
 }
 

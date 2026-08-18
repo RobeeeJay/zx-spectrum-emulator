@@ -303,9 +303,17 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         sweep_slider(&mut app.tape.window_us, ui);
         ui.separator();
         theme::group_label(ui, "Trigger");
-        ui.selectable_value(&mut app.tape.trigger, Trigger::Rising, "Rising");
-        ui.selectable_value(&mut app.tape.trigger, Trigger::Falling, "Falling");
-        ui.selectable_value(&mut app.tape.trigger, Trigger::Off, "Free run");
+        // The theme's selectable rather than egui's, which grows by its frame
+        // when the pointer arrives and shoves the row along.
+        for (kind, name) in [
+            (Trigger::Rising, "Rising"),
+            (Trigger::Falling, "Falling"),
+            (Trigger::Off, "Free run"),
+        ] {
+            if theme::selectable(ui, app.tape.trigger == kind, name).clicked() {
+                app.tape.trigger = kind;
+            }
+        }
     });
 
     let now = app.machine_t();
