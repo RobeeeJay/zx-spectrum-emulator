@@ -58,6 +58,9 @@ pub enum View {
     /// One turn again, as nested bars whose width is the work done: what a
     /// turn is made of and where its time goes, in one picture.
     Flame,
+    /// One turn against the frames it ran in: when each routine ran, and
+    /// whether that was before or after the beam had been past.
+    Timeline,
 }
 
 impl View {
@@ -66,11 +69,12 @@ impl View {
             View::Thread => "Thread",
             View::Graph => "Graph",
             View::Flame => "Flame",
+            View::Timeline => "Timeline",
         }
     }
 
-    pub fn all() -> [View; 3] {
-        [View::Thread, View::Graph, View::Flame]
+    pub fn all() -> [View; 4] {
+        [View::Thread, View::Graph, View::Flame, View::Timeline]
     }
 }
 
@@ -117,6 +121,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     };
     match app.callflow.view {
         View::Flame => flame(app, ui, &turn),
+        View::Timeline => timeline(app, ui, &turn),
         _ => draw(app, ui, &turn),
     }
     app.callflow.turn = Some(turn);
@@ -191,6 +196,11 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
                     View::Flame => {
                         "One turn as nested bars, each as wide as the work it \
                          does: what a turn is made of and where its time goes."
+                    }
+                    View::Timeline => {
+                        "One turn against the frames it ran in, with the \
+                         stretch where the ULA is drawing the picture shaded: \
+                         what ran before the beam was past, and what ran after."
                     }
                 })
                 .clicked()
@@ -758,5 +768,125 @@ fn label_for(app: &App, entry: u16) -> String {
         format!("${entry:04X}")
     } else {
         format!("{name}  ${entry:04X}")
+    }
+}
+
+/// How a lane is drawn in the timeline.
+const LANE_H: f32 = 20.0;
+const LANE_GAP: f32 = 4.0;
+const NAMES_W: f32 = 150.0;
+
+/// One turn of the loop against the frames it ran in.
+///
+/// The thread says what was called and the flame says what it cost; this says
+/// when. On this machine that is the whole question — the ULA is drawing the
+/// picture while the program runs, so a routine that writes to the display
+/// file above the beam is seen this frame and one that writes below it is seen
+/// next frame. The shaded band is the display being drawn; the lines are frame
+/// boundaries, which is where the interrupt lands.
+fn timeline(app: &mut App, ui: &mut egui::Ui, turn: &Turn) {
+    let frame_t = app.spec.bus.frame_t();
+    let laid = crate::timeline::lay_out(&turn.steps, frame_t);
+    if laid.bars.is_empty() {
+        ui.label(RichText::new("Nothing ran in this turn.").color(theme::DIM));
+        return;
+    }
+
+    let height = laid.lanes.len() as f32 * (LANE_H + LANE_GAP) + 30.0;
+    let mut go_to = None;
+    egui::ScrollArea::both()
+        .id_salt("callflow-timeline")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let width = ui.available_width().max(500.0) - 20.0;
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::click());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 0.0, theme::LCD_BG);
+
+            let plot = Rect::from_min_max(
+                Pos2::new(rect.left() + NAMES_W, rect.top() + 8.0),
+                Pos2::new(rect.right() - 8.0, rect.bottom() - 8.0),
+            );
+            let x_of = |t: u64| -> f32 {
+                let along = (t.saturating_sub(laid.from)) as f32 / laid.span() as f32;
+                plot.left() + along.clamp(0.0, 1.0) * plot.width()
+            };
+
+            // The frames the turn covers, with the display period shaded: a
+            // write inside the band is a write the beam may already have gone
+            // past.
+            let (first, last) = (laid.from / frame_t as u64, laid.to / frame_t as u64);
+            let (start, end) = crate::timeline::display_window(
+                app.spec.bus.first_pixel_t(),
+                192,
+                app.spec.bus.model.t_per_line(),
+            );
+            for frame in first..=last {
+                let base = frame * frame_t as u64;
+                let band = Rect::from_min_max(
+                    Pos2::new(x_of(base + start as u64), plot.top()),
+                    Pos2::new(x_of(base + end as u64), plot.bottom()),
+                );
+                painter.rect_filled(band, 0.0, Color32::from_rgb(0x0d, 0x1d, 0x1a));
+                let edge = x_of(base);
+                painter.line_segment(
+                    [Pos2::new(edge, plot.top()), Pos2::new(edge, plot.bottom())],
+                    Stroke::new(1.0, theme::AMBER.gamma_multiply(0.5)),
+                );
+            }
+
+            for (lane, entry) in laid.lanes.iter().enumerate() {
+                let y = plot.top() + lane as f32 * (LANE_H + LANE_GAP);
+                painter.text(
+                    Pos2::new(rect.left() + 8.0, y + LANE_H / 2.0),
+                    egui::Align2::LEFT_CENTER,
+                    label_for(app, *entry),
+                    egui::FontId::monospace(11.0),
+                    theme::LCD_FG,
+                );
+                painter.line_segment(
+                    [
+                        Pos2::new(plot.left(), y + LANE_H + LANE_GAP / 2.0),
+                        Pos2::new(plot.right(), y + LANE_H + LANE_GAP / 2.0),
+                    ],
+                    Stroke::new(1.0, theme::EDGE.gamma_multiply(0.4)),
+                );
+            }
+
+            for bar in &laid.bars {
+                let y = plot.top() + bar.lane as f32 * (LANE_H + LANE_GAP);
+                let at = Rect::from_min_max(
+                    Pos2::new(x_of(bar.from), y + 2.0),
+                    Pos2::new((x_of(bar.to)).max(x_of(bar.from) + 2.0), y + LANE_H - 2.0),
+                );
+                let hovered = response.hover_pos().is_some_and(|p| at.contains(p));
+                painter.rect_filled(
+                    at,
+                    2.0,
+                    if hovered {
+                        theme::AMBER
+                    } else {
+                        Color32::from_rgb(0x14, 0x44, 0x3a)
+                    },
+                );
+                if hovered && response.clicked() {
+                    go_to = Some(bar.entry);
+                }
+            }
+
+            painter.text(
+                Pos2::new(plot.left(), rect.bottom() - 2.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!(
+                    "{} frames, shaded where the ULA is drawing the picture",
+                    last - first + 1
+                ),
+                egui::FontId::monospace(10.0),
+                theme::DIM,
+            );
+        });
+    if let Some(entry) = go_to {
+        app.show_in_debugger(entry);
     }
 }

@@ -28,6 +28,7 @@ pub mod screen;
 pub mod snapshot;
 pub mod svg;
 pub mod tape;
+pub mod timeline;
 pub mod tracker;
 pub mod ui;
 pub mod z80;

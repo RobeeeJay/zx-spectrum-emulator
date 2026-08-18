@@ -548,11 +548,13 @@ fn the_window_offers_three_views_of_the_calls() {
         );
     }
 
-    // And the flame chart is the third, which needs a turn to draw.
-    h.get_by_label("Flame").click();
-    h.run_steps(3);
-    assert_eq!(
-        h.state().callflow.view,
-        zx_rustrum::ui::callflow::View::Flame
-    );
+    // And the other two, which need a turn to draw.
+    for (name, want) in [
+        ("Flame", zx_rustrum::ui::callflow::View::Flame),
+        ("Timeline", zx_rustrum::ui::callflow::View::Timeline),
+    ] {
+        h.get_by_label(name).click();
+        h.run_steps(3);
+        assert_eq!(h.state().callflow.view, want, "{name} should be showing");
+    }
 }

@@ -237,6 +237,20 @@ hedges in the wording when the evidence is thin ("possibly a protection
 check"), and a rule that always has an answer would be worse than none, so code
 with no tell is left unnamed.
 
+**The Call flow window draws the same calls four ways.** *Thread* is one turn
+of the loop in the order it happened, nested as it nests. *Graph* is who calls
+whom over everything watched, laid out in layers by `src/callgraph.rs`: a
+routine sits to the right of what calls it, a thicker line is a call made more
+often, and a line going back to the left is a call into something already
+reached — which is what a loop in the program looks like from there. Cycles are
+why the layering leaves out the edges that would push a routine past a layer it
+already has, and only the busiest forty routines are drawn. *Flame* is one turn
+as nested bars whose width is the work done. *Timeline* (`src/timeline.rs`) is
+one turn against the frames it ran in, with the stretch where the ULA is
+drawing the picture shaded: on this machine *when* a routine ran is the whole
+question, since a write above the beam is seen this frame and one below it is
+seen next.
+
 **What a routine did beats what its code looks like.** `src/observe.rs`
 attributes every write, port access, instruction and loop iteration to the
 routine on top of the call stack, which `src/flow.rs` works out from what the
