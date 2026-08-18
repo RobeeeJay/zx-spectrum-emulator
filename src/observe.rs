@@ -109,6 +109,13 @@ pub struct Observed {
     /// Instructions run inside it, its callees excluded.
     pub instructions: u64,
     pub writes: Writes,
+    /// Bytes of memory it read, split the same way. What a routine reads says
+    /// as much about it as what it writes: a routine that reads a screenful
+    /// and writes a screenful is copying one, and one that reads a table and
+    /// writes the display file is drawing from data.
+    pub reads: Writes,
+    /// The same, counting what the routines it calls read as well.
+    pub inclusive_reads: Writes,
     /// The same, counting what the routines it calls wrote as well.
     ///
     /// A routine whose whole job is to call the drawing routine writes nothing
@@ -450,12 +457,20 @@ impl Observer {
             return;
         }
         set(&mut self.read, addr);
-        if let Some(entry) = self.stack.last().map(|f| f.entry) {
-            let page = (addr >> 8) as u8;
-            if self.readers.len() < 4096 {
-                *self.readers.entry((page, entry)).or_insert(0) += 1;
-            }
+        let Some(entry) = self.stack.last().map(|f| f.entry) else {
+            return;
+        };
+        let page = (addr >> 8) as u8;
+        if self.readers.len() < 4096 {
+            *self.readers.entry((page, entry)).or_insert(0) += 1;
         }
+        // Counted the same way as the writes, and for the same reason: a
+        // routine that hands the reading to something else has still caused it.
+        let ancestors: Vec<u16> = self.stack.iter().map(|frame| frame.entry).collect();
+        for ancestor in ancestors {
+            self.stats(ancestor).inclusive_reads.add(addr);
+        }
+        self.stats(entry).reads.add(addr);
     }
 
     /// Which routine last wrote this byte of the screen, if anything has.

@@ -237,6 +237,16 @@ hedges in the wording when the evidence is thin ("possibly a protection
 check"), and a rule that always has an answer would be worse than none, so code
 with no tell is left unnamed.
 
+**Each routine carries three numbers: how big it is, what it wrote and what it
+read.** The size is the distance between the lowest and highest address seen
+executing inside it — where the routine reaches, which is where to start
+looking rather than a promise, since a routine that jumps over a table reaches
+past the table. The writes and reads are per call and count what the routines
+it calls did as well: a routine whose whole job is to call the drawing routine
+does nothing itself, and saying so would be the wrong thing to say about it.
+Its own writes are not nothing either — a CALL pushes a return address, and
+that is a write.
+
 **The Call flow window draws the same calls four ways.** *Thread* is one turn
 of the loop in the order it happened, nested as it nests. *Graph* is who calls
 whom over everything watched, laid out in layers by `src/callgraph.rs`: a

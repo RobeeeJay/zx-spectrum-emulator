@@ -462,6 +462,7 @@ fn draw(app: &mut App, ui: &mut egui::Ui, turn: &Turn) {
                 let work = seen
                     .map(|seen| seen.inclusive.total() / seen.calls.max(1))
                     .unwrap_or(0);
+                let figures = measured(seen);
 
                 // How much of the machine's work this call accounts for, drawn
                 // as the width of the bar behind the name.
@@ -499,10 +500,13 @@ fn draw(app: &mut App, ui: &mut egui::Ui, turn: &Turn) {
                 painter.text(
                     Pos2::new(box_rect.right() - 8.0, box_rect.center().y),
                     egui::Align2::RIGHT_CENTER,
-                    format!("{work} bytes"),
+                    figures.short(),
                     egui::FontId::monospace(11.0),
                     theme::DIM,
                 );
+                if hovered {
+                    response.clone().on_hover_text(figures.long());
+                }
 
                 if hovered && response.clicked() {
                     go_to = Some(step.entry);
@@ -888,5 +892,58 @@ fn timeline(app: &mut App, ui: &mut egui::Ui, turn: &Turn) {
         });
     if let Some(entry) = go_to {
         app.show_in_debugger(entry);
+    }
+}
+
+/// The three numbers a routine is described by.
+///
+/// How big it is, how much it wrote and how much it read — all measured while
+/// the program ran rather than worked out from the code. Reads and writes are
+/// per call and count what the routines it called did as well: a routine whose
+/// whole job is to call the drawing routine does nothing itself, and saying so
+/// is the wrong thing to say about it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Measured {
+    /// How many bytes of code the routine covers: the distance between the
+    /// lowest and highest address seen executing inside it.
+    pub size: u32,
+    /// Bytes written per call, its callees included.
+    pub wrote: u32,
+    /// Bytes read per call, its callees included.
+    pub read: u32,
+}
+
+impl Measured {
+    /// What fits on the row.
+    pub fn short(&self) -> String {
+        format!("{}B  {}w  {}r", self.size, self.wrote, self.read)
+    }
+
+    /// What the row says when it is hovered.
+    pub fn long(&self) -> String {
+        format!(
+            "{} bytes of code, and per call it writes {} bytes and reads {}, \
+             counting what it calls",
+            self.size, self.wrote, self.read
+        )
+    }
+}
+
+/// Read the three figures off what was observed.
+pub fn measured(seen: Option<&crate::observe::Observed>) -> Measured {
+    let Some(seen) = seen else {
+        return Measured::default();
+    };
+    let calls = seen.calls.max(1);
+    Measured {
+        // Where the routine actually reaches, which is not the same as where
+        // it starts: a routine that jumps over a table of data reaches past
+        // the table, so this is where to start looking rather than a promise.
+        size: seen
+            .spans
+            .map(|(low, high)| high.saturating_sub(low) as u32 + 1)
+            .unwrap_or(0),
+        wrote: seen.inclusive.total() / calls,
+        read: seen.inclusive_reads.total() / calls,
     }
 }
