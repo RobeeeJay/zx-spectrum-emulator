@@ -121,11 +121,20 @@ fn colour_bleeds_sideways_and_brightness_does_not() {
 }
 
 /// The same frame twice gives the same picture, and the next frame does not:
-/// the interference rolls.
+/// the crawl rolls.
 #[test]
 fn the_pattern_rolls_from_frame_to_frame() {
     let (w, h) = (32, 2);
-    let src = field(w, h, [180, 180, 180]);
+    // Something with colour in it: crawl is the colour and the brightness
+    // getting into each other's way, and a grey field has none to give.
+    let mut src = field(w, h, [200, 0, 0]);
+    for y in 0..h {
+        for x in (w / 2)..w {
+            let i = (y * w + x) * 4;
+            src[i] = 0;
+            src[i + 2] = 200;
+        }
+    }
     let mut a = Vec::new();
     let mut b = Vec::new();
     let mut c = Vec::new();
@@ -138,6 +147,57 @@ fn the_pattern_rolls_from_frame_to_frame() {
     televise(&src, w, h, &mut c, crt, 101, 0.0);
     assert_eq!(a, b, "the same frame should look the same twice");
     assert_ne!(a, c, "and the next frame should not");
+}
+
+/// Dot crawl lives on the colour: it is what the colour and the brightness do
+/// to each other when they are carried on one wire, so a grey field has none
+/// of it and a coloured edge has most of it.
+///
+/// Spread evenly over the picture instead, it cannot be turned up far enough
+/// to look like anything a set did without the whole screen becoming a beat
+/// pattern against whatever it is being scaled by.
+#[test]
+fn the_crawl_is_on_the_colour_and_not_on_the_grey() {
+    let (w, h) = (32, 1);
+    let swing = |src: &[u8]| -> u8 {
+        let mut out = Vec::new();
+        let crt = Crt {
+            bleed: 0.0,
+            scanlines: 0.0,
+            line_gaps: false,
+            ..Crt::default()
+        };
+        televise(src, w, h, &mut out, crt, 7, 0.0);
+        // How far the luminance moves across the picture, which for a flat
+        // field is the crawl and nothing else.
+        let lum: Vec<i32> = (0..w)
+            .map(|x| {
+                let p = pixel(&out, w, x, 0);
+                (0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32) as i32
+            })
+            .collect();
+        (lum.iter().max().unwrap() - lum.iter().min().unwrap()) as u8
+    };
+
+    let grey = swing(&field(w, h, [128, 128, 128]));
+    assert!(grey <= 1, "a grey field should not crawl: {grey}");
+
+    let colour = swing(&field(w, h, [200, 0, 0]));
+    assert!(colour > 12, "a coloured one should, and visibly: {colour}");
+
+    // And an edge between two colours most of all.
+    let mut edged = field(w, h, [200, 0, 0]);
+    for x in (w / 2)..w {
+        let i = x * 4;
+        edged[i] = 0;
+        edged[i + 2] = 200;
+    }
+    let edge = swing(&edged);
+    assert!(
+        edge >= colour,
+        "an edge should crawl at least as hard as a flat colour: {edge} \
+         against {colour}"
+    );
 }
 
 /// The glass is part of a sphere, so the picture swells in the middle: the

@@ -54,11 +54,13 @@ pub fn roll_per_frame() -> f64 {
 /// none of the composite artefacts.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Crt {
-    /// How much of the picture's brightness the interference swings, 0 to 1.
+    /// How hard the dot crawl bites where the colour is, 0 to 1.
     ///
-    /// A few per cent. It is a pattern about two and a half pixels across, so
-    /// any more of it and what shows is not the herringbone a set had but the
-    /// beat between that and whatever the picture is being scaled by.
+    /// It is not spread evenly over the picture: crawl is the colour and the
+    /// brightness getting into each other's way, so it is strongest where the
+    /// colour changes and absent on a grey field. That is why this can be a
+    /// fifth of the picture's brightness where it lands without the whole
+    /// screen turning into a beat pattern.
     pub interference: f32,
     /// How far the colour is smeared sideways, in pixels. Composite video
     /// carries colour on a subcarrier with a fraction of the luminance's
@@ -75,7 +77,7 @@ pub struct Crt {
 impl Default for Crt {
     fn default() -> Self {
         Self {
-            interference: 0.035,
+            interference: 0.22,
             bleed: 2.5,
             scanlines: 0.35,
             line_gaps: true,
@@ -140,9 +142,25 @@ pub fn televise(src: &[u8], w: usize, h: usize, out: &mut Vec<u8>, crt: Crt, fra
             let (mut r, mut g, mut b) =
                 (r + (yy - smeared), g + (yy - smeared), b + (yy - smeared));
 
-            // The beat between the dot clock and the subcarrier.
+            // The beat between the dot clock and the subcarrier, where there
+            // is colour for it to bite on.
+            //
+            // Dot crawl is the colour and the brightness being carried on one
+            // wire and not coming apart again cleanly at the other end. Where
+            // there is no colour there is nothing to cross-talk, and where the
+            // colour changes from one pixel to the next there is most of it —
+            // which is why it is seen crawling along the edges of coloured
+            // blocks and not over a grey screen. Spread evenly instead, it
+            // shows as a beat against whatever the picture is being scaled by
+            // rather than as anything a set did.
+            let here = chroma(src, w, x, y);
+            let edge = (here - chroma(src, w, x.saturating_sub(1), y))
+                .abs()
+                .max((here - chroma(src, w, (x + 1).min(w - 1), y)).abs());
+            let bite = (here * 0.6 + edge * 2.0).min(1.4);
             let phase = line_phase + (x0 + x as f64) * per_dot;
-            let ripple = 1.0 + crt.interference * (phase * std::f64::consts::TAU).sin() as f32;
+            let ripple =
+                1.0 + crt.interference * bite * (phase * std::f64::consts::TAU).sin() as f32;
             r *= ripple;
             g *= ripple;
             b *= ripple;
@@ -158,6 +176,18 @@ pub fn televise(src: &[u8], w: usize, h: usize, out: &mut Vec<u8>, crt: Crt, fra
             }
         }
     }
+}
+
+/// How much colour a pixel carries, as against how bright it is: nothing on
+/// black, white or any grey between them, and most on a saturated colour.
+fn chroma(src: &[u8], w: usize, x: usize, y: usize) -> f32 {
+    let i = (y * w + x) * 4;
+    let (r, g, b) = (
+        src[i] as f32 / 255.0,
+        src[i + 1] as f32 / 255.0,
+        src[i + 2] as f32 / 255.0,
+    );
+    r.max(g).max(b) - r.min(g).min(b)
 }
 
 fn luma(r: f32, g: f32, b: f32) -> f32 {

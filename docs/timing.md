@@ -220,7 +220,7 @@ Three things, none of them invented:
   where it is: a red caption on black bleeds and a white one does not. The
   luminance is put back over the softened colour afterwards — except where
   that would want light of a negative amount, which a tube has none of.
-- **The herringbone** (Composite). PAL's colour subcarrier is 4,433,618.75 Hz and the
+- **Dot crawl** (Composite). PAL's colour subcarrier is 4,433,618.75 Hz and the
   Spectrum's dot clock is 7 MHz, so the subcarrier advances 0.6334 of a cycle
   every pixel. Sampled once a pixel, that aliases to a ripple every 2.7 pixels
   — the pattern anybody who used one on a television will remember. A line is
@@ -228,6 +228,15 @@ Three things, none of them invented:
   instead of standing in columns. A frame is 139,776 dots, which is not a whole
   number of cycles either, so it arrives somewhere else next time and the whole
   thing crawls.
+
+  It is not spread evenly over the picture. Crawl is the colour and the
+  brightness being carried on one wire and not coming apart cleanly at the
+  other end: there is none of it on a grey field, some on a flat colour, and
+  most where the colour changes from one pixel to the next — which is why it is
+  remembered as something that creeps along the edges of coloured blocks. Once
+  it is only where it belongs it can be a fifth of the picture's brightness
+  where it lands, which is what it looked like, instead of the few per cent an
+  even wash has to be kept to.
 
 ### Keeping it off the moiré
 
@@ -243,9 +252,10 @@ screen it is shown on unless three things are watched:
   rows of screen for every row of picture, so below 2x zoom there are none:
   asking for them at 1x is asking for a pattern of gaps rather than a line
   structure.
-- **The herringbone is a few per cent** of the picture's brightness and no
-  more. Beyond that what shows is not the pattern a set had but the beat
-  between it and whatever the picture is being scaled by.
+- **The crawl is kept to the colour.** An even wash over the whole picture
+  beats against whatever it is being scaled by, and has to be kept to a few per
+  cent to stay tolerable; put where the colour is instead, it can be five times
+  that and still leave a grey screen alone.
 
 The curve of the glass is geometry rather than pixels, and it is in where each
 quad *reads from* rather than in where it sits: the picture is a grid filling
