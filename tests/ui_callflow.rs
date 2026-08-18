@@ -490,3 +490,69 @@ fn the_call_flow_window_can_run_and_pause_the_machine() {
     h.run_steps(2);
     assert!(h.state().running, "and Run should start it again");
 }
+
+/// Three ways of looking at the same calls, and a switch to choose between
+/// them: the thread is what happened in order, the graph is the shape of the
+/// program, and the flame is where the time goes.
+#[test]
+fn the_window_offers_three_views_of_the_calls() {
+    let mut app = app();
+    app.show_callflow = true;
+    // A little call graph, as the observer would have built it: main calls
+    // draw and sound, and draw calls plot.
+    let mut seen = |at: u16, calls: u32, work: u32| {
+        let entry = app.spec.bus.observer.routines.entry(at).or_default();
+        entry.calls = calls;
+        entry.inclusive.other = work;
+    };
+    seen(0x8000, 1, 900);
+    seen(0x8100, 1, 600);
+    seen(0x8200, 4, 400);
+    seen(0x8300, 1, 100);
+    for (pair, calls) in [
+        ((0x8000u16, 0x8100u16), 1u32),
+        ((0x8100, 0x8200), 4),
+        ((0x8000, 0x8300), 1),
+    ] {
+        app.spec.bus.observer.edges.entry(pair).or_default().calls = calls;
+    }
+
+    let mut h = Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+    assert_eq!(
+        h.state().callflow.view,
+        zx_rustrum::ui::callflow::View::Thread,
+        "it opens on the thread"
+    );
+
+    // The graph draws boxes for the routines it was told about, whether or not
+    // a loop has been found: it is the shape of the program rather than one
+    // turn of it.
+    h.get_by_label("Graph").click();
+    h.run_steps(3);
+    let painted: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    for at in ["$8000", "$8100", "$8200", "$8300"] {
+        assert!(
+            painted.iter().any(|t| t.contains(at)),
+            "the graph should have a box for {at}: {painted:?}"
+        );
+    }
+
+    // And the flame chart is the third, which needs a turn to draw.
+    h.get_by_label("Flame").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().callflow.view,
+        zx_rustrum::ui::callflow::View::Flame
+    );
+}

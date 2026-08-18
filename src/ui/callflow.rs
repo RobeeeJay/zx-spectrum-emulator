@@ -12,6 +12,7 @@
 
 use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
 
+use crate::callgraph;
 use crate::detect::{self, Finding, Question};
 use crate::loops::{self, Turn};
 use crate::ui::{theme, App};
@@ -41,6 +42,36 @@ pub struct CallFlowState {
     /// Calls watched at the moment it was worked out, so it is clear whether
     /// the picture is of the program as it is now.
     pub from_calls: usize,
+    /// Which drawing is on show.
+    pub view: View,
+}
+
+/// The three ways of looking at the same calls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum View {
+    /// One turn of the loop, in the order it happened, nested as it nests.
+    #[default]
+    Thread,
+    /// Who calls whom, over everything watched: the shape of the program
+    /// rather than one turn of it.
+    Graph,
+    /// One turn again, as nested bars whose width is the work done: what a
+    /// turn is made of and where its time goes, in one picture.
+    Flame,
+}
+
+impl View {
+    pub fn label(self) -> &'static str {
+        match self {
+            View::Thread => "Thread",
+            View::Graph => "Graph",
+            View::Flame => "Flame",
+        }
+    }
+
+    pub fn all() -> [View; 3] {
+        [View::Thread, View::Graph, View::Flame]
+    }
 }
 
 /// How a routine is drawn.
@@ -69,6 +100,11 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     findings(app, ui);
     ui.separator();
 
+    if app.callflow.view == View::Graph {
+        graph(app, ui);
+        return;
+    }
+
     let Some(turn) = app.callflow.turn.take() else {
         ui.label(
             RichText::new(
@@ -79,7 +115,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         );
         return;
     };
-    draw(app, ui, &turn);
+    match app.callflow.view {
+        View::Flame => flame(app, ui, &turn),
+        _ => draw(app, ui, &turn),
+    }
     app.callflow.turn = Some(turn);
 }
 
@@ -132,6 +171,31 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             theme::divider(ui);
             if ui.button("Stop").clicked() {
                 app.callflow.looking = false;
+            }
+        }
+
+        theme::divider(ui);
+        theme::group_label(ui, "View");
+        for view in View::all() {
+            if theme::selectable(ui, app.callflow.view == view, view.label())
+                .on_hover_text(match view {
+                    View::Thread => {
+                        "One turn of the loop in the order it happened, nested \
+                         as it nests."
+                    }
+                    View::Graph => {
+                        "Who calls whom over everything watched, in layers: a \
+                         routine sits to the right of what calls it, and a \
+                         thicker line is a call made more often."
+                    }
+                    View::Flame => {
+                        "One turn as nested bars, each as wide as the work it \
+                         does: what a turn is made of and where its time goes."
+                    }
+                })
+                .clicked()
+            {
+                app.callflow.view = view;
             }
         }
 
@@ -438,5 +502,261 @@ fn draw(app: &mut App, ui: &mut egui::Ui, turn: &Turn) {
 
     if let Some(entry) = go_to {
         app.show_in_debugger(entry);
+    }
+}
+
+/// How a routine is drawn in the graph.
+const NODE_W: f32 = 150.0;
+const NODE_H: f32 = 26.0;
+const LAYER_GAP: f32 = 78.0;
+const ROW_GAP: f32 = 12.0;
+
+/// Who calls whom, in layers.
+///
+/// Everything watched rather than one turn: the thread and the flame are what
+/// a turn does, and this is the shape of the program the turns are made of. A
+/// routine sits one layer to the right of whatever calls it, the line between
+/// them is thicker the more often the call is made, and a line going back to
+/// the left is a call into something that has already been reached — which is
+/// what a loop in the program looks like from here.
+fn graph(app: &mut App, ui: &mut egui::Ui) {
+    let edges: std::collections::BTreeMap<(u16, u16), u32> = app
+        .spec
+        .bus
+        .observer
+        .edges
+        .iter()
+        .map(|(pair, edge)| (*pair, edge.calls))
+        .collect();
+    let work: std::collections::BTreeMap<u16, u64> = app
+        .spec
+        .bus
+        .observer
+        .routines
+        .iter()
+        .map(|(at, seen)| (*at, seen.inclusive.total() as u64))
+        .collect();
+    if edges.is_empty() {
+        ui.label(
+            RichText::new(
+                "Nothing has been watched yet. Press one of the questions above, \
+                 let the program run, and the calls it makes are drawn here.",
+            )
+            .color(theme::DIM),
+        );
+        return;
+    }
+    let layout = callgraph::layout(&edges, &work);
+
+    let size = Vec2::new(
+        layout.layers as f32 * (NODE_W + LAYER_GAP) + 20.0,
+        layout.widest as f32 * (NODE_H + ROW_GAP) + 20.0,
+    );
+    let mut go_to = None;
+    egui::ScrollArea::both()
+        .id_salt("callflow-graph")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 0.0, theme::LCD_BG);
+
+            let box_of = |node: &callgraph::Node| -> Rect {
+                Rect::from_min_size(
+                    Pos2::new(
+                        rect.left() + 10.0 + node.layer as f32 * (NODE_W + LAYER_GAP),
+                        rect.top() + 10.0 + node.row as f32 * (NODE_H + ROW_GAP),
+                    ),
+                    Vec2::new(NODE_W, NODE_H),
+                )
+            };
+
+            // The lines first, so the boxes sit on top of them.
+            for link in &layout.links {
+                let (Some(from), Some(to)) = (layout.node(link.from), layout.node(link.to)) else {
+                    continue;
+                };
+                let (a, b) = (box_of(from), box_of(to));
+                let back = to.layer <= from.layer;
+                let start = if back {
+                    a.left_center()
+                } else {
+                    a.right_center()
+                };
+                let end = if back {
+                    b.right_center()
+                } else {
+                    b.left_center()
+                };
+                // A curve rather than a straight line: two calls between the
+                // same pair of layers would otherwise lie on top of each other
+                // wherever their rows happen to line up.
+                let reach = (end.x - start.x).abs().max(40.0) * 0.4;
+                let bend = if back { -reach } else { reach };
+                painter.add(egui::Shape::CubicBezier(
+                    egui::epaint::CubicBezierShape::from_points_stroke(
+                        [
+                            start,
+                            Pos2::new(start.x + bend, start.y),
+                            Pos2::new(end.x - bend, end.y),
+                            end,
+                        ],
+                        false,
+                        Color32::TRANSPARENT,
+                        Stroke::new(
+                            1.0 + link.weight * 3.0,
+                            if back {
+                                theme::AMBER.gamma_multiply(0.5)
+                            } else {
+                                theme::EDGE
+                            },
+                        ),
+                    ),
+                ));
+            }
+
+            for node in &layout.nodes {
+                let at = box_of(node);
+                let hovered = response.hover_pos().is_some_and(|p| at.contains(p));
+                painter.rect_filled(at, 3.0, theme::CASE_DARK);
+                // How much of the machine's work goes through it, as the width
+                // of the bar behind the name.
+                painter.rect_filled(
+                    Rect::from_min_size(
+                        at.min,
+                        Vec2::new(at.width() * node.weight.max(0.02), at.height()),
+                    ),
+                    3.0,
+                    Color32::from_rgb(0x10, 0x33, 0x2c),
+                );
+                painter.rect_stroke(
+                    at,
+                    3.0,
+                    Stroke::new(1.0, if hovered { theme::AMBER } else { theme::EDGE }),
+                    egui::StrokeKind::Inside,
+                );
+                painter.text(
+                    Pos2::new(at.left() + 6.0, at.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    label_for(app, node.entry),
+                    egui::FontId::monospace(11.0),
+                    theme::LCD_FG,
+                );
+                if hovered && response.clicked() {
+                    go_to = Some(node.entry);
+                }
+            }
+        });
+    if let Some(entry) = go_to {
+        app.show_in_debugger(entry);
+    }
+}
+
+/// One turn as nested bars, each as wide as the work it does.
+///
+/// The thread says what was called and in what order; this says what a turn is
+/// made of. A routine's bar spans the work done between going in and coming
+/// out again, and the routines it called sit under it filling that span, so a
+/// wide bar with nothing under it is where the time actually goes.
+fn flame(app: &mut App, ui: &mut egui::Ui, turn: &Turn) {
+    // Instructions run, from the observer, rather than anything counted here:
+    // a call's width is what it cost including its callees.
+    let cost = |entry: u16| -> f32 {
+        app.spec
+            .bus
+            .observer
+            .routines
+            .get(&entry)
+            .map(|seen| (seen.inclusive.total() / seen.calls.max(1)).max(1) as f32)
+            .unwrap_or(1.0)
+    };
+
+    let calls: Vec<&crate::observe::Step> = turn.steps.iter().filter(|step| step.enter).collect();
+    if calls.is_empty() {
+        return;
+    }
+    // Each depth is a row; a call's width is its share of the turn's work, and
+    // its left edge is where the calls before it at that depth ended.
+    let deepest = calls.iter().map(|step| step.depth).max().unwrap_or(1) as f32;
+    let total: f32 = calls
+        .iter()
+        .filter(|step| step.depth <= 1)
+        .map(|step| cost(step.entry))
+        .sum::<f32>()
+        .max(1.0);
+
+    let height = (deepest + 1.0) * (NODE_H + 4.0) + 20.0;
+    let mut go_to = None;
+    egui::ScrollArea::both()
+        .id_salt("callflow-flame")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let width = ui.available_width().max(400.0) - 20.0;
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::click());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 0.0, theme::LCD_BG);
+
+            // Where the next bar at each depth starts, in work.
+            let mut filled: Vec<f32> = vec![0.0; deepest as usize + 2];
+            for step in &calls {
+                let depth = step.depth.max(1) as usize;
+                let share = cost(step.entry) / total;
+                // A call starts no earlier than its caller did: the bars under
+                // a bar are what it spent its time on.
+                let start = filled[depth].max(filled[depth - 1] - share.min(1.0));
+                let left = rect.left() + 10.0 + start * (rect.width() - 20.0);
+                let bar = Rect::from_min_size(
+                    Pos2::new(
+                        left,
+                        rect.top() + 10.0 + (depth as f32 - 1.0) * (NODE_H + 4.0),
+                    ),
+                    Vec2::new((share * (rect.width() - 20.0)).max(2.0), NODE_H),
+                );
+                filled[depth] = start + share;
+
+                let hovered = response.hover_pos().is_some_and(|p| bar.contains(p));
+                painter.rect_filled(
+                    bar,
+                    2.0,
+                    if hovered {
+                        Color32::from_rgb(0x1c, 0x55, 0x49)
+                    } else {
+                        Color32::from_rgb(0x10, 0x33, 0x2c)
+                    },
+                );
+                painter.rect_stroke(
+                    bar,
+                    2.0,
+                    Stroke::new(1.0, theme::EDGE),
+                    egui::StrokeKind::Inside,
+                );
+                if bar.width() > 40.0 {
+                    let clipped = painter.with_clip_rect(bar);
+                    clipped.text(
+                        Pos2::new(bar.left() + 4.0, bar.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        label_for(app, step.entry),
+                        egui::FontId::monospace(11.0),
+                        theme::LCD_FG,
+                    );
+                }
+                if hovered && response.clicked() {
+                    go_to = Some(step.entry);
+                }
+            }
+        });
+    if let Some(entry) = go_to {
+        app.show_in_debugger(entry);
+    }
+}
+
+/// What to call a routine: its name if it has one, and its address either way.
+fn label_for(app: &App, entry: u16) -> String {
+    let name = app.notes.label(entry);
+    if name.is_empty() {
+        format!("${entry:04X}")
+    } else {
+        format!("{name}  ${entry:04X}")
     }
 }
