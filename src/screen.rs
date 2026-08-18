@@ -254,6 +254,38 @@ pub fn pixel_at_t(view: View, first_pixel_t: u32, t_per_line: u32, t: u32) -> (i
 
 /// Render 6912 bytes starting at logical address `base` as if they were video
 /// RAM. Used for previewing a detected back buffer.
+/// The attribute a bitmap-only view is drawn with: bright white on black.
+///
+/// A back buffer is a bitmap. Most programs keep 6,144 bytes of one and build
+/// the colours somewhere else — or not at all — so the 768 bytes after it are
+/// whatever happens to be in memory there, and drawing them as attributes
+/// paints the preview in the colours of somebody else's variables.
+pub const MONO_ATTR: u8 = 0x47;
+
+/// The same as [`render_from`], but as a bitmap: every cell bright white on
+/// black, whatever the bytes behind the screen say.
+pub fn render_bitmap_from(bus: &SpectrumBus, view: View, base: u16, out: &mut [u8], borders: bool) {
+    draw(
+        out,
+        view,
+        false,
+        borders,
+        bus,
+        Source {
+            byte: &|offset, _| {
+                if offset >= 0x1800 {
+                    MONO_ATTR
+                } else {
+                    bus.peek_raw(base.wrapping_add(offset))
+                }
+            },
+            beam: None,
+            fade: None,
+            tint: None,
+        },
+    );
+}
+
 pub fn render_from(
     bus: &SpectrumBus,
     view: View,

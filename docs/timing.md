@@ -215,6 +215,20 @@ T-states go by in a second of the user's time. That is the difference between
 this and the Speed dropdown beside it: speed is how fast the emulator is being
 run, and the clock is what the machine believes its own to be.
 
+**It speeds the whole machine, not just the CPU.** The ULA is counted in the
+same T-states, so at twice the clock the frame still takes 69,888 of them and
+those 69,888 go by twice as fast: measured, a second of the user's time gets 50
+video frames at 3.5MHz, 100 at 7MHz and 400 at 28MHz, and the interrupt comes
+at each of them. A game reading the frame counter therefore runs fast rather
+than smoothly, which is what a Spectrum with its clock crystal changed did.
+
+An accelerator that leaves the video at 50Hz is a different thing: it gives the
+CPU more cycles inside a frame of the ULA's own time, which means the CPU's
+clock and the ULA's are no longer the same clock. Everything here counts one —
+contention is a table indexed by the ULA's T-state, and an instruction's cost
+is in those T-states — so that would be a change to how time is kept rather
+than a multiplier on it. Not done.
+
 The mixer is told, because sound is made of T-states too. A beeper note is a
 number of T-states between one toggle and the next, and at twice the clock those
 T-states take half as long: the note comes out an octave up, which is what an

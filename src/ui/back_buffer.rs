@@ -10,7 +10,8 @@ use crate::ui::theme;
 use crate::ui::App;
 
 pub struct BackBufferState {
-    pixels: Vec<u8>,
+    /// The preview as it was last drawn, so a test can look at it.
+    pub pixels: Vec<u8>,
     tex: Option<TextureHandle>,
     pub manual_text: String,
     pub scale: f32,
@@ -108,7 +109,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     match region {
         Some(r) => {
             ui.label(
-                RichText::new(format!("Previewing ${:04X} as a 6912-byte screen", r.start))
+                RichText::new(format!("Previewing ${:04X} as a 6144-byte bitmap", r.start))
                     .monospace(),
             );
             let view = app.view();
@@ -116,14 +117,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 app.back.pixels = vec![0; view.buffer_len()];
                 app.back.tex = None;
             }
-            screen::render_from(
-                &app.spec.bus,
-                view,
-                r.start,
-                &mut app.back.pixels,
-                (app.spec.bus.frame / 16) % 2 == 1,
-                false,
-            );
+            // As a bitmap, not as a screen: what is 768 bytes past a back
+            // buffer is somebody else's variables, and drawing them as
+            // attributes paints the preview in their colours.
+            screen::render_bitmap_from(&app.spec.bus, view, r.start, &mut app.back.pixels, false);
             let img =
                 ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &app.back.pixels);
             match &mut app.back.tex {
