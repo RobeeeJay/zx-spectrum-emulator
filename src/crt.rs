@@ -47,6 +47,11 @@ pub fn roll_per_frame() -> f64 {
 }
 
 /// How the picture is spoiled, and by how much.
+///
+/// Two separate things, and they were two separate things on the day as well:
+/// the signal — colour on a subcarrier, and what that beats against — and the
+/// tube it was shown on. A monitor fed RGB had the tube's line structure and
+/// none of the composite artefacts.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Crt {
     /// How much of the picture's brightness the interference swings, 0 to 1.
@@ -58,6 +63,9 @@ pub struct Crt {
     pub bleed: f32,
     /// How dark the gap between two lines is, 0 for none and 1 for black.
     pub scanlines: f32,
+    /// Whether the picture is drawn with a gap under every line, which is what
+    /// doubles its height.
+    pub line_gaps: bool,
 }
 
 impl Default for Crt {
@@ -66,19 +74,23 @@ impl Default for Crt {
             interference: 0.05,
             bleed: 2.5,
             scanlines: 0.35,
+            line_gaps: true,
         }
     }
 }
 
-/// Turn the ULA's pixels into what a set showed, at twice the height: a line
-/// and the gap under it.
+/// Turn the ULA's pixels into what a set showed.
+///
+/// With the line structure on that is twice the height — a line and the gap
+/// under it — and without it, the same size as it came in.
 ///
 /// `frame` is the machine's frame counter, which is what rolls the
 /// interference; `x0` is the dot the left edge of the view starts at, so the
 /// pattern sits still against the picture when the border is shown or hidden
 /// rather than jumping sideways.
 pub fn televise(src: &[u8], w: usize, h: usize, out: &mut Vec<u8>, crt: Crt, frame: u64, x0: f64) {
-    out.resize(w * h * 2 * 4, 0);
+    let rows = if crt.line_gaps { 2 } else { 1 };
+    out.resize(w * h * rows * 4, 0);
     let per_dot = subcarrier_per_dot();
     let bleed = crt.bleed.max(0.0);
     let taps = bleed.ceil() as isize;
@@ -132,12 +144,14 @@ pub fn televise(src: &[u8], w: usize, h: usize, out: &mut Vec<u8>, crt: Crt, fra
             b *= ripple;
 
             let a = src[(y * w + x) * 4 + 3];
-            let line = ((y * 2) * w + x) * 4;
+            let line = ((y * rows) * w + x) * 4;
             put(out, line, r, g, b, a);
-            // The gap under it, which is what a set's line structure looks
-            // like once there is room to see it.
-            let dim = 1.0 - crt.scanlines;
-            put(out, line + w * 4, r * dim, g * dim, b * dim, a);
+            if crt.line_gaps {
+                // The gap under it, which is what a set's line structure looks
+                // like once there is room to see it.
+                let dim = 1.0 - crt.scanlines;
+                put(out, line + w * 4, r * dim, g * dim, b * dim, a);
+            }
         }
     }
 }

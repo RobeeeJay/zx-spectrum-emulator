@@ -393,10 +393,13 @@ pub struct App {
 
     screen_pixels: Vec<u8>,
     screen_tex: Option<TextureHandle>,
-    /// Whether the picture is shown as a television showed it: the curve of
-    /// the tube, the gaps between the lines, and what composite video did to
-    /// the colour on the way.
+    /// Whether the picture is shown on a tube: the curve of the glass and the
+    /// gaps between the lines.
     pub crt: bool,
+    /// Whether it arrives as composite video: colour smeared sideways, and the
+    /// herringbone the subcarrier beats against the dot clock. A monitor fed
+    /// RGB had the tube and none of this.
+    pub composite: bool,
     /// The televised picture, kept between frames so it is not reallocated.
     crt_pixels: Vec<u8>,
     /// Whether the texture that exists was made with the set on.
@@ -510,6 +513,7 @@ impl App {
             screen_pixels: vec![0; screen::View::OVERSCAN.buffer_len()],
             screen_tex: None,
             crt: false,
+            composite: false,
             crt_pixels: Vec::new(),
             crt_drawn: false,
             scale: 2.0,
@@ -2412,6 +2416,26 @@ impl App {
         self.screen_tex.clone()
     }
 
+    /// What the two switches ask of the picture.
+    ///
+    /// The tube gives every line a gap under it, which is what doubles the
+    /// height; the aerial lead gives the colour its smear and the picture its
+    /// herringbone. A monitor fed RGB had the first and none of the second, so
+    /// either can be had without the other.
+    pub fn crt_settings(&self) -> crate::crt::Crt {
+        let plain = crate::crt::Crt::default();
+        crate::crt::Crt {
+            interference: if self.composite {
+                plain.interference
+            } else {
+                0.0
+            },
+            bleed: if self.composite { plain.bleed } else { 0.0 },
+            scanlines: if self.crt { plain.scanlines } else { 0.0 },
+            line_gaps: self.crt,
+        }
+    }
+
     fn draw_screen_texture(&mut self, ctx: &egui::Context) {
         if self.zx81.is_some() {
             let view = if self.overscan {
@@ -2485,22 +2509,30 @@ impl App {
             None => screen::render(&self.spec.bus, view, &mut pixels, flash),
         }
         self.screen_pixels = pixels;
-        let img = if self.crt {
-            // Twice the height: a line and the gap under it. The dot the view
-            // starts at keeps the interference still against the picture when
-            // the border is shown or hidden — the pattern belongs to the
-            // machine's clock, not to the window's edge.
+        let img = if self.crt || self.composite {
+            // The tube gives every line a gap under it, which is what doubles
+            // the height; the aerial lead gives the colour its smear and the
+            // picture its herringbone. Either can be had without the other.
+            let set = self.crt_settings();
+            let frame = self.spec.bus.frame;
+            // The dot the view starts at keeps the interference still against
+            // the picture when the border is shown or hidden — the pattern
+            // belongs to the machine's clock, not to the window's edge.
             let x0 = -((view.border_x * 2) as f64);
             crate::crt::televise(
                 &self.screen_pixels,
                 view.width(),
                 view.height(),
                 &mut self.crt_pixels,
-                crate::crt::Crt::default(),
-                self.spec.bus.frame,
+                set,
+                frame,
                 x0,
             );
-            ColorImage::from_rgba_unmultiplied([view.width(), view.height() * 2], &self.crt_pixels)
+            let rows = if self.crt { 2 } else { 1 };
+            ColorImage::from_rgba_unmultiplied(
+                [view.width(), view.height() * rows],
+                &self.crt_pixels,
+            )
         } else {
             ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels)
         };
@@ -2686,10 +2718,14 @@ impl App {
 
             theme::divider(ui);
             theme::toggle(ui, &mut self.crt, "CRT").on_hover_text(
-                "Show the picture as a television showed it: the curve of the \
-                 tube, the gaps between the lines, colour smeared sideways by \
-                 composite video, and the herringbone the dot clock beats \
-                 against PAL's colour subcarrier.",
+                "Show the picture on a tube: the curve of the glass, and a gap \
+                 under every line.",
+            );
+            theme::toggle(ui, &mut self.composite, "Composite").on_hover_text(
+                "Take the picture down an aerial lead: colour smeared sideways \
+                 by the subcarrier it rides on, and the herringbone that \
+                 subcarrier beats against the machine's dot clock. A monitor \
+                 fed RGB had neither.",
             );
 
             theme::divider(ui);
@@ -3042,12 +3078,7 @@ impl App {
                 // black, as a set does in its case.
                 painter.rect_filled(area, 0.0, theme::CASE_DARK);
                 let picture = screen::centred(area, size);
-                let glass = if self.crt {
-                    crt::covered(picture, crt::CURVE)
-                } else {
-                    picture
-                };
-                let bezel = glass.expand(10.0);
+                let bezel = picture.expand(10.0);
                 painter.rect_filled(bezel, 6.0, egui::Color32::from_rgb(0x1a, 0x17, 0x13));
                 painter.rect_stroke(
                     bezel,
@@ -3056,7 +3087,7 @@ impl App {
                     egui::StrokeKind::Inside,
                 );
                 painter.rect_stroke(
-                    glass.expand(1.0),
+                    picture.expand(1.0),
                     2.0,
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3a, 0x35, 0x2d)),
                     egui::StrokeKind::Outside,

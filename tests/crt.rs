@@ -1,7 +1,7 @@
 //! What a television makes of the picture.
 
 use zx_rustrum::crt::{roll_per_frame, subcarrier_per_dot, televise, Crt, DOTS_PER_FRAME};
-use zx_rustrum::ui::crt::{bulge, covered, curved, CURVE};
+use zx_rustrum::ui::crt::{curved, sample_at, CURVE};
 
 /// A flat field of one colour, as the ULA would put it out.
 fn field(w: usize, h: usize, rgb: [u8; 3]) -> Vec<u8> {
@@ -54,6 +54,7 @@ fn every_line_gets_a_gap_under_it() {
         interference: 0.0,
         bleed: 0.0,
         scanlines: 0.5,
+        line_gaps: true,
     };
     televise(&src, w, h, &mut out, quiet, 0, 0.0);
     assert_eq!(out.len(), w * h * 2 * 4, "twice the height");
@@ -85,6 +86,7 @@ fn colour_bleeds_sideways_and_brightness_does_not() {
         interference: 0.0,
         bleed: 3.0,
         scanlines: 0.0,
+        line_gaps: false,
     };
     televise(&src, w, h, &mut out, smeary, 0, 0.0);
 
@@ -138,31 +140,53 @@ fn the_pattern_rolls_from_frame_to_frame() {
     assert_ne!(a, c, "and the next frame should not");
 }
 
-/// The glass is part of a sphere: the middle is where it was, the edges bow
-/// out, and the corners go furthest.
+/// The glass is part of a sphere, so the picture swells in the middle: the
+/// further out a point is, the further out it reaches for its colour, which
+/// squeezes what is at the edges and stretches what is in the middle.
+///
+/// It was the other way round to begin with — the corners of the mesh pushed
+/// outwards, which is a pincushion: the shape of a badly adjusted monitor
+/// rather than the shape of a tube.
 #[test]
-fn the_tube_bulges_most_at_the_corners() {
-    let middle = bulge(egui::Vec2::ZERO, CURVE);
-    assert_eq!(middle, egui::Vec2::ZERO, "the middle does not move");
+fn the_picture_swells_in_the_middle_like_a_tube() {
+    let middle = sample_at(egui::Vec2::ZERO, CURVE);
+    assert_eq!(middle, egui::Vec2::ZERO, "the middle stays where it is");
 
-    let edge = bulge(egui::vec2(1.0, 0.0), CURVE).x;
-    let corner = bulge(egui::vec2(1.0, 1.0), CURVE).x;
-    assert!(edge > 1.0, "the edge bows out: {edge}");
+    let half = sample_at(egui::vec2(0.5, 0.0), CURVE).x;
     assert!(
-        corner > edge,
-        "and the corner further: {corner} over {edge}"
+        half < 0.5,
+        "half way out should read from further out than half way, which is \
+         what swells the middle: {half}"
     );
 
-    // What the picture covers grows with it, so a bezel drawn round it is
-    // drawn round the glass rather than through it.
-    let flat = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(512.0, 384.0));
-    let glass = covered(flat, CURVE);
-    assert!(glass.width() > flat.width() && glass.height() > flat.height());
-    assert_eq!(glass.center(), flat.center(), "and stays where it was");
+    // Nothing is read from outside the picture, or the edge pixels would be
+    // smeared out to fill the corners.
+    for at in [
+        egui::vec2(1.0, 1.0),
+        egui::vec2(-1.0, 1.0),
+        egui::vec2(1.0, -1.0),
+        egui::vec2(-1.0, -1.0),
+    ] {
+        let from = sample_at(at, CURVE);
+        assert!(
+            from.x.abs() <= 1.0001 && from.y.abs() <= 1.0001,
+            "the corner should read from inside the picture: {from:?}"
+        );
+    }
+
+    // The corners reach furthest out, which is what tucks them back.
+    let corner = sample_at(egui::vec2(1.0, 1.0), CURVE).x;
+    let edge = sample_at(egui::vec2(1.0, 0.0), CURVE).x;
+    assert!(
+        corner > edge,
+        "a corner reads from further out than the middle of an edge: {corner} \
+         against {edge}"
+    );
 }
 
-/// The mesh is a grid of quads with the picture stretched over it, so the
-/// pixels are the ULA's however the glass is shaped.
+/// The mesh is a grid of quads filling the picture, each reading from a place
+/// the curve moved: the pixels are still the ULA's, they are just read from
+/// somewhere else.
 #[test]
 fn the_picture_is_drawn_over_the_curve() {
     let flat = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(512.0, 384.0));
@@ -173,19 +197,31 @@ fn the_picture_is_drawn_over_the_curve() {
         0,
         "and triangles, three indices at a time"
     );
-    // The corners of the texture are still the corners of the picture.
-    let uvs: Vec<egui::Pos2> = mesh.vertices.iter().map(|v| v.uv).collect();
-    assert!(uvs.contains(&egui::pos2(0.0, 0.0)) && uvs.contains(&egui::pos2(1.0, 1.0)));
-    // And the mesh reaches further than the flat picture would have.
-    let widest = mesh
+    // The quads stay inside the picture: the curve is in what they read, not
+    // in where they are, so nothing pokes out through the bezel.
+    for v in &mesh.vertices {
+        assert!(
+            flat.expand(0.01).contains(v.pos),
+            "a vertex outside the picture: {:?}",
+            v.pos
+        );
+        assert!(
+            (-0.0001..=1.0001).contains(&v.uv.x) && (-0.0001..=1.0001).contains(&v.uv.y),
+            "and one reading from outside it: {:?}",
+            v.uv
+        );
+    }
+    // The middle of the top edge reads from inside the picture rather than
+    // from its very top, which is the swell.
+    let middle_top = mesh
         .vertices
         .iter()
-        .map(|v| v.pos.x)
-        .fold(f32::MIN, f32::max);
+        .find(|v| (v.pos.x - flat.center().x).abs() < 0.01 && v.pos.y == flat.top())
+        .expect("the grid has a vertex at the middle of the top edge");
     assert!(
-        widest > flat.right(),
-        "the glass should reach past the flat picture: {widest} against {}",
-        flat.right()
+        middle_top.uv.y > 0.0,
+        "the top of the picture is read from inside it: {:?}",
+        middle_top.uv
     );
 }
 
@@ -224,4 +260,69 @@ fn the_crt_switch_televises_the_picture() {
         }
         other => panic!("there should be a picture either way: {other:?}"),
     }
+}
+
+/// The aerial lead is a switch of its own.
+///
+/// A monitor fed RGB had the tube's line structure and none of the composite
+/// artefacts, so the two are separate: the CRT switch is the glass, and the
+/// Composite switch is what came down the lead.
+#[test]
+fn composite_is_switched_apart_from_the_tube() {
+    use egui_kittest::kittest::Queryable;
+    use egui_kittest::Harness;
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{App, Roms};
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = false;
+    let mut h: Harness<'_, App> = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+    let flat = h.state().screen_texture().map(|t| t.size()).unwrap();
+
+    // Composite on its own: the same picture, the same size, treated.
+    h.get_by_label("Composite").click();
+    h.run_steps(3);
+    assert!(h.state().composite && !h.state().crt);
+    assert_eq!(
+        h.state().screen_texture().map(|t| t.size()),
+        Some(flat),
+        "the aerial lead does not give the picture line gaps"
+    );
+
+    let set = h.state().crt_settings();
+    assert!(
+        set.bleed > 0.0 && set.interference > 0.0 && !set.line_gaps,
+        "the lead smears the colour and beats against the dot clock, and does \
+         not give the picture line gaps: {set:?}"
+    );
+
+    // And the tube on top of it doubles the height, as the tube does.
+    h.get_by_label("CRT").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().screen_texture().map(|t| t.size()),
+        Some([flat[0], flat[1] * 2]),
+        "and the tube does"
+    );
+
+    // The tube on its own is the glass and nothing of the lead.
+    h.get_by_label("Composite").click();
+    h.run_steps(3);
+    let set = h.state().crt_settings();
+    assert!(
+        set.line_gaps && set.scanlines > 0.0,
+        "the tube gives the picture its line structure: {set:?}"
+    );
+    assert_eq!(
+        (set.bleed, set.interference),
+        (0.0, 0.0),
+        "and none of what the aerial lead does: {set:?}"
+    );
 }
