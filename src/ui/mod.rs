@@ -3,6 +3,7 @@
 pub mod back_buffer;
 pub mod callflow;
 pub mod cassette;
+pub mod crt;
 pub mod debugger;
 pub mod profiler;
 pub mod ram_map;
@@ -392,6 +393,14 @@ pub struct App {
 
     screen_pixels: Vec<u8>,
     screen_tex: Option<TextureHandle>,
+    /// Whether the picture is shown as a television showed it: the curve of
+    /// the tube, the gaps between the lines, and what composite video did to
+    /// the colour on the way.
+    pub crt: bool,
+    /// The televised picture, kept between frames so it is not reallocated.
+    crt_pixels: Vec<u8>,
+    /// Whether the texture that exists was made with the set on.
+    crt_drawn: bool,
     pub scale: f32,
     /// Show the whole overscan area, or crop the border to television size.
     pub overscan: bool,
@@ -500,6 +509,9 @@ impl App {
             show_profiler: false,
             screen_pixels: vec![0; screen::View::OVERSCAN.buffer_len()],
             screen_tex: None,
+            crt: false,
+            crt_pixels: Vec::new(),
+            crt_drawn: false,
             scale: 2.0,
             overscan: true,
             cursor_beam: false,
@@ -2426,9 +2438,12 @@ impl App {
         }
         let view = self.view();
         let flash = self.flash_on();
-        if self.screen_pixels.len() != view.buffer_len() {
+        if self.screen_pixels.len() != view.buffer_len() || self.crt != self.crt_drawn {
             self.screen_pixels = vec![0; view.buffer_len()];
-            self.screen_tex = None; // the texture has to be remade at the new size
+            // The texture has to be remade at the new size, and switching the
+            // set on or off doubles the height or halves it again.
+            self.screen_tex = None;
+            self.crt_drawn = self.crt;
         }
         // Bring the painted frame up to where the beam has got to. It is
         // otherwise only caught up when the program writes to the screen, so a
@@ -2470,8 +2485,25 @@ impl App {
             None => screen::render(&self.spec.bus, view, &mut pixels, flash),
         }
         self.screen_pixels = pixels;
-        let img =
-            ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels);
+        let img = if self.crt {
+            // Twice the height: a line and the gap under it. The dot the view
+            // starts at keeps the interference still against the picture when
+            // the border is shown or hidden — the pattern belongs to the
+            // machine's clock, not to the window's edge.
+            let x0 = -((view.border_x * 2) as f64);
+            crate::crt::televise(
+                &self.screen_pixels,
+                view.width(),
+                view.height(),
+                &mut self.crt_pixels,
+                crate::crt::Crt::default(),
+                self.spec.bus.frame,
+                x0,
+            );
+            ColorImage::from_rgba_unmultiplied([view.width(), view.height() * 2], &self.crt_pixels)
+        } else {
+            ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels)
+        };
         match &mut self.screen_tex {
             Some(t) => t.set(img, TextureOptions::NEAREST),
             None => {
@@ -2651,6 +2683,14 @@ impl App {
                      time the beam comes round to draw it again.",
                 );
             });
+
+            theme::divider(ui);
+            theme::toggle(ui, &mut self.crt, "CRT").on_hover_text(
+                "Show the picture as a television showed it: the curve of the \
+                 tube, the gaps between the lines, colour smeared sideways by \
+                 composite video, and the herringbone the dot clock beats \
+                 against PAL's colour subcarrier.",
+            );
 
             theme::divider(ui);
             // Only while stopped: the frame is replayed from its interrupt,
@@ -3002,7 +3042,12 @@ impl App {
                 // black, as a set does in its case.
                 painter.rect_filled(area, 0.0, theme::CASE_DARK);
                 let picture = screen::centred(area, size);
-                let bezel = picture.expand(10.0);
+                let glass = if self.crt {
+                    crt::covered(picture, crt::CURVE)
+                } else {
+                    picture
+                };
+                let bezel = glass.expand(10.0);
                 painter.rect_filled(bezel, 6.0, egui::Color32::from_rgb(0x1a, 0x17, 0x13));
                 painter.rect_stroke(
                     bezel,
@@ -3011,17 +3056,27 @@ impl App {
                     egui::StrokeKind::Inside,
                 );
                 painter.rect_stroke(
-                    picture.expand(1.0),
+                    glass.expand(1.0),
                     2.0,
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3a, 0x35, 0x2d)),
                     egui::StrokeKind::Outside,
                 );
-                painter.image(
-                    tex.id(),
-                    picture,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
+                if self.crt {
+                    // Onto the glass, which is part of a sphere: the corners
+                    // sit further out than the edges.
+                    painter.add(egui::Shape::mesh(crt::curved(
+                        tex.id(),
+                        picture,
+                        crt::CURVE,
+                    )));
+                } else {
+                    painter.image(
+                        tex.id(),
+                        picture,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                }
 
                 // Clicking a pixel picks out the byte behind it in the
                 // debugger's dump: "what draws this?" starts with knowing

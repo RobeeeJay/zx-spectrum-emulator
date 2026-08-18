@@ -201,6 +201,38 @@ on real hardware then the ULA really did paint twice; but the lengths are not
 near whole multiples of a frame, which fits that story no better than the
 other.
 
+## The television at the other end
+
+The picture the emulator has is what the ULA put out: exact pixels, exact
+colours, sharp to the sample. A set on the end of an aerial lead showed
+something else, and the **CRT** switch in the Video row shows that instead.
+
+Three things, none of them invented:
+
+- **The line structure.** Every line is drawn with a gap under it, which is
+  what a shadow mask looks like once there is room to see it. The picture is
+  built at twice the height for this, so the gaps survive whatever the window
+  is scaled to.
+- **Composite colour.** Colour rides on a subcarrier with a fraction of the
+  luminance's bandwidth, so it is smeared sideways while the brightness stays
+  where it is: a red caption on black bleeds and a white one does not. The
+  luminance is put back over the softened colour afterwards — except where
+  that would want light of a negative amount, which a tube has none of.
+- **The herringbone.** PAL's colour subcarrier is 4,433,618.75 Hz and the
+  Spectrum's dot clock is 7 MHz, so the subcarrier advances 0.6334 of a cycle
+  every pixel. Sampled once a pixel, that aliases to a ripple every 2.7 pixels
+  — the pattern anybody who used one on a television will remember. A line is
+  448 dots, which is 283.75 cycles: the quarter left over is why it leans over
+  instead of standing in columns. A frame is 139,776 dots, which is not a whole
+  number of cycles either, so it arrives somewhere else next time and the whole
+  thing crawls.
+
+The curve of the glass is geometry rather than pixels: the picture is drawn on
+a grid of quads whose corners are pushed outwards by the square of their
+distance from the middle, so straight lines bow and the corners sit furthest
+out. The bezel is drawn round what the curve covers rather than round the flat
+picture, or the bulge would poke out through it.
+
 ## What is checked against what
 
 - **HALT2INT** — thirty values compared with photographs of a real 48K. Settles

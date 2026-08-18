@@ -6,6 +6,7 @@ pub mod audio;
 pub mod audio_out;
 pub mod autodoc;
 pub mod blocks;
+pub mod crt;
 pub mod demo_rom;
 pub mod detect;
 pub mod disasm;
