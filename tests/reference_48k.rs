@@ -232,7 +232,6 @@ fn an_opcode_fetch_is_contended_once() {
 #[test]
 fn the_ear_bit_is_sampled_at_the_iorq_cycle() {
     use zx_rustrum::tape::{Block, Tape};
-    use zx_rustrum::z80::Bus;
 
     let mut spec = Spectrum::new();
     let mut tape = Tape::from_blocks(

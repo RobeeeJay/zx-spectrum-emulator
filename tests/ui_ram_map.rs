@@ -1,6 +1,6 @@
 //! RAM access map controls.
 
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use zx_rustrum::machine::Spectrum;
 use zx_rustrum::ui::{App, Roms};
@@ -49,14 +49,58 @@ fn reads_writes_and_executes_can_each_be_toggled() {
 fn each_channel_has_its_own_fade_control() {
     let mut h = harness();
     h.run_steps(3);
-    // A slider contributes more than one node (the drag value and its label),
-    // so count matches rather than expecting exactly one.
-    for l in ["read fade", "write fade", "exec fade"] {
+    // A slider contributes two nodes, its drag value and its label, so three
+    // sliders are six of them.
+    assert_eq!(
+        h.query_all_by_label("fade").count(),
+        6,
+        "one fade slider for each of read, write and execute"
+    );
+
+    // And each is on its channel's own row, after the switch: they used to be
+    // three sliders on a row of their own, where which was which had to be
+    // read off their labels. Everything is matched by row, since the harness
+    // draws the whole application and "Execute" is a word the debugger uses
+    // too.
+    let boxes = |label: &str| -> Vec<(f32, f32)> {
+        h.query_all_by_label(label)
+            .filter_map(|node| node.accesskit_node().bounding_box())
+            .map(|b| (b.x0 as f32, b.y0 as f32))
+            .collect()
+    };
+    let fades = boxes("fade");
+    for name in ["Read", "Write", "Execute"] {
+        let switch = boxes(name)
+            .into_iter()
+            .find(|(_, y)| fades.iter().any(|(_, fy)| (fy - y).abs() < 6.0))
+            .unwrap_or_else(|| panic!("{name} should be on a row with a fade slider"));
+        let beside: Vec<&(f32, f32)> = fades
+            .iter()
+            .filter(|(_, y)| (y - switch.1).abs() < 6.0)
+            .collect();
+        assert_eq!(
+            beside.len(),
+            2,
+            "{name}'s row should carry one fade slider: {beside:?}"
+        );
         assert!(
-            h.query_all_by_label(l).count() > 0,
-            "expected a {l} slider in the RAM map window"
+            beside.iter().all(|(x, _)| *x > switch.0),
+            "and it should come after the switch: {name} at {switch:?}, fade at {beside:?}"
         );
     }
+}
+
+/// The map is drawn at a fixed two points to the byte, so there is no zoom to
+/// set and no slider for it.
+#[test]
+fn the_map_has_no_zoom_control() {
+    let mut h = harness();
+    h.run_steps(3);
+    assert_eq!(
+        h.query_all_by_label("zoom").count(),
+        0,
+        "the zoom slider should be gone"
+    );
 }
 
 // ---------------------------------------------------------------------------

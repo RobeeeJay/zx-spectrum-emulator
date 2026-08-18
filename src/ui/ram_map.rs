@@ -43,7 +43,6 @@ pub struct RamMapState {
     pixels: Vec<u8>,
     tex: Option<TextureHandle>,
     pub view: View,
-    pub scale: f32,
     pub show_read: bool,
     pub show_write: bool,
     pub show_exec: bool,
@@ -77,7 +76,6 @@ impl Default for RamMapState {
             pixels: vec![0; 256 * 256 * 4],
             tex: None,
             view: View::AddressSpace,
-            scale: 2.0,
             show_read: true,
             show_write: true,
             show_exec: true,
@@ -209,6 +207,13 @@ fn build_image(app: &mut App) {
     }
 }
 
+/// How big a byte is drawn, in points.
+///
+/// Fixed rather than dialled: one byte to four pixels is the size the map is
+/// legible at, and the slider spent a row of a window that has better uses for
+/// it.
+const ZOOM: f32 = 2.0;
+
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.label("View:");
@@ -216,40 +221,48 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         ui.selectable_value(&mut app.ram.view, View::AllMemory, "All memory")
             .on_hover_text("Every RAM bank and ROM page, paged in or not");
     });
+    // A row for each channel: the switch, its colour and how long its marks
+    // take to fade. The three fades used to be a row of their own, where which
+    // was which had to be read off their labels — and all three on one row
+    // with their switches is wider than the window, which wraps and puts a
+    // slider under a switch it has nothing to do with.
+    let (mut read, mut write, mut exec) = {
+        let t = app.tracker();
+        (t.fade_read, t.fade_write, t.fade_exec)
+    };
+    let channel =
+        |ui: &mut egui::Ui, on: &mut bool, name: &str, colour: egui::Color32, fade: &mut u8| {
+            ui.horizontal(|ui| {
+                ui.set_min_height(theme::ROW_H);
+                ui.spacing_mut().slider_width = 110.0;
+                theme::toggle(ui, on, name);
+                ui.colored_label(colour, "■");
+                ui.add_enabled_ui(*on, |ui| {
+                    theme::slider(ui, egui::Slider::new(fade, 1..=64).text("fade"));
+                });
+            });
+        };
+    channel(ui, &mut app.ram.show_read, "Read", theme::GREEN, &mut read);
+    channel(ui, &mut app.ram.show_write, "Write", theme::RED, &mut write);
+    channel(
+        ui,
+        &mut app.ram.show_exec,
+        "Execute",
+        theme::BLUE,
+        &mut exec,
+    );
+    {
+        let t = app.tracker_mut();
+        t.fade_read = read;
+        t.fade_write = write;
+        t.fade_exec = exec;
+    }
     ui.horizontal_wrapped(|ui| {
-        ui.label("Show:");
-        theme::toggle(ui, &mut app.ram.show_read, "Read");
-        ui.colored_label(theme::GREEN, "■");
-        theme::toggle(ui, &mut app.ram.show_write, "Write");
-        ui.colored_label(theme::RED, "■");
-        theme::toggle(ui, &mut app.ram.show_exec, "Execute");
-        ui.colored_label(theme::BLUE, "■");
-        ui.separator();
+        ui.spacing_mut().slider_width = 110.0;
         theme::toggle(ui, &mut app.ram.show_overlays, "Overlays");
-    });
-    ui.horizontal_wrapped(|ui| {
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut app.ram.scale, 0.5..=4.0).text("zoom"),
-        );
         theme::slider(
             ui,
             egui::Slider::new(&mut app.ram.gain, 0.25..=4.0).text("gain"),
-        );
-    });
-    ui.horizontal_wrapped(|ui| {
-        let t = app.tracker_mut();
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut t.fade_read, 1..=64).text("read fade"),
-        );
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut t.fade_write, 1..=64).text("write fade"),
-        );
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut t.fade_exec, 1..=64).text("exec fade"),
         );
     });
     ui.separator();
@@ -267,7 +280,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         }
     }
 
-    let scale = app.ram.scale;
+    let scale = ZOOM;
     let size = Vec2::new(256.0 * scale, rows as f32 * scale);
     // Scrollable, so the map is still fully reachable at high zoom.
     let (rect, response) = egui::ScrollArea::both()
