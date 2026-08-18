@@ -219,3 +219,54 @@ fn an_opcode_fetch_is_contended_once() {
         "an M1 outside the contended range is never delayed"
     );
 }
+
+/// The EAR bit is sampled where the ULA puts it on the bus, not where the
+/// instruction ends.
+///
+/// An `IN A,($FE)` on a contended port is stalled by the ULA and then takes
+/// its four T-states; the byte is on the bus at the IORQ cycle, which is three
+/// of those T-states before the instruction is over. Reading the tape at the
+/// end instead samples it late — and late by a varying amount, since the stall
+/// depends on where the beam is, which is exactly the kind of jitter an edge
+/// loader measures against.
+#[test]
+fn the_ear_bit_is_sampled_at_the_iorq_cycle() {
+    use zx_rustrum::tape::{Block, Tape};
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    let mut tape = Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureTone {
+            len: 2168,
+            count: 200,
+        }],
+    );
+    tape.play(0);
+    spec.bus.tape = Some(tape);
+
+    // In the display area, where the ULA stalls the read: `LD A,$7F` then
+    // `IN A,($FE)`, the loop every loader is built round.
+    spec.bus.tstates = 15_000;
+    spec.cpu.pc = 0x8000;
+    spec.bus.poke(0x8000, 0x3E);
+    spec.bus.poke(0x8001, 0x7F);
+    spec.bus.poke(0x8002, 0xDB);
+    spec.bus.poke(0x8003, 0xFE);
+    spec.step_instruction();
+    spec.step_instruction();
+
+    let ended = spec.bus.total_t();
+    let sampled = spec.bus.tape.as_ref().expect("a tape").clock;
+    assert!(
+        ended > sampled,
+        "the tape should have been read before the instruction ended: read at \
+         {sampled}, ended at {ended}"
+    );
+    assert!(
+        ended - sampled >= 3,
+        "and three T-states before it at least, which is what follows the \
+         IORQ cycle: {} T",
+        ended - sampled
+    );
+}

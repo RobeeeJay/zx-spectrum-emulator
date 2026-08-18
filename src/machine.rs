@@ -931,10 +931,20 @@ impl SpectrumBus {
         self.tape_advance()
     }
 
+    /// The EAR level as it stood at T-state `at`, which is where the ULA put
+    /// it on the bus rather than where the instruction ended.
+    pub fn tape_level_at(&mut self, at: u64) -> bool {
+        self.tape_advance_to(at)
+    }
+
     /// Advance the tape to the present, mixing in every edge it produced at
     /// the T-state it happened, and return the resulting EAR level.
     fn tape_advance(&mut self) -> bool {
-        let now = self.total_t();
+        self.tape_advance_to(self.total_t())
+    }
+
+    /// The same, at a given T-state rather than at the present one.
+    fn tape_advance_to(&mut self, now: u64) -> bool {
         if self.tape.is_none() {
             return self.ear;
         }
@@ -1977,8 +1987,13 @@ impl SpectrumBus {
         }
         if port & 1 == 0 {
             let playing = self.tape.as_ref().is_some_and(|t| t.playing);
+            // At the T-state the ULA put the byte on the bus, not at the end
+            // of the instruction: the contention stall comes before that
+            // point, so reading the tape afterwards samples it late by however
+            // much the ULA happened to stall this particular read.
+            let at = self.frame * self.model.frame_t() as u64 + sampled as u64;
             let ear = if playing {
-                self.tape_level()
+                self.tape_level_at(at)
             } else {
                 self.ear_feedback()
             };

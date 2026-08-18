@@ -393,32 +393,54 @@ before the first stop.
 Reported as "Head over Heels no longer loads with Max CPU or Fastload", and it
 is neither of those things. Sweeping the moment Play is pressed across two
 frames of machine time, with `LOAD ""` already running and the ROM sitting in
-its edge loop at $05ED-$05F8 every time:
+its edge loop at $05ED-$05F8 every time, about a third of the starts end with a
+black screen and the machine in Speedlock's sampler.
 
-```
-152:ok  153:BLACK  155:ok  157:ok  158:BLACK  160:BLACK  162:BLACK  163:BLACK
-165:ok  167:BLACK  168:ok  170:ok  172:BLACK  173:ok  175:ok  177:ok  178:ok
-180:ok  182:BLACK  183:BLACK  185:ok  187:BLACK  188:ok  190:ok
-```
+What has been established by tracing a good start (wait 0) against a bad one
+(wait 2):
 
-About a third of start moments end with a black screen and the machine sitting
-in Speedlock's sampling loop at $FD27 while the deck runs on through the tape.
-What is known:
+- **The two load the same bytes.** Hooking the store in Speedlock's byte loop
+  at $FE09, both runs put the same 47,866 bytes through IX, in the same order,
+  to the end of the tape. Nothing is misread.
+- **The two do the same things.** Comparing the loader's control flow — every
+  jump target in $FC00-$FFFF, runs of the same target collapsed — they are
+  identical for 2,934,480 transfers, differing only in how many turns a
+  counting loop took: 159 against 164, 13 against 14, which is the contention
+  jitter and not a decision going the other way.
+- **The bad ones end waiting.** They sit at $FD24-$FD2A, the sampler's wait
+  loop, after the tape has run out: the loader wants more pulses and there are
+  none. Two hundred emulated seconds later they are still there.
+- **Contention is what decides it.** With the ULA's delays taken out
+  altogether, all twenty-four starts load. Shifting the contention table by up
+  to two T-states either way changes nothing — the pattern of failures stays
+  10 of 24 — so it is the jitter itself rather than where the table is
+  anchored.
+- **Speed has nothing to do with it.** The same sweep with the boost off gives
+  the same pattern bar two marginal starts, and it fails identically at
+  `bbe284f`, before this session's work on the deck.
 
-- It is not the speed. The same sweep with the boost off gives the same
-  pattern, two marginal cases apart, and Fastload changes nothing either: the
-  ROM's blocks are handed over the same way whichever moment Play comes at.
-- It is not new. The identical sweep at `bbe284f`, before the deck's quality
-  model, the grain, the hiss and the silence work, fails at the same starts.
-- The ROM's part succeeds: the BASIC line and the loader block are read, and
-  the machine reaches Speedlock's own loader before it goes wrong.
-- Where in the frame the tape starts is what differs between one run and the
-  next, and Speedlock reads port $7FFE, whose high byte is contended — the
-  same 54/56/58/60 T-state variance that stopped the sampler wait being
-  divided out. Whether that is the cause has not been shown.
+One real inaccuracy was found on the way and fixed (see below): the EAR bit was
+being sampled at the end of the `IN` rather than at its IORQ cycle. That moved
+the failures from 10 of 24 to 8, and did not cure them.
 
-What would settle it is a comparison of a working start against a failing one
-at the instruction where the two diverge. Not done yet.
+What is left is the loader losing one pulse somewhere near the end of the tape
+and never getting back in step. Whether our contended `IN` costs what a real
+one does, T-state for T-state, is the thing to measure next; the tables match
+the reference, but the reference is a table and not a machine.
+
+### Where the EAR bit is sampled
+
+`IN A,($FE)` on a contended port is stalled by the ULA and then takes its four
+T-states. The byte is on the bus at the IORQ cycle, three T-states before the
+instruction is over — and the tape was being read at the end instead, which is
+late by the trailing T-states *plus whatever the ULA stalled that particular
+read by*. That is up to seven T-states of lateness that moves about with the
+beam: jitter of our own making, added to the jitter a loader is measuring
+against.
+
+The tape is now read at the IORQ cycle, which is what `sampled` in
+`contend_io` has always been for — the floating bus used it and the EAR line
+did not. `tests/reference_48k.rs` holds it.
 
 ## A deck that is not quite right
 

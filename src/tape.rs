@@ -916,7 +916,9 @@ pub struct Tape {
     pub stopped_by_block: bool,
     /// Where the tape has been played up to, so progress can be worked out
     /// during the silence at the end of a block as well as during the sound.
-    clock: u64,
+    /// The T-state the deck has been advanced to, which is the moment the
+    /// level it is reporting belongs to.
+    pub clock: u64,
     /// The pause a block ends with: when it starts and when it ends.
     pause_span: Option<(u64, u64)>,
     /// How well the deck is behaving.
