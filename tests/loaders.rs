@@ -189,6 +189,15 @@ fn starts_after_loading(name: &str) {
         "{name} should not still be in a loader at ${:04X}",
         spec.cpu.pc
     );
+    // Nor in the ROM's own edge routines, which a game's loader calls into:
+    // sitting there with the tape run out is a loader waiting for a block
+    // that is never coming, and the picture on screen is the loading screen
+    // rather than the game.
+    assert!(
+        !(0x0530..=0x0620).contains(&spec.cpu.pc),
+        "{name} should not still be reading the tape at ${:04X}",
+        spec.cpu.pc
+    );
     let drawn = (0x4000..0x5800u16)
         .filter(|a| spec.bus.mem(*a) != 0)
         .count();
@@ -387,7 +396,19 @@ fn starglider_loads() {
 
 /// Starglider 2 wraps its blocks in groups and puts a four-millisecond pause
 /// and a long tone in front of them.
+/// Starglider 2 does not finish, and this is what it does instead.
+///
+/// The 48K side loads its screen and about two hundred of its blocks, and then
+/// sits in the ROM's edge routine at $05Ex — the game's own loader calls into
+/// the ROM's and waits there — with the loading screen up and the tape run
+/// out. Pressing Play again runs the 128K side past it and changes nothing.
+///
+/// It was passing as a game that loads because the check was "not in a loader,
+/// and something on screen": the loading screen is something on screen, and
+/// the ROM is not the loader the check was looking at. Every other game here
+/// passes the stricter one.
 #[test]
+#[ignore = "Starglider 2 does not finish loading: see docs/tape-loading.md"]
 fn starglider_2_loads() {
     starts_after_loading(STARGLIDER_2);
 }

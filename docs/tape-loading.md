@@ -304,7 +304,11 @@ Host frames from `LOAD ""` to the tape stopping, played against hurried:
 | --- | --- | --- | --- |
 | Bubble Bobble | 21,475 | 1,074 | 41 |
 | Starglider | 19,529 | 977 | 36 |
-| Starglider 2 | 24,473 | 1,224 | 46 |
+| Starglider 2 | — | — | — |
+
+**Starglider 2 does not finish**, and the frames above are struck out because
+what was being measured was a tape running to its end rather than a game
+starting. See the section below.
 
 Bubble Bobble is worth knowing about when reading a test: it waits at its menu
 inside the ROM's keyboard scan, which is where BASIC waits too, so where the
@@ -441,6 +445,36 @@ against.
 The tape is now read at the IORQ cycle, which is what `sampled` in
 `contend_io` has always been for — the floating bus used it and the EAR line
 did not. `tests/reference_48k.rs` holds it.
+
+## Still open: Starglider 2 stops with its loading screen up
+
+The 48K side loads: the screen, then about two hundred of its 267-byte turbo
+blocks, read by the game's own loader. Then the machine sits in the ROM's edge
+routine at $05Ex — Starglider 2's loader calls into the ROM's rather than
+carrying its own — waiting for a block that is not coming, with the loading
+screen up and the tape run out at the "Stop the tape" that divides side A from
+the 128K version behind it. Pressing Play again plays the 128K side past it and
+changes nothing.
+
+It was passing as a game that loads. The check was "the machine is not in a
+loader, and there is something on the screen": a loading screen is something on
+the screen, and the ROM is not the address range the check called a loader. The
+check now also refuses the ROM's tape routines, and **every other game here
+passes it** — twelve of them — so the assertion is not simply too strict.
+
+What was tried and does not fix it:
+
+- **The EAR line hearing the loudspeaker while the tape runs.** A real EAR
+  input sums the tape's signal with what the machine's own speaker feeds back,
+  and in a gap the feedback is all there is; ours takes the tape while it is
+  playing and the feedback only when it is stopped. Letting the feedback
+  through during a gap breaks Head over Heels and both Dinamic games, whose
+  loaders flash the border in the gaps and would then be reading their own
+  border writes. A comparator summing a large signal with a small one is not
+  an either/or, and modelling it as one is where this ends.
+
+The test is `#[ignore]`d with that reason rather than deleted or quietly
+weakened.
 
 ## A deck that is not quite right
 
