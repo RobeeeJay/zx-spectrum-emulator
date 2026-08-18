@@ -16,8 +16,12 @@
 use egui::{Color32, Mesh, Pos2, Rect, TextureId, Vec2};
 
 /// How far the glass bulges: how much of itself the middle of the picture
-/// swells by, which on a set of the period is a few per cent.
-pub const CURVE: f32 = 0.06;
+/// swells by.
+///
+/// A fiftieth. It was three times that to begin with, which reads as a fish
+/// eye rather than as a television: the curve of a set is something you notice
+/// in the straight edges of what is on it, not in the shape of the picture.
+pub const CURVE: f32 = 0.021;
 
 /// How many quads across and down. Enough that the curve reads as a curve
 /// rather than as a fan of triangles, and few enough to cost nothing.
