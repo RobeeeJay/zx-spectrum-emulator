@@ -220,51 +220,53 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         ui.selectable_value(&mut app.ram.view, View::AddressSpace, "Address space");
         ui.selectable_value(&mut app.ram.view, View::AllMemory, "All memory")
             .on_hover_text("Every RAM bank and ROM page, paged in or not");
+        ui.separator();
+        theme::toggle(ui, &mut app.ram.show_overlays, "Overlays");
     });
-    // A row for each channel: the switch, its colour and how long its marks
-    // take to fade. The three fades used to be a row of their own, where which
-    // was which had to be read off their labels — and all three on one row
-    // with their switches is wider than the window, which wraps and puts a
-    // slider under a switch it has nothing to do with.
+    // Each channel with its own fade beside it: the switch, its colour, and
+    // how long its marks take to fade. The fades used to be three sliders on a
+    // row of their own, where which was which had to be read off their labels.
     let (mut read, mut write, mut exec) = {
         let t = app.tracker();
         (t.fade_read, t.fade_write, t.fade_exec)
     };
     let channel =
         |ui: &mut egui::Ui, on: &mut bool, name: &str, colour: egui::Color32, fade: &mut u8| {
-            ui.horizontal(|ui| {
-                ui.set_min_height(theme::ROW_H);
-                ui.spacing_mut().slider_width = 110.0;
-                theme::toggle(ui, on, name);
-                ui.colored_label(colour, "■");
-                ui.add_enabled_ui(*on, |ui| {
-                    theme::slider(ui, egui::Slider::new(fade, 1..=64).text("fade"));
-                });
+            theme::toggle(ui, on, name);
+            ui.colored_label(colour, "■");
+            ui.add_enabled_ui(*on, |ui| {
+                theme::slider(ui, egui::Slider::new(fade, 1..=64).text("fade"));
             });
         };
-    channel(ui, &mut app.ram.show_read, "Read", theme::GREEN, &mut read);
-    channel(ui, &mut app.ram.show_write, "Write", theme::RED, &mut write);
-    channel(
-        ui,
-        &mut app.ram.show_exec,
-        "Execute",
-        theme::BLUE,
-        &mut exec,
-    );
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 76.0;
+        channel(ui, &mut app.ram.show_read, "Read", theme::GREEN, &mut read);
+        ui.separator();
+        channel(ui, &mut app.ram.show_write, "Write", theme::RED, &mut write);
+    });
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 76.0;
+        channel(
+            ui,
+            &mut app.ram.show_exec,
+            "Execute",
+            theme::BLUE,
+            &mut exec,
+        );
+        ui.separator();
+        theme::slider(
+            ui,
+            egui::Slider::new(&mut app.ram.gain, 0.25..=4.0).text("gain"),
+        );
+    });
     {
         let t = app.tracker_mut();
         t.fade_read = read;
         t.fade_write = write;
         t.fade_exec = exec;
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().slider_width = 110.0;
-        theme::toggle(ui, &mut app.ram.show_overlays, "Overlays");
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut app.ram.gain, 0.25..=4.0).text("gain"),
-        );
-    });
     ui.separator();
 
     build_image(app);

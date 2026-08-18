@@ -57,11 +57,12 @@ fn each_channel_has_its_own_fade_control() {
         "one fade slider for each of read, write and execute"
     );
 
-    // And each is on its channel's own row, after the switch: they used to be
-    // three sliders on a row of their own, where which was which had to be
-    // read off their labels. Everything is matched by row, since the harness
-    // draws the whole application and "Execute" is a word the debugger uses
-    // too.
+    // Each fade is on its channel's row and to the right of the switch, with
+    // Read and Write sharing a row and Execute on the next with the gain.
+    // They used to be three sliders on a row of their own, where which was
+    // which had to be read off their labels. Everything is matched by row,
+    // since the harness draws the whole application and "Execute" is a word
+    // the debugger uses too.
     let boxes = |label: &str| -> Vec<(f32, f32)> {
         h.query_all_by_label(label)
             .filter_map(|node| node.accesskit_node().bounding_box())
@@ -69,25 +70,62 @@ fn each_channel_has_its_own_fade_control() {
             .collect()
     };
     let fades = boxes("fade");
-    for name in ["Read", "Write", "Execute"] {
-        let switch = boxes(name)
+    let switch = |name: &str| -> (f32, f32) {
+        boxes(name)
             .into_iter()
             .find(|(_, y)| fades.iter().any(|(_, fy)| (fy - y).abs() < 6.0))
-            .unwrap_or_else(|| panic!("{name} should be on a row with a fade slider"));
-        let beside: Vec<&(f32, f32)> = fades
+            .unwrap_or_else(|| panic!("{name} should be on a row with a fade slider"))
+    };
+    let fade_after = |at: (f32, f32)| -> f32 {
+        fades
             .iter()
-            .filter(|(_, y)| (y - switch.1).abs() < 6.0)
-            .collect();
-        assert_eq!(
-            beside.len(),
-            2,
-            "{name}'s row should carry one fade slider: {beside:?}"
-        );
-        assert!(
-            beside.iter().all(|(x, _)| *x > switch.0),
-            "and it should come after the switch: {name} at {switch:?}, fade at {beside:?}"
-        );
-    }
+            .filter(|(x, y)| (y - at.1).abs() < 6.0 && *x > at.0)
+            .map(|(x, _)| *x)
+            .fold(f32::MAX, f32::min)
+    };
+    let (read, write, exec) = (switch("Read"), switch("Write"), switch("Execute"));
+    assert!(
+        (read.1 - write.1).abs() < 6.0,
+        "Read and Write share a row: {read:?} {write:?}"
+    );
+    assert!(
+        exec.1 > read.1,
+        "and Execute is on the row below: {exec:?} against {read:?}"
+    );
+    assert!(
+        read.0 < fade_after(read) && fade_after(read) < write.0,
+        "the read fade sits between Read and Write: {read:?} {} {write:?}",
+        fade_after(read)
+    );
+    assert!(
+        fade_after(write) > write.0,
+        "and the write fade after Write: {write:?} {}",
+        fade_after(write)
+    );
+    assert!(
+        fade_after(exec) > exec.0,
+        "and the execute fade after Execute: {exec:?} {}",
+        fade_after(exec)
+    );
+
+    // The gain is the last thing on the Execute row, past its fade.
+    let gain = boxes("gain")
+        .into_iter()
+        .find(|(_, y)| (y - exec.1).abs() < 6.0)
+        .expect("the gain belongs on the Execute row");
+    assert!(
+        gain.0 > fade_after(exec),
+        "and comes after the execute fade: {gain:?}"
+    );
+
+    // Overlays moved up to the view row, beside All memory.
+    let all_memory = boxes("All memory")[0];
+    let overlays = boxes("Overlays")[0];
+    assert!(
+        (overlays.1 - all_memory.1).abs() < 6.0 && overlays.0 > all_memory.0,
+        "Overlays belongs on the view row, after All memory: {overlays:?} \
+         against {all_memory:?}"
+    );
 }
 
 /// The map is drawn at a fixed two points to the byte, so there is no zoom to
