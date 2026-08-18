@@ -485,3 +485,54 @@ fn the_file_menu_offers_to_save_a_snapshot() {
         "and it should be live on a Spectrum"
     );
 }
+
+/// The two recorders live together in a Record section after the Machine one,
+/// and say what each of them records.
+#[test]
+fn the_record_section_holds_both_recorders() {
+    // Wide enough that the machine row does not wrap: in a narrow window it
+    // does, and where the sections sit relative to each other is what is being
+    // asked here.
+    let mut h: Harness<'_, App> = Harness::builder()
+        .with_size([1800.0, 900.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), test_app());
+    h.run_steps(3);
+
+    let row = |label: &str| -> Option<(f32, f32)> {
+        h.query_all_by_label_contains(label)
+            .next()
+            .and_then(|node| node.accesskit_node().bounding_box())
+            .map(|b| (b.x0 as f32, b.y0 as f32))
+    };
+    let rzx = row("RZX").expect("the RZX button");
+    let video = row("Video").expect("the video button");
+    let machine = row("48K").expect("the machine dropdown");
+
+    assert!(
+        (rzx.1 - machine.1).abs() < 6.0 && (video.1 - machine.1).abs() < 6.0,
+        "both recorders belong on the machine row: {rzx:?} {video:?} against \
+         {machine:?}"
+    );
+    assert!(
+        rzx.0 > machine.0 && video.0 > rzx.0,
+        "after the Machine section, RZX first: {rzx:?} {video:?}"
+    );
+
+    // And the section is labelled, like the others on the row.
+    let labels: Vec<String> = h
+        .root()
+        .children_recursive()
+        .filter_map(|node| node.accesskit_node().value().map(|v| v.to_string()))
+        .collect();
+    assert!(
+        labels.iter().any(|v| v == "RECORD"),
+        "the section should be named: {labels:?}"
+    );
+
+    // Nothing is recording to start with.
+    assert!(h.state().video.is_none(), "no video file open");
+    assert!(
+        h.query_all_by_label_contains("Stop video").next().is_none(),
+        "and nothing to stop"
+    );
+}

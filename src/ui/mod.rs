@@ -445,6 +445,8 @@ pub struct App {
     /// Whether the texture that exists was made with a gap under every line,
     /// which is what decides its height.
     crt_drawn: bool,
+    /// The video file being written, while one is.
+    pub video: Option<crate::video_out::Recording>,
     /// How many times the machine's own clock it is being run at. One is the
     /// machine as it was built; the rest are the same machine running quicker,
     /// which is what an accelerator did.
@@ -561,6 +563,7 @@ impl App {
             composite: false,
             crt_pixels: Vec::new(),
             crt_drawn: false,
+            video: None,
             clock_mult: 1.0,
             scale: 2.0,
             overscan: true,
@@ -2632,6 +2635,7 @@ impl App {
         } else {
             ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels)
         };
+        self.record_video_frame();
         let filter = self.picture_filter();
         match &mut self.screen_tex {
             Some(t) => t.set(img, filter),
@@ -2707,40 +2711,6 @@ impl App {
                 self.running = !self.running;
             }
 
-            // Recording what the machine does, so a run of a game can be read
-            // back later instruction by instruction. Not offered while a
-            // recording is playing: what would be captured is the recording.
-            let recording = self.recorded_frames();
-            match recording {
-                None => {
-                    if ui
-                        .add_enabled(self.rzx.is_none(), egui::Button::new("⏺ Record"))
-                        .on_hover_text(
-                            "Record everything the machine reads from now on, so it \
-                             can be played back and read instruction by instruction. \
-                             It is kept in memory until you stop.",
-                        )
-                        .clicked()
-                    {
-                        self.start_recording();
-                    }
-                }
-                Some(frames) => {
-                    if ui
-                        .button("⏹ Stop")
-                        .on_hover_text("Stop recording and write it out")
-                        .clicked()
-                    {
-                        self.save_recording();
-                    }
-                    ui.label(
-                        egui::RichText::new(format!("● {frames} frames"))
-                            .color(theme::RED)
-                            .monospace(),
-                    );
-                }
-            }
-
             theme::divider(ui);
             theme::group_label(ui, "Speed");
             // Choosing a speed by hand is choosing not to race.
@@ -2779,7 +2749,205 @@ impl App {
                     }
                 }
             }
+
+            theme::divider(ui);
+            theme::group_label(ui, "Record");
+            self.rzx_button(ui);
+            self.video_button(ui);
         });
+    }
+
+    /// Recording what the machine reads, so a run of a game can be played back
+    /// and read instruction by instruction.
+    ///
+    /// Not offered while a recording is playing: what would be captured is the
+    /// recording.
+    fn rzx_button(&mut self, ui: &mut egui::Ui) {
+        match self.recorded_frames() {
+            None => {
+                if ui
+                    .add_enabled(self.rzx.is_none(), egui::Button::new("⏺ RZX"))
+                    .on_hover_text(
+                        "Record everything the machine reads from now on, so it \
+                         can be played back and read instruction by instruction. \
+                         It is kept in memory until you stop.",
+                    )
+                    .clicked()
+                {
+                    self.start_recording();
+                }
+            }
+            Some(frames) => {
+                if ui
+                    .button("⏹ Stop RZX")
+                    .on_hover_text("Stop recording and write it out")
+                    .clicked()
+                {
+                    self.save_recording();
+                }
+                ui.label(
+                    egui::RichText::new(format!("● {frames} frames"))
+                        .color(theme::RED)
+                        .monospace(),
+                );
+            }
+        }
+    }
+
+    /// Start writing the picture to a file, having asked where to put it.
+    ///
+    /// The size is whatever the picture is at the moment — the view, and
+    /// whether the set is on, decide it — and it cannot change while the file
+    /// is being written, so the frame that is refused is the one that says the
+    /// window was changed part way through.
+    pub fn start_video(&mut self) {
+        if !crate::video_out::available() {
+            self.set_status(
+                format!(
+                    "No {} on the path: it is what writes the file.",
+                    crate::video_out::FFMPEG
+                ),
+                true,
+            );
+            return;
+        }
+        let Some(path) = self.pick_video_path() else {
+            return;
+        };
+        let (w, h) = self.picture_size();
+        let fps = self.machine_cpu_hz() / self.spec.bus.frame_t() as f64;
+        match crate::video_out::Recording::start(path, w, h, fps) {
+            Ok(recording) => {
+                self.set_status(
+                    format!("Recording video to {}", recording.path.display()),
+                    false,
+                );
+                self.video = Some(recording);
+            }
+            Err(e) => self.set_status(e, true),
+        }
+    }
+
+    /// Where the video goes: beside the tape if there is one, under its name.
+    fn pick_video_path(&mut self) -> Option<std::path::PathBuf> {
+        let suggested = self
+            .tape_path
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("recording"))
+            .with_extension("mp4");
+        let dialog = rfd::FileDialog::new().set_file_name(
+            suggested
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "recording.mp4".to_string()),
+        );
+        let directory = suggested
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.prefs.dir_for(FileKind::Recording).cloned())
+            .filter(|dir| dir.is_dir());
+        let dialog = match directory {
+            Some(dir) => dialog.set_directory(dir),
+            None => dialog,
+        };
+        dialog.save_file()
+    }
+
+    /// How big the picture is at the moment, in pixels of the buffer that is
+    /// written: the set doubles the height, since every line has a gap.
+    pub fn picture_size(&self) -> (usize, usize) {
+        let (w, h) = match &self.zx81 {
+            Some(_) if self.overscan => (zx81::View::OVERSCAN.w, zx81::View::OVERSCAN.h),
+            Some(_) => (zx81::View::CROPPED.w, zx81::View::CROPPED.h),
+            None => {
+                let view = self.view();
+                (view.width(), view.height())
+            }
+        };
+        let rows = if self.crt_settings().line_gaps { 2 } else { 1 };
+        (w, h * rows)
+    }
+
+    /// Close the file and say what was written.
+    pub fn stop_video(&mut self) {
+        let Some(mut recording) = self.video.take() else {
+            return;
+        };
+        match recording.finish() {
+            Ok((path, frames)) => {
+                self.prefs.remember_file(FileKind::Recording, &path);
+                self.set_status(format!("Wrote {} ({frames} frames)", path.display()), false);
+            }
+            Err(e) => self.set_status(format!("Video recording failed: {e}"), true),
+        }
+    }
+
+    /// Hand the frame just drawn to the encoder, if one is running.
+    ///
+    /// The buffer that becomes the texture, so what goes into the file is what
+    /// the window shows: the line structure, the composite colour and the dot
+    /// crawl are already in these pixels.
+    fn record_video_frame(&mut self) {
+        if self.video.is_none() {
+            return;
+        }
+        // Worked out before the encoder is borrowed: the size comes from the
+        // window's own state, and the borrow checker is right that the two
+        // cannot be read at once.
+        let televised = self.crt || self.composite;
+        let (w, h) = self.picture_size();
+        let failed = {
+            let pixels = if televised {
+                &self.crt_pixels
+            } else {
+                &self.screen_pixels
+            };
+            let recording = self.video.as_mut().expect("checked above");
+            recording.frame(pixels, w, h);
+            recording.failed.clone()
+        };
+        if let Some(why) = failed {
+            self.set_status(format!("Video recording stopped: {why}"), true);
+            self.stop_video();
+        }
+    }
+
+    /// Recording the picture itself, as a video file.
+    fn video_button(&mut self, ui: &mut egui::Ui) {
+        match &self.video {
+            None => {
+                if ui
+                    .button("⏺ Video")
+                    .on_hover_text(
+                        "Write the picture to an H.264 file, as the window shows \
+                         it: the line structure, the composite colour and the dot \
+                         crawl go into the file with it. Needs ffmpeg on the \
+                         path. The curve of the glass does not: that is the shape \
+                         the picture is drawn on rather than something done to \
+                         the pixels.",
+                    )
+                    .clicked()
+                {
+                    self.start_video();
+                }
+            }
+            Some(recording) => {
+                let frames = recording.frames;
+                if ui
+                    .button("⏹ Stop video")
+                    .on_hover_text("Stop recording and close the file")
+                    .clicked()
+                {
+                    self.stop_video();
+                }
+                ui.label(
+                    egui::RichText::new(format!("● {frames} frames"))
+                        .color(theme::RED)
+                        .monospace(),
+                );
+            }
+        }
     }
 
     /// Zoom and the ways of watching the picture, on a line of their own: the

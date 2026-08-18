@@ -239,6 +239,26 @@ T-states take half as long: the note comes out an octave up, which is what an
 accelerated machine sounded like. That only happens if the mixer counts in the
 same T-states the machine does, so changing the clock sets its rate as well.
 
+## Writing the picture out
+
+The **Video** button in the Record section writes what the window is showing to
+an H.264 file until it is stopped. The frames are the buffer that becomes the
+texture, so the effects go into the file with the picture: the line structure,
+the composite colour, the dot crawl. The curve of the glass does not — that is
+the shape the texture is drawn on rather than something done to the pixels.
+
+The encoding is handed to `ffmpeg`, which is a program rather than a
+dependency: nothing is added to the build, the frames go down a pipe as raw
+RGBA, and a machine without it is told so plainly rather than given a button
+that does nothing. The frame rate the file is written at is the machine's own —
+50.08Hz on a 48K, not a round fifty — so a second of the recording is a second
+of the machine.
+
+A recording is one size throughout. The encoder is told the size once, at the
+start, so switching the set on or the view from cropped to overscan while it is
+running would shear the picture from there on: the frame is refused instead and
+the recording stops, saying which size it was expecting.
+
 ## The television at the other end
 
 The picture the emulator has is what the ULA put out: exact pixels, exact
