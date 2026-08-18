@@ -397,8 +397,9 @@ pub struct App {
     /// gaps between the lines.
     pub crt: bool,
     /// Whether it arrives as composite video: colour smeared sideways, and the
-    /// herringbone the subcarrier beats against the dot clock. A monitor fed
-    /// RGB had the tube and none of this.
+    /// dot crawl the subcarrier beats against the dot clock. A monitor fed RGB
+    /// had the tube and none of this, so it is a switch of its own — but only
+    /// with the tube, since the aerial lead led to a television.
     pub composite: bool,
     /// The televised picture, kept between frames so it is not reallocated.
     crt_pixels: Vec<u8>,
@@ -2426,7 +2427,7 @@ impl App {
     /// and a picture scaled by anything but a whole number samples some of
     /// them twice and some not at all.
     pub fn picture_filter(&self) -> TextureOptions {
-        if self.crt || self.composite {
+        if self.crt {
             TextureOptions::LINEAR
         } else {
             TextureOptions::NEAREST
@@ -2441,13 +2442,12 @@ impl App {
     /// either can be had without the other.
     pub fn crt_settings(&self) -> crate::crt::Crt {
         let plain = crate::crt::Crt::default();
+        // The lead only with the set: the switch is disabled without it, and
+        // what it was left set to is kept for when the set comes back on.
+        let composite = self.crt && self.composite;
         crate::crt::Crt {
-            interference: if self.composite {
-                plain.interference
-            } else {
-                0.0
-            },
-            bleed: if self.composite { plain.bleed } else { 0.0 },
+            interference: if composite { plain.interference } else { 0.0 },
+            bleed: if composite { plain.bleed } else { 0.0 },
             // Only where there is room to draw them. A gap under every line
             // needs two rows of screen for every row of picture, and asking
             // for them at a zoom that has not got two is asking for a moiré:
@@ -2535,7 +2535,7 @@ impl App {
             None => screen::render(&self.spec.bus, view, &mut pixels, flash),
         }
         self.screen_pixels = pixels;
-        let img = if self.crt || self.composite {
+        let img = if self.crt {
             // The tube gives every line a gap under it, which is what doubles
             // the height; the aerial lead gives the colour its smear and the
             // picture its herringbone. Either can be had without the other.
@@ -2745,12 +2745,18 @@ impl App {
                 "Show the picture on a tube: the curve of the glass, and a gap \
                  under every line.",
             );
-            theme::toggle(ui, &mut self.composite, "Composite").on_hover_text(
-                "Take the picture down an aerial lead: colour smeared sideways \
+            // Only with the tube: composite video is how the picture reached a
+            // television, and a television is what the other switch is. There
+            // is no picture that arrives down an aerial lead and is then shown
+            // on something that is not a set.
+            ui.add_enabled_ui(self.crt, |ui| {
+                theme::toggle(ui, &mut self.composite, "Composite").on_hover_text(
+                    "Take the picture down an aerial lead: colour smeared sideways \
                  by the subcarrier it rides on, and the herringbone that \
                  subcarrier beats against the machine's dot clock. A monitor \
                  fed RGB had neither.",
-            );
+                );
+            });
 
             theme::divider(ui);
             // Only while stopped: the frame is replayed from its interrupt,

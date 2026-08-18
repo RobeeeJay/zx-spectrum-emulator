@@ -322,14 +322,15 @@ fn the_crt_switch_televises_the_picture() {
     }
 }
 
-/// The aerial lead is a switch of its own.
+/// The aerial lead is a switch of its own, and only with the set switched on.
 ///
 /// A monitor fed RGB had the tube's line structure and none of the composite
-/// artefacts, so the two are separate: the CRT switch is the glass, and the
-/// Composite switch is what came down the lead.
+/// artefacts, so the two are separate — but there was no picture that came
+/// down an aerial lead and was then shown on something that was not a
+/// television, so the lead's switch is dead without the tube's.
 #[test]
-fn composite_is_switched_apart_from_the_tube() {
-    use egui_kittest::kittest::Queryable;
+fn composite_is_switched_apart_from_the_tube_but_needs_it() {
+    use egui_kittest::kittest::{NodeT, Queryable};
     use egui_kittest::Harness;
     use zx_rustrum::machine::Spectrum;
     use zx_rustrum::ui::{App, Roms};
@@ -346,47 +347,14 @@ fn composite_is_switched_apart_from_the_tube() {
     h.run_steps(3);
     let flat = h.state().screen_texture().map(|t| t.size()).unwrap();
 
-    // Composite on its own: the same picture, the same size, treated.
-    h.get_by_label("Composite").click();
-    h.run_steps(3);
-    assert!(h.state().composite && !h.state().crt);
-    assert_eq!(
-        h.state().screen_texture().map(|t| t.size()),
-        Some(flat),
-        "the aerial lead does not give the picture line gaps"
-    );
-
-    let set = h.state().crt_settings();
     assert!(
-        set.bleed > 0.0 && set.interference > 0.0 && !set.line_gaps,
-        "the lead smears the colour and beats against the dot clock, and does \
-         not give the picture line gaps: {set:?}"
+        h.get_by_label("Composite").accesskit_node().is_disabled(),
+        "the lead is not offered without the set"
     );
 
-    // And the tube on top of it doubles the height, as the tube does.
+    // The tube on its own: the glass and its line structure, and nothing of
+    // the lead.
     h.get_by_label("CRT").click();
-    h.run_steps(3);
-    assert_eq!(
-        h.state().screen_texture().map(|t| t.size()),
-        Some([flat[0], flat[1] * 2]),
-        "and the tube does"
-    );
-
-    // And the lines are only drawn where there is room for them: at 1x there
-    // is one row of screen for each row of picture, and a gap under every
-    // line would be a pattern of its own rather than a line structure.
-    h.state_mut().scale = 1.0;
-    h.run_steps(2);
-    let small = h.state().crt_settings();
-    assert!(
-        !small.line_gaps && small.scanlines == 0.0,
-        "no room for the line structure at 1x: {small:?}"
-    );
-    h.state_mut().scale = 2.0;
-    h.run_steps(2);
-
-    // The tube on its own is the glass and nothing of the lead.
-    h.get_by_label("Composite").click();
     h.run_steps(3);
     let set = h.state().crt_settings();
     assert!(
@@ -397,6 +365,53 @@ fn composite_is_switched_apart_from_the_tube() {
         (set.bleed, set.interference),
         (0.0, 0.0),
         "and none of what the aerial lead does: {set:?}"
+    );
+    assert_eq!(
+        h.state().screen_texture().map(|t| t.size()),
+        Some([flat[0], flat[1] * 2]),
+        "and it is the tube that doubles the height"
+    );
+
+    // And with the lead as well.
+    assert!(
+        !h.get_by_label("Composite").accesskit_node().is_disabled(),
+        "with the set on, the lead can be switched"
+    );
+    h.get_by_label("Composite").click();
+    h.run_steps(3);
+    let set = h.state().crt_settings();
+    assert!(
+        set.bleed > 0.0 && set.interference > 0.0 && set.line_gaps,
+        "the lead smears the colour and crawls, on top of the tube: {set:?}"
+    );
+
+    // Switching the set off puts the lead away with it, while remembering
+    // that it was on.
+    h.get_by_label("CRT").click();
+    h.run_steps(3);
+    assert!(h.state().composite, "what it was set to is kept");
+    let set = h.state().crt_settings();
+    assert_eq!(
+        (set.bleed, set.interference, set.line_gaps),
+        (0.0, 0.0, false),
+        "but nothing of it reaches the picture: {set:?}"
+    );
+    assert_eq!(
+        h.state().screen_texture().map(|t| t.size()),
+        Some(flat),
+        "and the picture is the machine's own again"
+    );
+
+    // And the lines are only drawn where there is room for them: at 1x there
+    // is one row of screen for each row of picture, and a gap under every
+    // line would be a pattern of its own rather than a line structure.
+    h.get_by_label("CRT").click();
+    h.state_mut().scale = 1.0;
+    h.run_steps(2);
+    let small = h.state().crt_settings();
+    assert!(
+        !small.line_gaps && small.scanlines == 0.0,
+        "no room for the line structure at 1x: {small:?}"
     );
 }
 
@@ -430,20 +445,19 @@ fn the_set_is_sampled_smoothly_and_the_machine_is_not() {
         "the ULA's pixels are squares"
     );
 
-    for switch in ["CRT", "Composite"] {
-        h.get_by_label(switch).click();
-        h.run_steps(2);
-        assert_eq!(
-            h.state().picture_filter(),
-            egui::TextureOptions::LINEAR,
-            "{switch} should soften the picture"
-        );
-        h.get_by_label(switch).click();
-        h.run_steps(2);
-        assert_eq!(
-            h.state().picture_filter(),
-            egui::TextureOptions::NEAREST,
-            "and switching it off should give the squares back"
-        );
-    }
+    // The set softens it, and switching the set off gives the squares back.
+    h.get_by_label("CRT").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().picture_filter(),
+        egui::TextureOptions::LINEAR,
+        "the tube should soften the picture"
+    );
+    h.get_by_label("CRT").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().picture_filter(),
+        egui::TextureOptions::NEAREST,
+        "and switching it off should give the squares back"
+    );
 }

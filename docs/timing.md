@@ -207,7 +207,10 @@ The picture the emulator has is what the ULA put out: exact pixels, exact
 colours, sharp to the sample. A set on the end of an aerial lead showed
 something else, and two switches in the Video row show that instead — **CRT**
 for the tube and **Composite** for the lead, because a monitor fed RGB had the
-one and none of the other.
+one and none of the other. The lead's switch only works with the set's on:
+there was no picture that came down an aerial lead and was then shown on
+something that was not a television. What it was left set to is kept while the
+set is off.
 
 Three things, none of them invented:
 
