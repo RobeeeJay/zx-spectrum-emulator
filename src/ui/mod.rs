@@ -208,6 +208,34 @@ pub fn zoom_label(scale: f32) -> String {
     }
 }
 
+/// What the clock can be wound up to, as multiples of the machine's own.
+///
+/// A machine's clock is its clock — everything about the ULA is counted in
+/// T-states of it — so a faster one is the same machine running quicker rather
+/// than a different machine. The steps are doublings because that is what the
+/// hardware which did this offered: 3.5, 7, 14 and 28MHz, each the one before
+/// it twice over.
+pub const CLOCK_MULTIPLES: &[f32] = &[1.0, 2.0, 4.0, 8.0];
+
+/// The clock dropdown: the machine's own speed, and multiples of it.
+///
+/// In MHz rather than in multiples, since that is what a clock is measured in,
+/// and worked out from whichever machine is running: a 48K's own is 3.5MHz and
+/// a 128K's 3.5469, so "twice" is a different number on each.
+pub fn clock_dropdown(mult: &mut f32, base: f64, ui: &mut egui::Ui) {
+    let label = |m: f32| format!("{:.2}MHz", base * m as f64 / 1_000_000.0);
+    theme::dropdown(ui, 88.0, label(*mult), |ui| {
+        for m in CLOCK_MULTIPLES {
+            if ui
+                .selectable_label((*mult - m).abs() < f32::EPSILON, label(*m))
+                .clicked()
+            {
+                *mult = *m;
+            }
+        }
+    });
+}
+
 /// The speed presets, as a dropdown. The slider beside it still takes any
 /// value; the list is for the ones worth a single click.
 pub fn speed_dropdown(speed: &mut f32, ui: &mut egui::Ui) {
@@ -406,6 +434,10 @@ pub struct App {
     /// Whether the texture that exists was made with a gap under every line,
     /// which is what decides its height.
     crt_drawn: bool,
+    /// How many times the machine's own clock it is being run at. One is the
+    /// machine as it was built; the rest are the same machine running quicker,
+    /// which is what an accelerator did.
+    pub clock_mult: f32,
     pub scale: f32,
     /// Show the whole overscan area, or crop the border to television size.
     pub overscan: bool,
@@ -518,6 +550,7 @@ impl App {
             composite: false,
             crt_pixels: Vec::new(),
             crt_drawn: false,
+            clock_mult: 1.0,
             scale: 2.0,
             overscan: true,
             cursor_beam: false,
@@ -2145,6 +2178,33 @@ impl App {
         }
     }
 
+    /// The clock of whichever machine is running, before it is wound up.
+    pub fn machine_cpu_hz(&self) -> f64 {
+        match &self.zx81 {
+            Some(_) => zx81::CPU_HZ,
+            None => self.spec.bus.model.cpu_hz(),
+        }
+    }
+
+    /// The clock it is actually being run at.
+    pub fn clock_hz(&self) -> f64 {
+        self.machine_cpu_hz() * self.clock_mult as f64
+    }
+
+    /// Tell the mixer what the clock is now.
+    ///
+    /// Sound is made of T-states, so a machine running at twice its clock plays
+    /// every note an octave up — which is what an accelerated one did, and only
+    /// comes out that way if the mixer counts in the same T-states the machine
+    /// does.
+    pub fn apply_clock(&mut self) {
+        let hz = self.clock_hz();
+        match &mut self.zx81 {
+            Some(zx) => zx.bus.audio.set_cpu_hz(hz),
+            None => self.spec.bus.audio.set_cpu_hz(hz),
+        }
+    }
+
     /// T-states since power-on for the running machine, which is the timebase
     /// a tape is played against.
     pub fn machine_t(&self) -> u64 {
@@ -2327,8 +2387,7 @@ impl App {
         } else {
             1.0
         };
-        let want =
-            self.spec.bus.model.cpu_hz() as f32 * dt * self.speed * boost * pace + self.leftover;
+        let want = self.clock_hz() as f32 * dt * self.speed * boost * pace + self.leftover;
         let budget = want.max(0.0) as u32;
         self.leftover = want - budget as f32;
 
@@ -2682,6 +2741,16 @@ impl App {
             theme::divider(ui);
             theme::group_label(ui, "Machine");
             self.machine_dropdown(ui);
+            theme::group_label(ui, "Clock");
+            let base = self.machine_cpu_hz();
+            let before = self.clock_mult;
+            clock_dropdown(&mut self.clock_mult, base, ui);
+            if self.clock_mult != before {
+                // The mixer counts in T-states, so it has to be told: a beeper
+                // note would otherwise come out at the pitch the machine was
+                // built for rather than the one it is running at.
+                self.apply_clock();
+            }
             self.late_timing(ui);
             if ui.button("Reset").clicked() {
                 match &mut self.zx81 {

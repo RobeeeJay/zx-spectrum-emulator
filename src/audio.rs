@@ -305,6 +305,12 @@ impl Audio {
         self.queue = None;
     }
 
+    /// How many T-states go into one sample, which is the clock the mixer
+    /// believes it is counting.
+    pub fn t_per_sample(&self) -> f64 {
+        self.t_per_sample
+    }
+
     pub fn set_cpu_hz(&mut self, hz: f64) {
         self.cpu_hz = hz;
         self.t_per_sample = hz / self.sample_rate;

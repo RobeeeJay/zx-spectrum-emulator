@@ -201,6 +201,26 @@ on real hardware then the ULA really did paint twice; but the lengths are not
 near whole multiples of a frame, which fits that story no better than the
 other.
 
+## Running the clock faster
+
+The **Clock** dropdown in the Machine row offers the machine's own clock and
+three doublings of it: 3.50, 7.00, 14.00 and 28.00MHz on a 48K, and 3.55, 7.09
+and so on on a 128K, whose own clock is 3.5469MHz. The numbers come from the
+model rather than from a list, which is why they differ.
+
+It is the same machine running quicker, not a different machine. Everything the
+ULA does is counted in T-states — the frame, the contention table, the tape's
+pulses — so nothing about the emulation changes; what changes is how many
+T-states go by in a second of the user's time. That is the difference between
+this and the Speed dropdown beside it: speed is how fast the emulator is being
+run, and the clock is what the machine believes its own to be.
+
+The mixer is told, because sound is made of T-states too. A beeper note is a
+number of T-states between one toggle and the next, and at twice the clock those
+T-states take half as long: the note comes out an octave up, which is what an
+accelerated machine sounded like. That only happens if the mixer counts in the
+same T-states the machine does, so changing the clock sets its rate as well.
+
 ## The television at the other end
 
 The picture the emulator has is what the ULA put out: exact pixels, exact
