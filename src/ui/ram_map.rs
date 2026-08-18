@@ -43,6 +43,9 @@ pub struct RamMapState {
     pixels: Vec<u8>,
     tex: Option<TextureHandle>,
     pub view: View,
+    /// How big a byte was drawn last time, in points. A record of what the
+    /// window did rather than a setting: the map is drawn to the width it has.
+    pub drawn_zoom: f32,
     pub show_read: bool,
     pub show_write: bool,
     pub show_exec: bool,
@@ -76,6 +79,7 @@ impl Default for RamMapState {
             pixels: vec![0; 256 * 256 * 4],
             tex: None,
             view: View::AddressSpace,
+            drawn_zoom: MIN_ZOOM,
             show_read: true,
             show_write: true,
             show_exec: true,
@@ -209,10 +213,23 @@ fn build_image(app: &mut App) {
 
 /// How big a byte is drawn, in points.
 ///
-/// Fixed rather than dialled: one byte to four pixels is the size the map is
-/// legible at, and the slider spent a row of a window that has better uses for
-/// it.
-const ZOOM: f32 = 2.0;
+/// The narrowest a byte is drawn, in points.
+///
+/// The map is drawn to whatever width the window is — it is 256 bytes across
+/// and the window is a fixed width, so the two are the same thing — and this
+/// is only the floor for a window somebody has made very narrow, below which
+/// the map scrolls instead.
+const MIN_ZOOM: f32 = 1.0;
+
+/// How big a byte is drawn, given the width the map has to draw in.
+///
+/// The map is 256 bytes across whatever the view, and the window is a fixed
+/// width, so filling the width is a division. Below one point a byte the map
+/// scrolls instead of shrinking further, since a map nobody can see the
+/// individual bytes of says nothing.
+pub fn zoom_for(room: f32) -> f32 {
+    (room / 256.0).max(MIN_ZOOM)
+}
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
@@ -282,7 +299,14 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         }
     }
 
-    let scale = ZOOM;
+    // As wide as the window, since the window is a fixed width and the map is
+    // always 256 bytes across: a byte is drawn as a square of whatever that
+    // divides into. The vertical scrollbar's width comes off first, or the
+    // map would be a hair too wide for its own scroll area and gain a
+    // horizontal scrollbar it has no use for.
+    let room = ui.available_width() - ui.spacing().scroll.bar_width - 2.0;
+    let scale = zoom_for(room);
+    app.ram.drawn_zoom = scale;
     let size = Vec2::new(256.0 * scale, rows as f32 * scale);
     // Scrollable, so the map is still fully reachable at high zoom.
     let (rect, response) = egui::ScrollArea::both()

@@ -294,3 +294,71 @@ fn the_view_can_be_switched_from_the_window() {
     h.run_steps(3);
     assert!(matches!(h.state().ram.view, View::AddressSpace));
 }
+
+/// The map window is the tape window's width, and the map fills it.
+///
+/// Both windows hold something of a fixed size — the cassette in one, 256
+/// bytes across in the other — so neither has anything to gain from being
+/// dragged wider, and two windows of one width sit together without a ragged
+/// edge. The map is then drawn to whatever that width is rather than to a
+/// zoom somebody has to set.
+#[test]
+fn the_window_is_the_tape_windows_width_and_the_map_fills_it() {
+    use zx_rustrum::ui::cassette::WINDOW_W;
+    use zx_rustrum::ui::ram_map::zoom_for;
+
+    assert_eq!(
+        App::fix_width_of("ram_map"),
+        App::fix_width_of("tape"),
+        "the two windows should be the same width"
+    );
+    assert_eq!(App::fix_width_of("ram_map"), Some(WINDOW_W));
+    assert_eq!(
+        App::fix_width_of("debugger"),
+        None,
+        "and a window with nothing of a fixed size in it is the user's to size"
+    );
+
+    // A byte is a square of whatever 256 divides the room into.
+    let room = WINDOW_W - 24.0;
+    let zoom = zoom_for(room);
+    assert!(
+        (zoom * 256.0 - room).abs() < 0.01,
+        "the map should fill the width it is given: {zoom} x 256 against {room}"
+    );
+    assert!(
+        zoom > 2.0,
+        "which at this width is more than the two points a byte it used to be \
+         fixed at: {zoom}"
+    );
+    assert_eq!(
+        zoom_for(100.0),
+        1.0,
+        "and a window made very narrow scrolls rather than shrinking the bytes \
+         away"
+    );
+
+    // And the map is drawn to the width it is given rather than to a zoom of
+    // its own: widen the space by 300 points and a byte grows by 300/256 of a
+    // point.
+    let drawn_at = |width: f32| -> f32 {
+        let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+        app.show_ram_map = true;
+        app.show_debugger = false;
+        app.show_back_buffer = false;
+        app.show_tape = false;
+        app.running = false;
+        let mut h: Harness<'_, App> = Harness::builder().with_size([width, 900.0]).build_ui_state(
+            |ui, app: &mut App| zx_rustrum::ui::ram_map::ui(app, ui),
+            app,
+        );
+        h.run_steps(3);
+        h.state().ram.drawn_zoom
+    };
+    let (narrow, wide) = (drawn_at(600.0), drawn_at(900.0));
+    assert!(
+        ((wide - narrow) - 300.0 / 256.0).abs() < 0.05,
+        "a byte should grow with the window: {narrow} at 600 points, {wide} at \
+         900"
+    );
+}

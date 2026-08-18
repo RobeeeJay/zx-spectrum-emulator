@@ -1416,13 +1416,9 @@ impl App {
         // to match what the viewport builder takes: mixing them would grow
         // every window by the height of its title bar on each launch.
         if let (Some(outer), Some(inner)) = (outer, inner) {
-            // The tape window's width is not up for negotiation, so it is not
-            // recorded either: only its height and where it sits.
-            let w = if name == "tape" {
-                cassette::WINDOW_W
-            } else {
-                inner.width()
-            };
+            // A window with a fixed width does not have that width recorded:
+            // only its height and where it sits.
+            let w = Self::fix_width_of(name).unwrap_or_else(|| inner.width());
             self.prefs.set_window(
                 name,
                 WindowRect {
@@ -1448,6 +1444,19 @@ impl App {
     /// is only diffed against the frame before, so a window that is rebuilt —
     /// which happens whenever it has not been drawn for a while — comes back
     /// without the constraint.
+    /// Windows whose width is not up for negotiation, and what it is.
+    ///
+    /// The tape window is built around the cassette. The RAM map is 256 bytes
+    /// across however it is drawn, so it is given the same width and drawn to
+    /// fill it: two windows of one width sit together without a ragged edge,
+    /// and neither has anything to gain from being dragged wider.
+    pub fn fix_width_of(name: &str) -> Option<f32> {
+        match name {
+            "tape" | "ram_map" => Some(cassette::WINDOW_W),
+            _ => None,
+        }
+    }
+
     fn fix_width(&self, ctx: &egui::Context, width: f32) {
         ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize([width, 320.0].into()));
         ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize([width, 8000.0].into()));
@@ -1479,10 +1488,10 @@ impl App {
             Some(r) => ([r.x, r.y], [r.w, r.h]),
             None => (default_pos, default_size),
         };
-        // The tape window is built around the cassette, so its width is not
-        // the user's to choose; the height still is.
-        if name == "tape" {
-            size[0] = cassette::WINDOW_W;
+        // A fixed-width window's width is not the user's to choose; the
+        // height still is.
+        if let Some(w) = Self::fix_width_of(name) {
+            size[0] = w;
         }
         let placement = self.placed.entry(name).or_insert(Placement {
             asked_at: std::time::Instant::now(),
@@ -3086,14 +3095,20 @@ impl App {
                     "ram_map",
                     ViewportBuilder::default().with_title("RAM access map"),
                     [1120.0, 40.0],
-                    [560.0, 700.0],
+                    [cassette::WINDOW_W, 700.0],
                 ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    if self.place_window("ram_map", &ctx, [1120.0, 40.0], [560.0, 700.0]) {
+                    self.fix_width(&ctx, cassette::WINDOW_W);
+                    if self.place_window(
+                        "ram_map",
+                        &ctx,
+                        [1120.0, 40.0],
+                        [cassette::WINDOW_W, 700.0],
+                    ) {
                         self.remember_window("ram_map", &ctx);
                     }
                     egui::CentralPanel::default().show(ui, |ui| ram_map::ui(self, ui));
