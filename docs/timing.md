@@ -252,7 +252,13 @@ set is off.
 
 Three things, none of them invented:
 
-- **The line structure** (CRT). Every line is drawn with a gap under it, which is
+- **The line structure** (CRT). The lit line is drawn brighter than the picture
+  came in and the gap under it darker, so that the two together average what
+  came in: on a tube the light comes from the lines and not from the gaps
+  between them, and drawing the line at the picture's own brightness gives that
+  away and leaves everything dim. How much brighter is worked out from how dark
+  the gap is — a fifth at the default, capped at 1.6 so a picture cannot be
+  made brighter than the tube goes. Every line is drawn with a gap under it, which is
   what a shadow mask looks like once there is room to see it. The picture is
   built at twice the height for this, so the gaps survive whatever the window
   is scaled to.

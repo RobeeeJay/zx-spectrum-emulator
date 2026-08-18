@@ -44,11 +44,13 @@ fn the_interference_is_the_subcarrier_beating_against_the_dot_clock() {
 }
 
 /// The picture comes out with a line and a gap under it, and the gap is
-/// darker: that is what a set's line structure is.
+/// darker: that is what a set's line structure is. The lit line is brighter
+/// than the picture it came from, because on a tube the light comes from the
+/// lines and not from the gaps between them.
 #[test]
 fn every_line_gets_a_gap_under_it() {
     let (w, h) = (8, 4);
-    let src = field(w, h, [200, 200, 200]);
+    let src = field(w, h, [120, 120, 120]);
     let mut out = Vec::new();
     let quiet = Crt {
         interference: 0.0,
@@ -58,15 +60,50 @@ fn every_line_gets_a_gap_under_it() {
     };
     televise(&src, w, h, &mut out, quiet, 0, 0.0);
     assert_eq!(out.len(), w * h * 2 * 4, "twice the height");
+
+    let gain = quiet.line_gain();
+    assert!(
+        (gain - 4.0 / 3.0).abs() < 0.01,
+        "a gap at half brightness wants a third more on the line: {gain}"
+    );
     for y in 0..h {
-        let line = pixel(&out, w, 3, y * 2);
-        let gap = pixel(&out, w, 3, y * 2 + 1);
-        assert_eq!(line[0], 200, "the line itself is the picture");
+        let line = pixel(&out, w, 3, y * 2)[0] as f32;
+        let gap = pixel(&out, w, 3, y * 2 + 1)[0] as f32;
         assert!(
-            (gap[0] as i32 - 100).abs() <= 1,
-            "and the gap under it is half of it: {gap:?}"
+            line > 120.0,
+            "the lit line is brighter than the picture: {line}"
+        );
+        assert!((gap - line * 0.5).abs() <= 2.0, "and the gap is half of it");
+        // The two together are the brightness the picture started with, so
+        // switching the set on does not dim everything.
+        assert!(
+            ((line + gap) / 2.0 - 120.0).abs() <= 2.0,
+            "a line and its gap average what came in: {line} and {gap}"
         );
     }
+}
+
+/// Brightening the line cannot make the picture brighter than the tube goes,
+/// so the gain is capped and a very dark gap simply is dark.
+#[test]
+fn the_line_cannot_be_brightened_without_end() {
+    let nearly_black = Crt {
+        interference: 0.0,
+        bleed: 0.0,
+        scanlines: 1.0,
+        line_gaps: true,
+    };
+    assert!(
+        nearly_black.line_gain() <= 1.6,
+        "capped: {}",
+        nearly_black.line_gain()
+    );
+    // And with no line structure there is nothing to make up for.
+    let flat = Crt {
+        line_gaps: false,
+        ..Crt::default()
+    };
+    assert_eq!(flat.line_gain(), 1.0);
 }
 
 /// Colour is smeared sideways and brightness is not. Composite video carries

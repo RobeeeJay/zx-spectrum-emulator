@@ -14,6 +14,21 @@
 //! machine's dot clock and PAL's colour subcarrier, worked out from both
 //! numbers, and it rolls because the two do not divide.
 
+/// How much brighter a lit line is drawn than a picture with no line
+/// structure at all, at most.
+///
+/// A phosphor is only lit where the beam went, and it is lit *harder* there
+/// than a flat panel showing the same picture: the light a television gives
+/// out comes from the lines, not from the gaps between them. Drawing the line
+/// at the picture's own brightness and the gap darker gives away that
+/// difference and the picture comes out dim — which is what "the CRT lines
+/// need to be brighter" was.
+///
+/// The gain is worked out rather than dialled: enough to put back what the
+/// gaps take away, capped so a picture cannot be made brighter than the tube
+/// can go.
+const MOST_GAIN: f32 = 1.6;
+
 /// The Spectrum's dot clock: two pixels a T-state, at 3.5MHz.
 pub const DOT_HZ: f64 = 7_000_000.0;
 
@@ -68,10 +83,32 @@ pub struct Crt {
     /// the brightness edge stays where it is.
     pub bleed: f32,
     /// How dark the gap between two lines is, 0 for none and 1 for black.
+    ///
+    /// The lit line is brightened to make up for it — see [`Crt::line_gain`] —
+    /// so this is how much *contrast* there is between a line and the gap
+    /// under it rather than how much of the picture is thrown away.
     pub scanlines: f32,
     /// Whether the picture is drawn with a gap under every line, which is what
     /// doubles its height.
     pub line_gaps: bool,
+}
+
+impl Crt {
+    /// How much the lit line is brightened by.
+    ///
+    /// A line and its gap between them average `(1 + (1 - scanlines)) / 2` of
+    /// the picture's brightness, so the line is multiplied by the reciprocal
+    /// of that and the two together come out where the picture started. At the
+    /// default darkness that is a fifth brighter; a gap as dark as the tube
+    /// goes would want twice, which is past what the phosphor has to give and
+    /// is capped.
+    pub fn line_gain(&self) -> f32 {
+        if !self.line_gaps {
+            return 1.0;
+        }
+        let average = (2.0 - self.scanlines.clamp(0.0, 1.0)) / 2.0;
+        (1.0 / average.max(0.01)).min(MOST_GAIN)
+    }
 }
 
 impl Default for Crt {
@@ -167,10 +204,15 @@ pub fn televise(src: &[u8], w: usize, h: usize, out: &mut Vec<u8>, crt: Crt, fra
 
             let a = src[(y * w + x) * 4 + 3];
             let line = ((y * rows) * w + x) * 4;
+            // The lit line carries the light the gaps are not carrying.
+            let gain = crt.line_gain();
+            let (r, g, b) = (r * gain, g * gain, b * gain);
             put(out, line, r, g, b, a);
             if crt.line_gaps {
                 // The gap under it, which is what a set's line structure looks
-                // like once there is room to see it.
+                // like once there is room to see it. Dimmed from the lit line
+                // rather than from the picture, so that the line and its gap
+                // together come out at the brightness the picture came in at.
                 let dim = 1.0 - crt.scanlines;
                 put(out, line + w * 4, r * dim, g * dim, b * dim, a);
             }
