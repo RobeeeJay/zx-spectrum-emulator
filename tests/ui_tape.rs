@@ -110,9 +110,23 @@ fn a_tape_never_starts_itself() {
 fn the_block_list_follows_playback() {
     // A row that has scrolled out of view is brought back; a visible one is
     // left alone, so scrolling by hand sticks while the tape stays put.
-    assert!(needs_scroll(false, false), "off-screen row must scroll");
-    assert!(!needs_scroll(false, true), "visible row must not");
-    assert!(needs_scroll(true, true), "an explicit request wins");
+    assert!(
+        needs_scroll(false, false, true),
+        "off-screen row must scroll"
+    );
+    assert!(!needs_scroll(false, true, true), "visible row must not");
+    assert!(needs_scroll(true, true, true), "an explicit request wins");
+
+    // And nothing moves the list while the reader has hold of it, whatever
+    // else is asking.
+    assert!(
+        !needs_scroll(false, false, false),
+        "a reader who has scrolled away is not dragged back"
+    );
+    assert!(
+        !needs_scroll(true, true, false),
+        "nor by a request from the tape moving on"
+    );
 }
 
 #[test]
@@ -827,5 +841,76 @@ fn a_stop_blocks_row_offers_to_delete_it() {
     assert_eq!(
         deck.block, 0,
         "and the deck should still be on the tone, which has moved back one"
+    );
+}
+
+/// Scrolling the block list by hand stops it following the tape, and the tape
+/// catching up starts it again.
+///
+/// Somebody reading the list is reading something; having it dragged away
+/// every time the tape moves on is the window arguing with them. Once what is
+/// playing comes back into view of its own accord, the list takes over again.
+#[test]
+fn the_list_stops_following_when_it_is_scrolled_by_hand() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "many".into(),
+        (0..80)
+            .map(|i| Block::PureTone {
+                len: 2168,
+                count: 10 + i,
+            })
+            .collect(),
+    ));
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    assert!(
+        h.state().tape.following,
+        "it follows the tape to begin with"
+    );
+
+    // The wheel, over the list.
+    let over = h
+        .get_all_by_label_contains("1  Pure tone")
+        .next()
+        .and_then(|node| node.accesskit_node().bounding_box())
+        .map(|b| egui::pos2(b.x0 as f32 + 20.0, b.y0 as f32 + 4.0))
+        .expect("the list has rows");
+    h.input_mut().events.push(egui::Event::PointerMoved(over));
+    h.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(3);
+    assert!(
+        !h.state().tape.following,
+        "a scroll of the reader's own stops it following"
+    );
+
+    // The tape moving on does not drag the list back.
+    for block in 1..6 {
+        h.state_mut().tape_mut().unwrap().seek(block);
+        h.run_steps(2);
+        assert!(
+            h.state().tape.scroll_requested_for.is_none(),
+            "the list should stay where it was put, block {block}"
+        );
+    }
+
+    // But when what is playing comes into view, the list takes over again.
+    let mut resumed = false;
+    for block in 6..40 {
+        h.state_mut().tape_mut().unwrap().seek(block);
+        h.run_steps(2);
+        if h.state().tape.following {
+            resumed = true;
+            break;
+        }
+    }
+    assert!(
+        resumed,
+        "the list should follow again once the block being played is in view"
     );
 }

@@ -30,6 +30,16 @@ pub struct TapeWindowState {
     /// The block the list last asked to scroll into view, for tests and for
     /// anyone wondering why the list jumped.
     pub scroll_requested_for: Option<usize>,
+    /// Whether the list is following the block being played.
+    ///
+    /// It stops following the moment somebody scrolls the list themselves —
+    /// they are reading something, and having it dragged away every time the
+    /// tape moves on is the window arguing with them — and starts again when
+    /// the block being played comes back into view of its own accord.
+    pub following: bool,
+    /// Where the list was left, so a scroll nobody asked for can be told from
+    /// one the list did itself.
+    pub scrolled_to: f32,
     /// Whether the scope is on show. It is, by default: what the deck is
     /// putting out is the point of watching a tape load.
     pub show_scope: bool,
@@ -50,6 +60,8 @@ impl Default for TapeWindowState {
             right_spin: 0.0,
             spun_at: 0.0,
             scroll_requested_for: None,
+            following: true,
+            scrolled_to: 0.0,
             show_scope: true,
             show_quality: false,
         }
@@ -482,11 +494,14 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// Whether the current row should be scrolled into view: either because
-/// something asked for it, or because it has gone off screen. The list always
-/// follows the tape — a block list that does not show what is playing is not
-/// worth having.
-pub fn needs_scroll(forced: bool, row_visible: bool) -> bool {
-    forced || !row_visible
+/// something asked for it, or because it has gone off screen — and only while
+/// the list is following the tape at all.
+///
+/// A list that does not show what is playing is not worth having, but neither
+/// is one that drags the reader back every time the tape moves on. See
+/// [`TapeWindowState::following`].
+pub fn needs_scroll(forced: bool, row_visible: bool, following: bool) -> bool {
+    following && (forced || !row_visible)
 }
 
 fn block_list(app: &mut App, ui: &mut egui::Ui) {
@@ -542,10 +557,11 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
     };
 
     let mut clicked = None;
+    let mut current_visible = false;
     let mut insert_before: Option<usize> = None;
     let mut remove: Option<usize> = None;
     app.tape.scroll_requested_for = None;
-    egui::ScrollArea::vertical()
+    let out = egui::ScrollArea::vertical()
         .id_salt("tape-blocks")
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -569,7 +585,14 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                         ));
                     }
                     let visible = ui.clip_rect().contains_rect(resp.rect);
-                    if needs_scroll(app.tape.scroll_to_current, visible) {
+                    current_visible = visible;
+                    // Back in view on its own: the tape has caught up with
+                    // wherever the reader scrolled to, so the list takes over
+                    // again.
+                    if visible {
+                        app.tape.following = true;
+                    }
+                    if needs_scroll(app.tape.scroll_to_current, visible, app.tape.following) {
                         resp.scroll_to_me(Some(egui::Align::Center));
                         app.tape.scroll_requested_for = Some(i);
                     }
@@ -626,6 +649,27 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
+    // A scroll the list did not ask for is the reader's own, and the list
+    // stops following until the tape catches them up. The list's own scrolls
+    // are known: it only ever moves the view on the frame it asked to.
+    // A scroll with the pointer over the list, that leaves the block being
+    // played off the screen, is the reader's own: the list stops following
+    // until the tape catches them up.
+    //
+    // The list's own scrolling moves the view as well, and egui animates it
+    // over several frames, so there is no telling the two apart by watching
+    // the position settle. Where they differ is where they end: the list only
+    // ever scrolls to put the block being played in view, so a movement that
+    // leaves it out of view was not the list's doing.
+    let offset = out.state.offset.y;
+    let moved = (offset - app.tape.scrolled_to).abs() > 0.5;
+    let over = ui
+        .input(|i| i.pointer.latest_pos())
+        .is_some_and(|at| out.inner_rect.contains(at));
+    if over && moved && !current_visible {
+        app.tape.following = false;
+    }
+    app.tape.scrolled_to = offset;
     app.tape.scroll_to_current = false;
 
     if let Some(i) = insert_before {

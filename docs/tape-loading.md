@@ -446,6 +446,20 @@ The tape is now read at the IORQ cycle, which is what `sampled` in
 `contend_io` has always been for — the floating bus used it and the EAR line
 did not. `tests/reference_48k.rs` holds it.
 
+## The block list follows the tape, until somebody else has hold of it
+
+The list scrolls to keep the block being played in view, and stops doing that
+the moment the reader scrolls it themselves: they are reading something, and
+having it dragged away every time the tape moves on is the window arguing with
+them. It starts again when what is playing comes back into view of its own
+accord — the tape has caught them up, and following it is what the list is for.
+
+Telling the reader's scrolling from the list's own is the awkward part. egui
+animates its own scroll over several frames, so watching the position settle
+does not separate them. Where they differ is where they *end*: the list only
+ever scrolls to put the block being played in view, so a movement that leaves
+it off the screen — with the pointer over the list — was not the list's doing.
+
 ## Still open: Starglider 2 stops with its loading screen up
 
 The 48K side loads: the screen, then about two hundred of its 267-byte turbo
