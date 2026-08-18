@@ -23,33 +23,50 @@ fn harness<'a>() -> Harness<'a, App> {
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app)
 }
 
-/// The clock is offered in MHz, starting at whatever the machine's own is.
+/// The clock is not offered in the window at the moment.
 ///
-/// A machine's clock is what everything about it is counted in, so the list is
-/// the machine's own and multiples of it rather than a set of numbers that
-/// happen to be round: a 48K's own is 3.50MHz and a 128K's 3.55, and "twice"
-/// is a different number on each.
+/// What it does is speed the whole machine rather than the CPU alone: at twice
+/// the clock the interrupt comes twice as often, so a game reading the frame
+/// counter runs fast rather than smoothly. The switch comes back when it is an
+/// accelerator — the CPU given more cycles inside a frame of the ULA's own
+/// time — and until then the machinery is here without a control on it.
+#[test]
+fn the_clock_is_not_offered_yet() {
+    let mut h = harness();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().clock_mult,
+        1.0,
+        "and left as the machine was built"
+    );
+    assert_eq!(
+        h.query_all_by_label_contains("MHz").count(),
+        0,
+        "with nothing in the window to change it"
+    );
+}
+
+/// The labels it will carry are the machine's own clock and multiples of it,
+/// worked out from the model: a 48K's own is 3.50MHz and a 128K's 3.55, so
+/// "twice" is a different number on each.
 #[test]
 fn the_clock_is_the_machines_own_and_multiples_of_it() {
     let mut h = harness();
     h.run_steps(3);
-    assert_eq!(h.state().clock_mult, 1.0, "it starts as it was built");
-    // The dropdown carries its selection in its label, with the arrow after
-    // it, so it is matched on what it contains.
     assert!(
-        h.get_all_by_label_contains("3.50MHz").next().is_some(),
-        "a 48K's own clock is 3.5MHz"
+        (h.state().machine_cpu_hz() - 3_500_000.0).abs() < 1.0,
+        "a 48K's own clock"
     );
-
     h.state_mut().switch_model(Model::Spectrum128);
     h.run_steps(3);
     assert!(
-        h.get_all_by_label_contains("3.55MHz").next().is_some(),
-        "and a 128K's is 3.5469"
-    );
-    assert!(
         (h.state().machine_cpu_hz() - 3_546_900.0).abs() < 1.0,
-        "measured from the model rather than assumed"
+        "and a 128K's, measured from the model rather than assumed"
+    );
+    h.state_mut().clock_mult = 2.0;
+    assert!(
+        (h.state().clock_hz() - 7_093_800.0).abs() < 1.0,
+        "twice a 128K's is not twice a 48K's"
     );
 }
 

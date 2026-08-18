@@ -217,6 +217,17 @@ pub fn zoom_label(scale: f32) -> String {
 /// it twice over.
 pub const CLOCK_MULTIPLES: &[f32] = &[1.0, 2.0, 4.0, 8.0];
 
+/// Whether the clock is offered in the window.
+///
+/// Not at the moment. What it does is speed the whole machine, ULA included,
+/// so the interrupt comes twice as often at twice the clock and a game reading
+/// the frame counter runs fast rather than smoothly. An accelerator that
+/// leaves the video at 50Hz is a different thing — the CPU's clock and the
+/// ULA's stop being one clock, which is a change to how time is kept here
+/// rather than a multiplier on it. The machinery stays, and the switch comes
+/// back when it is that.
+pub const SHOW_CLOCK: bool = false;
+
 /// The clock dropdown: the machine's own speed, and multiples of it.
 ///
 /// In MHz rather than in multiples, since that is what a clock is measured in,
@@ -2741,15 +2752,18 @@ impl App {
             theme::divider(ui);
             theme::group_label(ui, "Machine");
             self.machine_dropdown(ui);
-            theme::group_label(ui, "Clock");
-            let base = self.machine_cpu_hz();
-            let before = self.clock_mult;
-            clock_dropdown(&mut self.clock_mult, base, ui);
-            if self.clock_mult != before {
-                // The mixer counts in T-states, so it has to be told: a beeper
-                // note would otherwise come out at the pitch the machine was
-                // built for rather than the one it is running at.
-                self.apply_clock();
+            if SHOW_CLOCK {
+                theme::group_label(ui, "Clock");
+                let base = self.machine_cpu_hz();
+                let before = self.clock_mult;
+                clock_dropdown(&mut self.clock_mult, base, ui);
+                if self.clock_mult != before {
+                    // The mixer counts in T-states, so it has to be told: a
+                    // beeper note would otherwise come out at the pitch the
+                    // machine was built for rather than the one it is running
+                    // at.
+                    self.apply_clock();
+                }
             }
             self.late_timing(ui);
             if ui.button("Reset").clicked() {

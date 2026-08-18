@@ -203,6 +203,10 @@ other.
 
 ## Running the clock faster
 
+**Not offered at the moment.** The machinery is here and tested; the control is
+hidden until it is an accelerator rather than a faster crystal, for the reason
+in the paragraph after next. What it would offer:
+
 The **Clock** dropdown in the Machine row offers the machine's own clock and
 three doublings of it: 3.50, 7.00, 14.00 and 28.00MHz on a 48K, and 3.55, 7.09
 and so on on a 128K, whose own clock is 3.5469MHz. The numbers come from the
