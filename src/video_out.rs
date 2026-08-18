@@ -20,12 +20,58 @@ use std::process::{Child, Command, Stdio};
 /// What to call the encoder, and what to ask it for.
 pub const FFMPEG: &str = "ffmpeg";
 
+/// What every file is written at, whatever the picture came in as.
+///
+/// A Spectrum's picture is 352 by 296 with the border on: nothing plays that
+/// happily, and a file somebody wants to show somebody else is 1080p. The
+/// picture is scaled up to fit and the rest is left black.
+pub const OUT_W: usize = 1920;
+pub const OUT_H: usize = 1080;
+
+/// How big the picture is drawn inside the 1080p frame.
+///
+/// `pixel_aspect` is how tall a row of the buffer is against how wide a column
+/// is, in the picture it stands for. It is 1 for the machine's own pixels and
+/// a half with the set on, where every line of the picture is two rows of the
+/// buffer — a line and the gap under it. Without that the televised picture
+/// went into the file twice as tall as it should be.
+///
+/// Both sides come out even, since H.264 in yuv420p has no way to carry an odd
+/// one.
+pub fn fit(src_w: usize, src_h: usize, pixel_aspect: f64) -> (usize, usize) {
+    let shown_h = (src_h as f64 * pixel_aspect).max(1.0);
+    let scale = (OUT_W as f64 / src_w as f64).min(OUT_H as f64 / shown_h);
+    let even = |v: f64| ((v.round() as usize).max(2)) & !1;
+    (
+        even(src_w as f64 * scale).min(OUT_W),
+        even(shown_h * scale).min(OUT_H),
+    )
+}
+
 /// The arguments that turn a stream of RGBA frames into an H.264 file.
 ///
 /// `yuv420p` rather than anything better, because that is what every player
 /// will show; `veryfast` because the emulator is running at the same time and
 /// a dropped frame is worse than a larger file.
-pub fn arguments(width: usize, height: usize, fps: f64, to: &Path) -> Vec<String> {
+///
+/// `smooth` picks how the scaling is done, and follows what the window is
+/// doing: the machine's own pixels are squares and are kept as squares, and a
+/// televised picture is softened, exactly as it is on screen.
+pub fn arguments(
+    width: usize,
+    height: usize,
+    pixel_aspect: f64,
+    fps: f64,
+    smooth: bool,
+    to: &Path,
+) -> Vec<String> {
+    let (w, h) = fit(width, height, pixel_aspect);
+    let filter = format!(
+        "scale={w}:{h}:flags={},pad={OUT_W}:{OUT_H}:{}:{}:black",
+        if smooth { "lanczos" } else { "neighbor" },
+        (OUT_W - w) / 2,
+        (OUT_H - h) / 2,
+    );
     vec![
         "-y".into(),
         "-f".into(),
@@ -38,6 +84,8 @@ pub fn arguments(width: usize, height: usize, fps: f64, to: &Path) -> Vec<String
         format!("{fps:.3}"),
         "-i".into(),
         "-".into(),
+        "-vf".into(),
+        filter,
         "-c:v".into(),
         "libx264".into(),
         "-preset".into(),
@@ -83,10 +131,12 @@ impl Recording {
         path: PathBuf,
         width: usize,
         height: usize,
+        pixel_aspect: f64,
         fps: f64,
+        smooth: bool,
     ) -> Result<Recording, String> {
         let child = Command::new(FFMPEG)
-            .args(arguments(width, height, fps, &path))
+            .args(arguments(width, height, pixel_aspect, fps, smooth, &path))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

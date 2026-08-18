@@ -254,6 +254,22 @@ that does nothing. The frame rate the file is written at is the machine's own �
 50.08Hz on a 48K, not a round fifty — so a second of the recording is a second
 of the machine.
 
+**Every file is 1080p**, whatever the picture came in as: 352 by 296 is not a
+size anything plays happily, and a file somebody wants to show somebody else is
+1080p. The picture is scaled up to fit and the rest of the frame left black —
+1284 by 1080 with the border on, centred.
+
+Getting that right means telling the scaling how tall a row of the buffer
+stands for. With the set on every line of the picture is two rows — a line and
+the gap under it — so a row is worth half as much height as a column is width;
+written as though those rows were square, the televised picture went into the
+file twice as tall as it should be. Measured on a real file: the picture spans
+x 318 to 1601 of 1920 either way, which is the 352:296 it should be.
+
+The scaling follows what the window does with the same picture: nearest for the
+machine's own pixels, which are squares, and Lanczos for a televised one, which
+has no pixel edges.
+
 A recording is one size throughout. The encoder is told the size once, at the
 start, so switching the set on or the view from cropped to overscan while it is
 running would shear the picture from there on: the frame is refused instead and

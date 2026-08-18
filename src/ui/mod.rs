@@ -2814,9 +2814,8 @@ impl App {
         let Some(path) = self.pick_video_path() else {
             return;
         };
-        let (w, h) = self.picture_size();
-        let fps = self.machine_cpu_hz() / self.spec.bus.frame_t() as f64;
-        match crate::video_out::Recording::start(path, w, h, fps) {
+        let (w, h, pixel_aspect, fps, smooth) = self.video_settings();
+        match crate::video_out::Recording::start(path, w, h, pixel_aspect, fps, smooth) {
             Ok(recording) => {
                 self.set_status(
                     format!("Recording video to {}", recording.path.display()),
@@ -2826,6 +2825,29 @@ impl App {
             }
             Err(e) => self.set_status(e, true),
         }
+    }
+
+    /// What the encoder is told about the picture: its size, how tall a row
+    /// stands for against how wide a column does, the machine's frame rate,
+    /// and whether to scale it smoothly.
+    ///
+    /// With the set on, every line of the picture is two rows of the buffer —
+    /// a line and the gap under it — so a row stands for half as much height
+    /// as a column does width. Written as though those rows were square, the
+    /// televised picture went into the file twice as tall as it should be.
+    pub fn video_settings(&self) -> (usize, usize, f64, f64, bool) {
+        let (w, h) = self.picture_size();
+        (
+            w,
+            h,
+            if self.crt_settings().line_gaps {
+                0.5
+            } else {
+                1.0
+            },
+            self.machine_cpu_hz() / self.spec.bus.frame_t() as f64,
+            self.picture_filter() == TextureOptions::LINEAR,
+        )
     }
 
     /// Where the video goes: beside the tape if there is one, under its name.
