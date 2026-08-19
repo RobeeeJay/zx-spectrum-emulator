@@ -225,6 +225,11 @@ pub struct Audio {
     pub speed_ok: bool,
 
     pub sample_rate: f64,
+    /// Somewhere to keep a copy of every sample, while a video is being
+    /// recorded. `None` the rest of the time: a recording of the sound is
+    /// only wanted while something is recording it, and keeping one otherwise
+    /// would be a growing buffer nobody reads.
+    pub tap: Option<Vec<f32>>,
     pub cpu_hz: f64,
     t_per_sample: f64,
 
@@ -268,6 +273,7 @@ impl Audio {
             mute_off_speed: true,
             speed_ok: true,
             sample_rate: 48_000.0,
+            tap: None,
             cpu_hz,
             t_per_sample: cpu_hz / 48_000.0,
             acc: 0.0,
@@ -387,6 +393,9 @@ impl Audio {
 
         let out = blocked * self.gain;
         self.peak = self.peak.max(out.abs());
+        if let Some(tap) = &mut self.tap {
+            tap.push(out.clamp(-1.0, 1.0));
+        }
         self.pending.push(out.clamp(-1.0, 1.0));
         self.produced += 1;
         if self.pending.len() >= 128 {

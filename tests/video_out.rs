@@ -1,7 +1,9 @@
 //! Writing the picture out as a video file.
 
 use std::path::{Path, PathBuf};
-use zx_rustrum::video_out::{arguments, available, fit, Recording, FFMPEG, OUT_H, OUT_W};
+use zx_rustrum::video_out::{
+    arguments, available, fit, mux_arguments, Recording, FFMPEG, OUT_H, OUT_W,
+};
 
 /// A scratch file that cleans up after itself.
 struct Scratch(PathBuf);
@@ -70,7 +72,7 @@ fn a_frame_of_the_wrong_size_stops_the_recording() {
         return;
     }
     let out = Scratch::new("wrong-size");
-    let mut recording = Recording::start(out.0.clone(), 16, 16, 1.0, 50.0, false)
+    let mut recording = Recording::start(out.0.clone(), 16, 16, 1.0, 50.0, false, 48_000.0)
         .expect("ffmpeg should have started");
     let frame = vec![0u8; 16 * 16 * 4];
     recording.frame(&frame, 16, 16);
@@ -97,7 +99,7 @@ fn what_goes_in_comes_out_as_a_file() {
     }
     let out = Scratch::new("frames");
     let (w, h) = (64usize, 48usize);
-    let mut recording = Recording::start(out.0.clone(), w, h, 1.0, 50.0, false)
+    let mut recording = Recording::start(out.0.clone(), w, h, 1.0, 50.0, false, 48_000.0)
         .expect("ffmpeg should have started");
 
     // Ten frames of a moving band, so the file has something to compress.
@@ -130,7 +132,7 @@ fn the_encoder_is_looked_for_rather_than_assumed() {
     let there = available();
     if !there {
         let out = Scratch::new("missing");
-        let started = Recording::start(out.0.clone(), 16, 16, 1.0, 50.0, false);
+        let started = Recording::start(out.0.clone(), 16, 16, 1.0, 50.0, false, 48_000.0);
         assert!(
             started.is_err(),
             "without the encoder there is nothing to start"
@@ -220,5 +222,159 @@ fn the_window_describes_its_own_picture() {
         fit(w, h, aspect),
         fit(cw, ch, caspect),
         "the picture is the same shape with the set on as without it"
+    );
+}
+
+/// The sound goes into the file with the picture.
+///
+/// ffmpeg takes the frames down its standard input, which leaves nowhere for
+/// the sound to go while the recording is running: it is written beside the
+/// picture as raw samples and the two are joined when the recording stops.
+#[test]
+fn the_sound_is_put_with_the_picture() {
+    let args = mux_arguments(
+        Path::new("/tmp/.a.video.mp4"),
+        Path::new("/tmp/.a.audio.f32"),
+        48_000.0,
+        Path::new("/tmp/a.mp4"),
+    );
+    let joined = args.join(" ");
+    assert!(
+        joined.contains("-f f32le") && joined.contains("-ar 48000") && joined.contains("-ac 1"),
+        "the samples as they were written: {joined}"
+    );
+    assert!(
+        joined.contains("-c:v copy"),
+        "the picture is already encoded and is not encoded again: {joined}"
+    );
+    assert!(joined.contains("-c:a aac"), "and the sound is: {joined}");
+}
+
+/// A recording with sound in it comes out as one file with both, and the
+/// working files it was made from are cleaned up.
+#[test]
+fn a_recording_with_sound_leaves_one_file_behind() {
+    if !available() {
+        eprintln!("no {FFMPEG} on the path; skipping");
+        return;
+    }
+    let out = Scratch::new("with-sound");
+    let (w, h) = (32usize, 24usize);
+    let mut recording = Recording::start(out.0.clone(), w, h, 1.0, 50.0, false, 48_000.0)
+        .expect("ffmpeg should have started");
+    let pixels = vec![0x40u8; w * h * 4];
+    // A fifth of a second: ten frames and the samples that go with them.
+    for frame in 0..10 {
+        recording.frame(&pixels, w, h);
+        let samples: Vec<f32> = (0..960)
+            .map(|i| ((frame * 960 + i) as f32 / 40.0).sin() * 0.5)
+            .collect();
+        recording.sound(&samples);
+    }
+    assert_eq!(recording.samples, 9600, "a fifth of a second of sound");
+
+    let (path, frames) = recording.finish().expect("the encoder should be happy");
+    assert_eq!(frames, 10);
+    assert!(
+        std::fs::metadata(&path).is_ok_and(|m| m.len() > 0),
+        "one file, with something in it"
+    );
+    // And nothing left beside it.
+    let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+    for working in [
+        path.with_file_name(format!(".{stem}.video.mp4")),
+        path.with_file_name(format!(".{stem}.audio.f32")),
+    ] {
+        assert!(
+            !working.exists(),
+            "the working file should have been cleaned up: {}",
+            working.display()
+        );
+    }
+}
+
+/// A second of the file is a second of the machine, whatever the window is
+/// doing.
+///
+/// The window repaints when the window system says so — sixty times a second
+/// on this screen — and the machine draws fifty. Writing a frame per repaint
+/// put sixty frames in the file for every fifty the machine drew and declared
+/// them as fifty, so everything in it happened a fifth too slowly.
+#[test]
+fn the_file_gets_one_frame_per_machine_frame() {
+    use zx_rustrum::ui::App;
+
+    // Repainting faster than the machine draws: most repaints owe nothing.
+    let mut due = 0.0;
+    let mut written = 0u32;
+    for _ in 0..60 {
+        due += 50.0 / 60.0;
+        let owed = App::video_frames_owed(due);
+        due -= owed as f64;
+        written += owed;
+    }
+    assert_eq!(
+        written, 50,
+        "sixty repaints of a machine drawing fifty frames is fifty frames"
+    );
+
+    // Repainting slower than it draws: a repaint can owe more than one.
+    let mut due = 0.0;
+    let mut written = 0u32;
+    for _ in 0..25 {
+        due += 50.0 / 25.0;
+        let owed = App::video_frames_owed(due);
+        due -= owed as f64;
+        written += owed;
+    }
+    assert_eq!(written, 50, "and half as many repaints is still fifty");
+
+    // A machine run flat out draws thousands, and the file is of what the
+    // window showed rather than of every frame the machine got through.
+    assert_eq!(App::video_frames_owed(2400.0), 4, "capped");
+}
+
+/// The sound written to the file is the sound the machine made.
+///
+/// ffmpeg's standard input is carrying the frames, so the samples cannot go
+/// down it: they are kept as they are produced and written beside the picture.
+/// Kept only while something is recording — the rest of the time it is a
+/// buffer nobody reads.
+#[test]
+fn the_samples_are_kept_while_a_recording_is_running() {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use zx_rustrum::machine::Spectrum;
+
+    let mut spec = Spectrum::new();
+    spec.bus
+        .audio
+        .attach(Arc::new(Mutex::new(VecDeque::new())), 48_000.0);
+    spec.bus.audio.volume = 1.0;
+
+    // Nothing is kept until something asks for it.
+    assert!(spec.bus.audio.tap.is_none(), "no tap to start with");
+    for _ in 0..2 {
+        spec.run(spec.bus.frame_t());
+        spec.bus.audio_sync();
+    }
+
+    spec.bus.audio.tap = Some(Vec::new());
+    // A frame of the beeper being hit, which is what a loading tone is.
+    for step in 0..200 {
+        spec.bus.audio.beeper = if step % 2 == 0 { 0.5 } else { 0.0 };
+        spec.run(spec.bus.frame_t() / 200);
+        spec.bus.audio_sync();
+    }
+
+    let kept = spec.bus.audio.tap.as_ref().expect("the tap is on");
+    assert!(
+        kept.len() > 800,
+        "a frame of sound at 48kHz is a thousand samples: {}",
+        kept.len()
+    );
+    assert!(
+        kept.iter().any(|s| s.abs() > 0.01),
+        "and the beeper should be in them"
     );
 }

@@ -447,6 +447,18 @@ pub struct App {
     crt_drawn: bool,
     /// The video file being written, while one is.
     pub video: Option<crate::video_out::Recording>,
+    /// Emulated frames that have gone by without a frame of video written for
+    /// them.
+    ///
+    /// The window repaints when the window system says so — sixty times a
+    /// second on this screen, or not at all while it is behind another window
+    /// — and the machine draws fifty. Writing a frame per repaint puts the
+    /// wrong number of frames in the file and everything in it happens at the
+    /// wrong speed; counting the machine's frames and writing that many is
+    /// what makes a second of the file a second of the machine.
+    video_due: f64,
+    /// Which machine frame the last one was counted at.
+    video_at: u64,
     /// How many times the machine's own clock it is being run at. One is the
     /// machine as it was built; the rest are the same machine running quicker,
     /// which is what an accelerator did.
@@ -564,6 +576,8 @@ impl App {
             crt_pixels: Vec::new(),
             crt_drawn: false,
             video: None,
+            video_due: 0.0,
+            video_at: 0,
             clock_mult: 1.0,
             scale: 2.0,
             overscan: true,
@@ -2815,8 +2829,14 @@ impl App {
             return;
         };
         let (w, h, pixel_aspect, fps, smooth) = self.video_settings();
-        match crate::video_out::Recording::start(path, w, h, pixel_aspect, fps, smooth) {
+        let rate = self.spec.bus.audio.sample_rate;
+        match crate::video_out::Recording::start(path, w, h, pixel_aspect, fps, smooth, rate) {
             Ok(recording) => {
+                // The sound is kept from now on, and thrown away again when
+                // the recording stops.
+                self.spec.bus.audio.tap = Some(Vec::new());
+                self.video_due = 0.0;
+                self.video_at = self.spec.bus.frame;
                 self.set_status(
                     format!("Recording video to {}", recording.path.display()),
                     false,
@@ -2893,6 +2913,7 @@ impl App {
 
     /// Close the file and say what was written.
     pub fn stop_video(&mut self) {
+        self.spec.bus.audio.tap = None;
         let Some(mut recording) = self.video.take() else {
             return;
         };
@@ -2910,15 +2931,49 @@ impl App {
     /// The buffer that becomes the texture, so what goes into the file is what
     /// the window shows: the line structure, the composite colour and the dot
     /// crawl are already in these pixels.
+    /// How many frames of video the picture just drawn is worth.
+    ///
+    /// The window repaints when the window system says so — sixty times a
+    /// second here, and not at all while it is behind another window — and the
+    /// machine draws fifty. A file written a frame per repaint has the wrong
+    /// number of frames in it and plays back at the wrong speed; this counts
+    /// the machine's frames instead, so a second of the file is a second of the
+    /// machine. Capped, because a machine being run flat out draws thousands
+    /// and the file is of what the window showed.
+    pub fn video_frames_owed(due: f64) -> u32 {
+        (due as u32).min(4)
+    }
+
     fn record_video_frame(&mut self) {
         if self.video.is_none() {
             return;
         }
-        // Worked out before the encoder is borrowed: the size comes from the
-        // window's own state, and the borrow checker is right that the two
-        // cannot be read at once.
+        // How many frames the machine has drawn since the last time the
+        // picture was written out. Not one per repaint: the window repaints
+        // when the window system says so and the machine draws fifty times a
+        // second, and a file with sixty frames for every fifty plays back a
+        // fifth too slow.
+        let now = self.spec.bus.frame;
+        self.video_due += now.saturating_sub(self.video_at) as f64;
+        self.video_at = now;
+        // A machine being run flat out draws thousands; the file is of what
+        // the window showed, so it gets what the window showed.
+        let write = Self::video_frames_owed(self.video_due);
+        if write == 0 {
+            return;
+        }
+        self.video_due -= write as f64;
+
         let televised = self.crt || self.composite;
         let (w, h) = self.picture_size();
+        let sound: Vec<f32> = self
+            .spec
+            .bus
+            .audio
+            .tap
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default();
         let failed = {
             let pixels = if televised {
                 &self.crt_pixels
@@ -2926,7 +2981,10 @@ impl App {
                 &self.screen_pixels
             };
             let recording = self.video.as_mut().expect("checked above");
-            recording.frame(pixels, w, h);
+            for _ in 0..write {
+                recording.frame(pixels, w, h);
+            }
+            recording.sound(&sound);
             recording.failed.clone()
         };
         if let Some(why) = failed {

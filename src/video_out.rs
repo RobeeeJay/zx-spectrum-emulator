@@ -17,6 +17,37 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
+/// The arguments that put the sound and the picture together at the end.
+///
+/// Two files rather than one: ffmpeg takes the frames down its standard input,
+/// which leaves nowhere for the sound to go while the recording is running. It
+/// is written beside the picture as raw samples and the two are joined when the
+/// recording stops, which costs a second of copying and no dropped frames.
+pub fn mux_arguments(video: &Path, audio: &Path, rate: f64, to: &Path) -> Vec<String> {
+    vec![
+        "-y".into(),
+        "-i".into(),
+        video.to_string_lossy().to_string(),
+        "-f".into(),
+        "f32le".into(),
+        "-ar".into(),
+        format!("{rate:.0}"),
+        "-ac".into(),
+        "1".into(),
+        "-i".into(),
+        audio.to_string_lossy().to_string(),
+        // The picture is already encoded; only the sound needs doing.
+        "-c:v".into(),
+        "copy".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        "192k".into(),
+        "-shortest".into(),
+        to.to_string_lossy().to_string(),
+    ]
+}
+
 /// What to call the encoder, and what to ask it for.
 pub const FFMPEG: &str = "ffmpeg";
 
@@ -113,13 +144,21 @@ pub fn available() -> bool {
 /// A recording in progress.
 pub struct Recording {
     child: Child,
+    /// Where the finished file goes.
     pub path: PathBuf,
+    /// The picture on its own, until the sound is put with it.
+    video_path: PathBuf,
+    /// The sound, as raw samples.
+    audio_path: PathBuf,
+    audio: Option<std::fs::File>,
+    pub sample_rate: f64,
     /// What size the frames are. A recording is one size throughout: the
     /// encoder is told the size once, and a frame of another size cannot be
     /// put into the same file.
     pub width: usize,
     pub height: usize,
     pub frames: u64,
+    pub samples: u64,
     /// What went wrong, if anything has. Kept rather than thrown, so the
     /// window can say so and stop rather than the recording dying quietly.
     pub failed: Option<String>,
@@ -134,22 +173,54 @@ impl Recording {
         pixel_aspect: f64,
         fps: f64,
         smooth: bool,
+        sample_rate: f64,
     ) -> Result<Recording, String> {
+        let video_path = beside(&path, "video.mp4");
+        let audio_path = beside(&path, "audio.f32");
         let child = Command::new(FFMPEG)
-            .args(arguments(width, height, pixel_aspect, fps, smooth, &path))
+            .args(arguments(
+                width,
+                height,
+                pixel_aspect,
+                fps,
+                smooth,
+                &video_path,
+            ))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("could not start {FFMPEG}: {e}"))?;
+        let audio = std::fs::File::create(&audio_path).ok();
         Ok(Recording {
             child,
             path,
+            video_path,
+            audio_path,
+            audio,
+            sample_rate,
             width,
             height,
             frames: 0,
+            samples: 0,
             failed: None,
         })
+    }
+
+    /// Hand over the sound made since the last frame.
+    pub fn sound(&mut self, samples: &[f32]) {
+        let Some(file) = self.audio.as_mut() else {
+            return;
+        };
+        let mut bytes = Vec::with_capacity(samples.len() * 4);
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        if file.write_all(&bytes).is_err() {
+            self.audio = None;
+            return;
+        }
+        self.samples += samples.len() as u64;
     }
 
     /// Hand over one frame of RGBA.
@@ -185,7 +256,7 @@ impl Recording {
         self.frames += 1;
     }
 
-    /// Close the file and wait for the encoder to finish with it.
+    /// Close the picture, put the sound with it, and clean up after both.
     ///
     /// Takes `&mut self` rather than `self`: the recording holds a child
     /// process and lets go of it when it is dropped, so it cannot be taken
@@ -198,14 +269,59 @@ impl Recording {
             .child
             .wait()
             .map_err(|e| format!("waiting for {FFMPEG}: {e}"))?;
+        drop(self.audio.take());
         if let Some(why) = self.failed.clone() {
+            self.tidy_up();
             return Err(why);
         }
         if !status.success() {
+            self.tidy_up();
             return Err(format!("{FFMPEG} gave up ({status})"));
         }
+
+        // The sound and the picture, into one file.
+        if self.samples > 0 {
+            let muxed = Command::new(FFMPEG)
+                .args(mux_arguments(
+                    &self.video_path,
+                    &self.audio_path,
+                    self.sample_rate,
+                    &self.path,
+                ))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            match muxed {
+                Ok(status) if status.success() => {}
+                _ => {
+                    // The picture on its own is better than nothing at all,
+                    // and better than a file that is not there.
+                    let _ = std::fs::rename(&self.video_path, &self.path);
+                    self.tidy_up();
+                    return Err("the sound could not be put with the picture".into());
+                }
+            }
+        } else {
+            let _ = std::fs::rename(&self.video_path, &self.path);
+        }
+        self.tidy_up();
         Ok((self.path.clone(), self.frames))
     }
+
+    /// Throw away the two halves once they are one file.
+    fn tidy_up(&mut self) {
+        let _ = std::fs::remove_file(&self.video_path);
+        let _ = std::fs::remove_file(&self.audio_path);
+    }
+}
+
+/// A working file beside the one being written, with the same stem.
+fn beside(path: &Path, what: &str) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "recording".into());
+    path.with_file_name(format!(".{stem}.{what}"))
 }
 
 impl Drop for Recording {
@@ -215,5 +331,6 @@ impl Drop for Recording {
         // process is left waiting on a pipe nobody will write to again.
         drop(self.child.stdin.take());
         let _ = self.child.wait();
+        drop(self.audio.take());
     }
 }

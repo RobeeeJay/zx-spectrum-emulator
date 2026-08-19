@@ -247,6 +247,22 @@ texture, so the effects go into the file with the picture: the line structure,
 the composite colour, the dot crawl. The curve of the glass does not — that is
 the shape the texture is drawn on rather than something done to the pixels.
 
+**A second of the file is a second of the machine.** The window repaints when
+the window system says so — sixty times a second on this screen, and not at all
+while it is behind another window — and the machine draws fifty. A frame per
+repaint therefore put sixty frames in the file for every fifty the machine drew
+and then declared them as fifty, so everything in it happened a fifth too
+slowly. What is counted is the machine's own frames, and that many frames are
+written; a machine being run flat out draws thousands, so it is capped at four
+a repaint, because the file is of what the window showed.
+
+**The sound goes in too.** ffmpeg's standard input is carrying the frames,
+which leaves nowhere for the samples: they are kept as the mixer produces them,
+written beside the picture as raw floats, and the two are joined when the
+recording stops. That costs a second of copying at the end and no dropped
+frames while it runs. If the joining fails the picture is kept rather than
+thrown away, and said so.
+
 The encoding is handed to `ffmpeg`, which is a program rather than a
 dependency: nothing is added to the build, the frames go down a pipe as raw
 RGBA, and a machine without it is told so plainly rather than given a button
