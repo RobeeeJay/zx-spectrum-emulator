@@ -195,10 +195,26 @@ pub struct SpectrumBus {
     pub capture: Option<crate::rzx::Capture>,
 
     /// T-states elapsed in the current frame.
+    ///
+    /// The ULA's clock, always: the frame is 69,888 of these on a 48K whatever
+    /// the CPU is doing, and every table indexed by it — the contention
+    /// pattern, the floating bus, the beam — means what it always did. What a
+    /// faster CPU changes is how many of its own cycles fit into one of these,
+    /// not how many of these there are.
     pub tstates: u32,
     pub frame: u64,
     /// True while the ULA is asserting /INT for this frame.
     pub irq_pending: bool,
+    /// How many times the CPU's clock the machine's own: 1 is the machine as
+    /// built, and 2, 4 or 8 an accelerator. See `docs/cpu-turbo.md`.
+    pub turbo: u32,
+    /// CPU cycles run but not yet paid for in ULA time.
+    ///
+    /// A cycle costs `1 / turbo` of a T-state, and a T-state is the smallest
+    /// thing the ULA has: the remainder is carried from one instruction to the
+    /// next rather than rounded away, so a million cycles at 8× cost exactly
+    /// an eighth of a million T-states.
+    cpu_debt: u32,
 
     pub border: u8,
     /// Border colour at the start of the frame, plus every mid-frame change,
@@ -328,6 +344,8 @@ impl SpectrumBus {
             tstates: 0,
             frame: 0,
             irq_pending: false,
+            turbo: 1,
+            cpu_debt: 0,
             border: 7,
             border_start: 7,
             border_events: Vec::with_capacity(4096),
@@ -790,10 +808,33 @@ impl SpectrumBus {
     /// they are paged in.
     #[inline]
     fn contended_addr(&self, addr: u16) -> bool {
+        // An accelerated machine is not sharing the ULA's bus on the ULA's
+        // terms any more, and the switch exists to get work done rather than
+        // to reproduce a stall. At 1× every delay is exactly what it was.
+        if self.turbo > 1 {
+            return false;
+        }
         match self.slot_of(addr) {
             Slot::Ram(bank) => self.model.bank_is_contended(bank),
             Slot::Rom(_) => false,
         }
+    }
+
+    /// Charge the ULA's clock for cycles of the CPU's.
+    ///
+    /// At 1× they are the same clock and this adds what it is given. Above it,
+    /// the cycles are divided and what does not divide is carried: the ULA has
+    /// nothing smaller than a T-state, and a fraction of one thrown away every
+    /// instruction is a machine running slower than it says it does.
+    #[inline]
+    fn cpu_cycles(&mut self, cycles: u32) {
+        if self.turbo <= 1 {
+            self.tstates += cycles;
+            return;
+        }
+        self.cpu_debt += cycles;
+        self.tstates += self.cpu_debt / self.turbo;
+        self.cpu_debt %= self.turbo;
     }
 
     // ---- timing ------------------------------------------------------------
@@ -805,7 +846,7 @@ impl SpectrumBus {
         if self.contended_addr(addr) {
             self.tstates += self.delay() as u32;
         }
-        self.tstates += t;
+        self.cpu_cycles(t);
     }
 
     /// Internal cycles: the address stays on the bus, so contention is
@@ -814,10 +855,13 @@ impl SpectrumBus {
     fn contend_addr(&mut self, addr: u16, times: u32) {
         if self.contended_addr(addr) {
             for _ in 0..times {
-                self.tstates += self.delay() as u32 + 1;
+                // The stall is the ULA's and the cycle is the CPU's, so they
+                // are charged to their own clocks rather than added together.
+                self.tstates += self.delay() as u32;
+                self.cpu_cycles(1);
             }
         } else {
-            self.tstates += times;
+            self.cpu_cycles(times);
         }
     }
 
@@ -850,34 +894,34 @@ impl SpectrumBus {
             (true, true) => {
                 self.io_stall();
                 let sampled = self.tstates;
-                self.tstates += 1;
+                self.cpu_cycles(1);
                 self.io_stall();
-                self.tstates += 3;
+                self.cpu_cycles(3);
                 sampled
             }
             // C:1, C:1, C:1, C:1
             (true, false) => {
                 self.io_stall();
                 let sampled = self.tstates;
-                self.tstates += 1;
+                self.cpu_cycles(1);
                 for _ in 0..3 {
                     self.io_stall();
-                    self.tstates += 1;
+                    self.cpu_cycles(1);
                 }
                 sampled
             }
             // N:1, C:3 — the ULA stalls the CPU even for an uncontended page.
             (false, true) => {
-                self.tstates += 1;
+                self.cpu_cycles(1);
                 self.io_stall();
                 let sampled = self.tstates;
-                self.tstates += 3;
+                self.cpu_cycles(3);
                 sampled
             }
             // N:4
             (false, false) => {
                 let sampled = self.tstates;
-                self.tstates += 4;
+                self.cpu_cycles(4);
                 sampled
             }
         }
@@ -885,6 +929,10 @@ impl SpectrumBus {
 
     #[inline]
     fn io_stall(&mut self) {
+        // The same switch as the memory contention: nothing above 1×.
+        if self.turbo > 1 {
+            return;
+        }
         self.tstates += self.delay() as u32;
     }
 
@@ -1624,6 +1672,7 @@ impl Spectrum {
         let tape = self.bus.tape.take();
         let audio = std::mem::replace(&mut self.bus.audio, crate::audio::Audio::new(1.0));
         let tape_boost = self.bus.tape_boost;
+        let turbo = self.bus.turbo;
         let tape_flash = self.bus.tape_flash;
         let slow_enabled = self.bus.slow.enabled;
         let late = self.bus.late_timing;
@@ -1636,6 +1685,7 @@ impl Spectrum {
         self.bus.audio.ay.reset();
         self.bus.tape = tape;
         self.bus.tape_boost = tape_boost;
+        self.bus.turbo = turbo;
         self.bus.tape_flash = tape_flash;
         self.bus.slow.enabled = slow_enabled;
         self.load_rom(rom);
