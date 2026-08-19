@@ -168,3 +168,42 @@ fn the_cpu_is_held_at_one_times_while_a_tape_plays() {
     assert_eq!(h.state().turbo(), 4);
     assert_eq!(h.state().spec.bus.turbo, 4);
 }
+
+/// The machine's own clock is marked in the list.
+///
+/// "3.50MHz" means nothing to somebody who does not already know what a 48K
+/// runs at, and knowing which entry is the machine as built is the difference
+/// between choosing a speed and wondering whether the emulator is lying about
+/// something. The others say what they are a multiple of.
+#[test]
+fn the_list_says_which_clock_is_the_machines_own() {
+    use zx_rustrum::machine::CPU_HZ;
+    use zx_rustrum::ui::clock_option_label;
+
+    let own = clock_option_label(1.0, CPU_HZ);
+    assert!(own.contains("3.50MHz"), "the clock itself: {own}");
+    assert!(
+        own.contains("as built"),
+        "and that it is the machine's: {own}"
+    );
+
+    for (mult, expected) in [(2.0f32, "7.00MHz"), (4.0, "14.00MHz"), (8.0, "28.00MHz")] {
+        let label = clock_option_label(mult, CPU_HZ);
+        assert!(label.contains(expected), "{mult}x is {expected}: {label}");
+        assert!(
+            label.contains(&format!("{mult:.0}x")),
+            "and says what it is a multiple of: {label}"
+        );
+        assert!(
+            !label.contains("as built"),
+            "only one of them is the machine as built: {label}"
+        );
+    }
+
+    // A 128K's own clock is its own number, and still the one marked.
+    let on_128 = clock_option_label(1.0, 3_546_900.0);
+    assert!(
+        on_128.contains("3.55MHz") && on_128.contains("as built"),
+        "{on_128}"
+    );
+}

@@ -233,12 +233,32 @@ pub const SHOW_CLOCK: bool = true;
 /// In MHz rather than in multiples, since that is what a clock is measured in,
 /// and worked out from whichever machine is running: a 48K's own is 3.5MHz and
 /// a 128K's 3.5469, so "twice" is a different number on each.
+/// What one entry of the clock dropdown says.
+///
+/// The machine's own clock is marked, because "3.50MHz" means nothing to
+/// somebody who does not already know what a 48K runs at — and knowing which
+/// one is the machine as built is the difference between choosing a speed and
+/// wondering whether the emulator is lying about something.
+pub fn clock_option_label(mult: f32, base: f64) -> String {
+    let hz = format!("{:.2}MHz", base * mult as f64 / 1_000_000.0);
+    if mult <= 1.0 {
+        format!("{hz}  (as built)")
+    } else {
+        format!("{hz}  ({mult:.0}x)")
+    }
+}
+
 pub fn clock_dropdown(mult: &mut f32, base: f64, ui: &mut egui::Ui) {
-    let label = |m: f32| format!("{:.2}MHz", base * m as f64 / 1_000_000.0);
-    theme::dropdown(ui, 88.0, label(*mult), |ui| {
+    // The button carries the clock alone; the list says which is the machine's
+    // own and what each of the others is a multiple of.
+    let closed = format!("{:.2}MHz", base * *mult as f64 / 1_000_000.0);
+    theme::dropdown(ui, 88.0, closed, |ui| {
         for m in CLOCK_MULTIPLES {
             if ui
-                .selectable_label((*mult - m).abs() < f32::EPSILON, label(*m))
+                .selectable_label(
+                    (*mult - m).abs() < f32::EPSILON,
+                    clock_option_label(*m, base),
+                )
                 .clicked()
             {
                 *mult = *m;
