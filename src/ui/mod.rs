@@ -242,7 +242,7 @@ pub const SHOW_CLOCK: bool = true;
 pub fn clock_option_label(mult: f32, base: f64) -> String {
     let hz = format!("{:.2}MHz", base * mult as f64 / 1_000_000.0);
     if mult <= 1.0 {
-        format!("{hz}  (as built)")
+        format!("{hz}  (default)")
     } else {
         format!("{hz}  ({mult:.0}x)")
     }
