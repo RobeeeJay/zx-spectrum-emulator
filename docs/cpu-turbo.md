@@ -50,11 +50,16 @@ fn cpu_cycles(&mut self, cycles: u32) {
 }
 ```
 
-**Contention is not divided.** A stall is the ULA holding the CPU off the bus;
-it lasts as long as the ULA says whatever the CPU's clock is doing, so it goes
-straight onto `tstates`. That falls out of the code as it stands: `access` and
-`contend_addr` already add the delay and the cycles separately, and only the
-cycles change hands.
+**There is no contention above 1×.** Decided rather than derived: an
+accelerated machine is not sharing the ULA's bus on the ULA's terms any more,
+and the switch exists to get work done rather than to reproduce a stall. At 1×
+every delay is exactly what it always was — that is the machine, and the tests
+that pin it down are the ones that matter. Above 1× the delay tables are not
+consulted at all.
+
+That makes the change smaller than it looked: `access` and `contend_addr`
+already add the delay and the cycles as separate statements, so the delay
+becomes conditional and the cycles go through `cpu_cycles`.
 
 ## What changes, by name
 
@@ -62,21 +67,21 @@ Everything is in `src/machine.rs` unless it says otherwise.
 
 1. **`SpectrumBus`** gains `pub turbo: u32` (1 by default) and `cpu_debt: u32`,
    and a `fn cpu_cycles(&mut self, cycles: u32)` as above.
-2. **`access(addr, t)`** — the delay stays as it is; `self.tstates += t`
-   becomes `self.cpu_cycles(t)`.
-3. **`contend_addr(addr, times)`** — the `delay()` per T-state stays; the
-   `times` themselves go through `cpu_cycles`. The loop has to add the delay
-   and the cycle separately rather than `delay + 1` in one go.
-4. **`contend_io(port)`** — every `io_stall()` stays; the 1, 3 and 4 T-state
-   costs go through `cpu_cycles`. The `sampled` T-state it returns is a ULA
-   position and is read after the stalls, so it stays right.
-   One thing to know about that: `sampled` is taken part way through the
-   pattern, after a cycle that is now fractional, so the moment the ULA is
-   asked for its byte is quantised to whole ULA T-states. That is right — the
-   ULA can only put a byte on the bus at its own rate, whatever is asking —
-   but it means two `IN`s in a row at 8× can read the same floating-bus byte
-   where at 1× they read consecutive ones. Worth a test rather than a
-   surprise.
+2. **`contended_addr(addr)`** answers no above 1×, which switches off memory
+   contention everywhere it is asked — `access`, `contend_addr` and the M1
+   fetch — from one place rather than three.
+3. **`access(addr, t)`** and **`contend_addr(addr, times)`** — the cycles go
+   through `cpu_cycles`; the delays are already behind the test above.
+4. **`io_stall()`** returns without adding anything above 1×, which is the same
+   switch for the four I/O patterns; the 1, 3 and 4 T-state costs in
+   `contend_io` go through `cpu_cycles`.
+   One thing to know: `sampled` — the T-state the ULA puts its byte on the bus,
+   which the floating bus and the EAR line read — is taken part way through the
+   pattern, after a cycle that is now fractional. The moment it names is
+   therefore quantised to whole ULA T-states. That is right, since the ULA can
+   only present a byte at its own rate whatever is asking, but it means two
+   `IN`s in a row at 8× can read the same floating-bus byte where at 1× they
+   read consecutive ones. Worth a test rather than a surprise.
 
 5. **`set_model`** keeps `turbo` across a model change, as it keeps
    `tape_boost` and the rest.
@@ -128,21 +133,25 @@ Everything is in `src/machine.rs` unless it says otherwise.
   interrupt it would otherwise have missed. Nothing to change; something to
   check.
 
-## Contention: the question worth deciding first
+## Contention: decided
 
-Three things a real accelerator might do, and what each means here:
+**None above 1×.** The three ways it could have gone were: stall as the ULA
+always did; contend in CPU cycles, which is not a thing any hardware does; or
+switch it off, which is what accelerated machines that only ran fast outside
+the contended range amount to from the program's point of view. The last one is
+what this will do, everywhere, above 1×.
 
-1. **Stall as the ULA always did** — the CPU waits out the full ULA delay. What
-   the plan above does, and the simplest to defend: the ULA is unchanged and it
-   is the one holding the bus.
-2. **Do not contend at all above 1×** — some accelerators only run fast in
-   uncontended RAM and drop to 3.5MHz for the rest. Would need the turbo to be
-   asked per access rather than held once.
-3. **Contend in CPU cycles** — treat the delay as if the ULA were faster too,
-   which is not what the hardware does and would make the timing tests
-   meaningless.
+What that means, said plainly:
 
-Recommend (1), with (2) as a switch later if a real machine is found to differ.
+- **A program that uses contention to keep time will not keep it.** The
+  multicolour effects that count on a contended `LD` costing a known number of
+  T-states are exactly the programs a turbo switch breaks, on a real machine as
+  much as here. That is the trade the switch is for.
+- **1× is untouched.** Every delay table, every I/O pattern, every number in
+  `tests/reference_48k.rs` still applies to the machine as built, and the
+  switch has no effect on any of it.
+- **It is simpler and quicker.** The delay lookup on every contended access
+  goes away above 1×, which is most of what the accelerated path costs.
 
 ## How it is kept honest
 
@@ -157,9 +166,11 @@ New tests, once it multiplies:
   second at 2×, 4× and 8×.
 - Twice the instructions in a frame at 2×; eight times at 8×, within the
   rounding the debt carries.
-- A contended access still costs what the table says: a `LD A,(HL)` on $4000
-  at a known T-state costs the same stall at 4× as at 1×, and only its own
-  four cycles get cheaper.
+- A contended access costs nothing extra above 1×: `LD A,(HL)` on $4000 at the
+  worst T-state of the frame costs the same as the same instruction on $8000,
+  where at 1× it costs six T-states more.
+- The four I/O patterns are the plain 4 T-states above 1×, and exactly what the
+  reference says at 1×.
 - The debt never loses a cycle: run a million instructions at 8× and the ULA
   time is the CPU time divided by eight, to the T-state.
 - A tape still loads: Head over Heels at 4× reaches the same place, since the
