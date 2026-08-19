@@ -100,11 +100,14 @@ Everything is in `src/machine.rs` unless it says otherwise.
   the recording's frame boundary is the video frame; a CPU getting through
   those fetches in a quarter of the ULA time would put four frames' worth of
   input into one frame of picture. `rzx.is_some()` should force 1× and say so.
-- **While the tape is being answered.** Fastload hands blocks over at $0556 and
-  leaves the machine where the routine would have; nothing there depends on the
-  CPU's clock, so this one is a check rather than a rule — but a loader
-  counting pulses in CPU cycles will fail at 2× exactly as it did on the real
-  thing, which is worth a word in the tooltip rather than a fix.
+- **While a tape is playing.** Measured, not assumed: at 4× Head over Heels
+  loads nothing at all and the machine is left in the ROM's edge loop at $05ED
+  when the tape has run out. Every loader — the ROM's own as much as a game's —
+  counts turns of its own loop against pulses that are in ULA time, so at 4× it
+  counts four times as many turns for the same pulse and every length it knows
+  is wrong. That is what an accelerated machine does, which is why they had a
+  switch; here the switch throws itself, and the CPU is held at 1× while the
+  deck is playing.
 - **Race the Beam and Cursor Beam.** Both replay a frame from its interrupt to
   a T-state; that still works, but "what the machine had done by this point in
   the frame" means something different when the CPU is running four times as
