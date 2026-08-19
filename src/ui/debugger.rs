@@ -24,10 +24,6 @@ const INSN_W: f32 = 140.0;
 const COMMENT_W: f32 = 200.0;
 /// The gap between one column and the next.
 const COLUMN_GAP: f32 = 6.0;
-/// A row of the memory dump: address, eight bytes, eight characters. Fixed
-/// for the same reason the listing's columns are.
-const DUMP_W: f32 = 330.0;
-
 /// How wide the register panel is allowed to be, so what sits beside it has
 /// somewhere to be.
 const REGISTERS_W: f32 = 350.0;
@@ -37,7 +33,13 @@ const STACK_DEPTH: u16 = 12;
 const STACK_W: f32 = 124.0;
 
 /// How tall the listing is, and so how much of memory is on show.
-const LISTING_H: f32 = 360.0;
+pub const LISTING_H: f32 = 460.0;
+
+/// Instructions moved for each row of wheel travel: a roll of the wheel moves
+/// the listing by about what it shows. More than that overshoots whatever you
+/// were reading; the part of a roll too small to be a whole instruction is
+/// kept rather than rounded away, which is what makes a slow rate usable.
+const LINES_PER_ROW: f32 = 1.0;
 
 /// The list of names, and how far it runs before it scrolls.
 const LABELS_W: f32 = 132.0;
@@ -79,23 +81,53 @@ fn row_height(ui: &egui::Ui) -> f32 {
     ui.spacing().interact_size.y
 }
 
+/// Which half of the memory dump a byte was clicked in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Column {
+    /// The two hex digits, which take hex digits.
+    Hex,
+    /// The characters beside them, which take characters.
+    Text,
+}
+
 pub struct DebuggerState {
     pub follow_pc: bool,
     /// Set when the machine stops at a breakpoint. The window asks to be
     /// raised on the next frame it draws, and clears it.
     pub raise: bool,
-    /// Whether to guess at what the code is doing, and the last guess made.
-    pub autodoc: bool,
-    pub doc: crate::autodoc::Doc,
-    /// What the guess was made from, so it is not made again every frame.
-    doc_from: Option<(u16, u16)>,
     /// Whether the "clear everything" button is waiting to be confirmed.
     pub confirm_clear: bool,
     pub view_addr: u16,
+    /// The row to mark in the listing: what was last asked to be shown, from
+    /// the labels list or the call flow window. Marked rather than only
+    /// scrolled to, because a listing scrolled to an address leaves the reader
+    /// counting rows to find which one was meant.
+    pub marked: Option<u16>,
+    /// Whether the debugger has asked for the program to be watched so it can
+    /// work out where the routines and the data are.
+    pub watching_blocks: bool,
+    /// Wheel travel that has not yet added up to a whole instruction. A
+    /// trackpad delivers a few points at a time, and rounding each of those to
+    /// the nearest line throws every one of them away.
+    pub scroll_debt: f32,
+    /// The first line the listing draws. Held rather than worked out from the
+    /// address on show: deriving it each frame re-synced the disassembly to a
+    /// different instruction boundary as the address moved, and the whole
+    /// listing jumped about under a steady roll of the wheel.
+    pub top: u16,
+    /// Whether the line of interest should be put back in the middle: set when
+    /// something sends the listing somewhere rather than when it is scrolled.
+    pub centre: bool,
     pub lines: usize,
     pub goto_text: String,
     pub bp_text: String,
     pub mem_addr: u16,
+    /// The byte picked out in the memory dump, and which of its two columns
+    /// was clicked. Typing goes to it: hex digits in the numbers, characters
+    /// in the text beside them.
+    pub selected: Option<(u16, Column)>,
+    /// The first of the two hex digits, while only one has been typed.
+    pub half_typed: Option<u8>,
     pub mem_text: String,
 }
 
@@ -104,15 +136,19 @@ impl Default for DebuggerState {
         DebuggerState {
             follow_pc: true,
             raise: false,
-            autodoc: false,
-            doc: crate::autodoc::Doc::default(),
-            doc_from: None,
             confirm_clear: false,
             view_addr: 0,
-            lines: 24,
+            marked: None,
+            watching_blocks: false,
+            scroll_debt: 0.0,
+            top: 0,
+            centre: true,
+            lines: 96,
             goto_text: String::new(),
             bp_text: String::new(),
             mem_addr: 0x4000,
+            selected: None,
+            half_typed: None,
             mem_text: String::new(),
         }
     }
@@ -142,6 +178,10 @@ impl App {
             return;
         }
         self.spec.temp_bp = Some(target);
+
+        // Everything kept for stepping back describes a machine from before
+        // the call, and the call is about to write over it.
+        self.forget_rewind();
 
         let was_slow = self.spec.bus.slow.enabled;
         self.spec.bus.slow.enabled = false;
@@ -215,6 +255,10 @@ impl App {
             self.status = format!("Returned to ${:04X}", self.cpu().pc);
             return;
         }
+        // Running out of a subroutine writes over whatever the entries kept
+        // for stepping back describe.
+        self.forget_rewind();
+
         let was_slow = self.spec.bus.slow.enabled;
         self.spec.bus.slow.enabled = false;
         let mut guard = 0u32;
@@ -271,6 +315,30 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         if theme::run_pause_button(ui, app.running).clicked() {
             app.running = !app.running;
         }
+        // Back through what has been stepped, before the buttons that go
+        // forward: an instruction can be undone because what it changed was
+        // written down as it ran, not because the machine was copied.
+        let back = app.rewind.len();
+        if ui
+            .add_enabled(back > 0, egui::Button::new("⏮ Step back"))
+            .on_hover_text(if back > 0 {
+                format!(
+                    "Undo the last instruction. {back} of {} kept.\n\
+                     The sound already played and where the tape has reached \
+                     are not put back: those are outside the machine's memory.",
+                    crate::ui::REWIND
+                )
+            } else {
+                "Step first: an instruction can only be undone if it was \
+                 stepped by hand, since that is when what it changed is \
+                 written down."
+                    .to_string()
+            })
+            .clicked()
+        {
+            app.step_back();
+        }
+
         // The icons are picked from what the bundled fonts actually have: the
         // arrows that were here before were in no font at all and drew as
         // empty boxes. Down into the call, past it, back out of it.
@@ -288,19 +356,7 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             app.status = "Reset".into();
         }
         ui.separator();
-        ui.toggle_value(&mut app.dbg.follow_pc, "Follow PC");
-        let was = app.dbg.autodoc;
-        ui.toggle_value(&mut app.dbg.autodoc, "AutoDoc")
-            .on_hover_text(
-                "Guess at what the routines being called are for, and note it \
-             against them. Guesses are shown in place of an empty label or \
-             comment and are never written to your notes file.",
-            );
-        if app.dbg.autodoc != was {
-            // Turned on or off: the guess is stale either way.
-            app.dbg.doc = crate::autodoc::Doc::default();
-            app.dbg.doc_from = None;
-        }
+        theme::toggle(ui, &mut app.dbg.follow_pc, "Follow PC");
     });
 
     // Stopping on what a program does rather than on where it is: the things
@@ -312,22 +368,50 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             theme::group_label(ui, "Break");
             let breaks = &mut app.spec.bus.breaks;
-            ui.toggle_value(&mut breaks.screen, "Screen")
+            theme::toggle(ui, &mut breaks.screen, "Screen")
                 .on_hover_text("Stop on a write anywhere in the display file");
-            ui.toggle_value(&mut breaks.beeper, "Beeper")
+            theme::toggle(ui, &mut breaks.beeper, "Beeper")
                 .on_hover_text("Stop when the speaker or MIC bit of port $FE changes");
             if has_ay {
-                ui.toggle_value(&mut breaks.ay, "AY")
+                theme::toggle(ui, &mut breaks.ay, "AY")
                     .on_hover_text("Stop on any access to the sound chip");
             }
-            ui.toggle_value(&mut breaks.interrupt, "Interrupt")
+            theme::toggle(ui, &mut breaks.interrupt, "Interrupt")
                 .on_hover_text("Stop when the CPU accepts the frame interrupt");
-            ui.toggle_value(&mut breaks.rom, "ROM").on_hover_text(
+            theme::toggle(ui, &mut breaks.port_in, "In")
+                .on_hover_text("Stop on any IN: the program reading any port at all");
+            theme::toggle(ui, &mut breaks.port_out, "Out")
+                .on_hover_text("Stop on any OUT: the program writing to any port at all");
+            theme::toggle(ui, &mut breaks.rom, "ROM").on_hover_text(
                 "Stop when the program goes into the ROM from outside it. \
                  Moving about within the ROM does not count, so a ROM routine \
                  calling another one is left alone.",
             );
         });
+    }
+
+    // A line at a time with the arrow keys, once nothing is being typed into:
+    // the listing is full of label and comment fields, and an arrow key in one
+    // of those belongs to the field.
+    let typing = ui.memory(|memory| memory.focused().is_some());
+    if !typing {
+        let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+        let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+        let moved = {
+            let peek = |a: u16| app.peek(a);
+            let at = app.dbg.view_addr;
+            if down {
+                let insn = disasm::disasm(&peek, at);
+                Some(at.wrapping_add(insn.len.max(1) as u16))
+            } else if up {
+                Some(back(&peek, at, 1))
+            } else {
+                None
+            }
+        };
+        if let Some(addr) = moved {
+            app.show_in_listing(addr);
+        }
     }
 
     if ui.input(|i| i.key_pressed(egui::Key::F7)) {
@@ -439,34 +523,76 @@ fn labels(app: &mut App, ui: &mut egui::Ui) {
             ui.set_min_width(LABELS_W);
             ui.set_max_width(LABELS_W);
             ui.label(RichText::new("Labels").small().color(theme::DIM));
+            // The list is what is empty, not the panel: what follows it works
+            // out the shape of the program, and returning early here left a
+            // program with no labels yet — which is every program to begin
+            // with — without the button that starts the work.
+            let mut go_to = None;
             if entries.is_empty() {
                 ui.label(RichText::new("none yet").monospace().color(theme::DIM));
-                return;
-            }
-            let mut go_to = None;
-            egui::ScrollArea::vertical()
-                .id_salt("labels")
-                .max_height(LABELS_H)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for (addr, label, auto) in &entries {
-                        let colour = if *auto { theme::DIM } else { theme::LCD_FG };
-                        let text = format!("{addr:04X} {label}");
-                        let row = ui.add(
-                            egui::Label::new(RichText::new(text).monospace().color(colour))
-                                .wrap_mode(egui::TextWrapMode::Truncate)
-                                .sense(egui::Sense::click()),
-                        );
-                        if row.clicked() {
-                            go_to = Some(*addr);
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("labels")
+                    .max_height(LABELS_H)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (addr, label, auto) in &entries {
+                            let colour = if *auto { theme::DIM } else { theme::LCD_FG };
+                            let text = format!("{addr:04X} {label}");
+                            let row = ui.add(
+                                egui::Label::new(RichText::new(text).monospace().color(colour))
+                                    .wrap_mode(egui::TextWrapMode::Truncate)
+                                    .sense(egui::Sense::click()),
+                            );
+                            if row.clicked() {
+                                go_to = Some(*addr);
+                            }
+                            row.on_hover_text(format!("Show the listing at ${addr:04X}"));
                         }
-                        row.on_hover_text(format!("Show the listing at ${addr:04X}"));
-                    }
-                });
-            if let Some(addr) = go_to {
-                app.dbg.view_addr = addr;
-                app.dbg.follow_pc = false;
+                    });
             }
+            if let Some(addr) = go_to {
+                app.show_in_listing(addr);
+            }
+
+            // Working out the shape of the program: what is a routine and
+            // what is a table. It has to watch the program to know, so the
+            // first press starts watching and the second reads off what was
+            // seen. Running a whole recording between the two is what fills
+            // in a game.
+            ui.separator();
+            let watching = app.spec.bus.observer.enabled;
+            let known = app.notes.blocks().len();
+            ui.horizontal(|ui| {
+                if ui
+                    .button(if watching {
+                        "Find blocks"
+                    } else {
+                        "Watch for blocks"
+                    })
+                    .on_hover_text(
+                        "Work out which runs of memory are routines and which \
+                         are data, from what the program has been seen doing, \
+                         and keep them in the notes file. Press it again after \
+                         running more of the program and what it finds is added \
+                         to what was known.",
+                    )
+                    .clicked()
+                {
+                    find_blocks(app);
+                }
+                ui.label(
+                    RichText::new(if known > 0 {
+                        format!("{known} blocks")
+                    } else if watching {
+                        "watching".to_string()
+                    } else {
+                        "none yet".to_string()
+                    })
+                    .small()
+                    .color(theme::DIM),
+                );
+            });
 
             // Throwing the lot away takes the file with it, so it is asked
             // about rather than done on one click.
@@ -481,8 +607,6 @@ fn labels(app: &mut App, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     if ui.button("Delete").clicked() {
                         app.notes.clear();
-                        app.dbg.doc = crate::autodoc::Doc::default();
-                        app.dbg.doc_from = None;
                         app.dbg.confirm_clear = false;
                         if let Err(e) = app.notes.save_if_dirty() {
                             app.set_status(format!("Could not save notes: {e}"), true);
@@ -508,6 +632,40 @@ fn labels(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
+/// Work out where the routines and the data are, and keep it.
+///
+/// Nothing can be worked out until the program has been watched, so the first
+/// press turns the watching on and says so rather than reporting that it found
+/// nothing. What is found is added to what was known: one run of a game sees
+/// its title screen, and the next sees a level.
+fn find_blocks(app: &mut App) {
+    if !app.spec.bus.observer.enabled {
+        app.dbg.watching_blocks = true;
+        app.spec.bus.observer.enabled = true;
+        app.set_status(
+            "Watching. Run the program — a whole recording if you have one — \
+             then press Find blocks."
+                .to_string(),
+            false,
+        );
+        return;
+    }
+
+    let found = crate::blocks::work_out(&app.spec.bus.observer);
+    let merged = crate::blocks::merge(app.notes.blocks(), &found);
+    let was = app.notes.blocks().len();
+    let bytes: u32 = merged.iter().map(|block| block.length()).sum();
+    app.notes.set_blocks(merged);
+    let now = app.notes.blocks().len();
+    match app.notes.save_if_dirty() {
+        Err(e) => app.set_status(format!("Could not save notes: {e}"), true),
+        Ok(_) => app.set_status(
+            format!("{now} blocks over {bytes} bytes ({} known before)", was),
+            false,
+        ),
+    }
+}
+
 /// The blocks of memory that were read but never run: data, with a guess at
 /// what kind and — for the graphics — a picture of it.
 ///
@@ -522,10 +680,10 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
             ui.label(RichText::new("Data").small().color(theme::DIM));
             if blocks.is_empty() {
                 ui.label(
-                    RichText::new(if app.dbg.autodoc {
+                    RichText::new(if app.spec.bus.observer.enabled {
                         "nothing read yet"
                     } else {
-                        "AutoDoc is off"
+                        "nothing is being watched"
                     })
                     .monospace()
                     .color(theme::DIM),
@@ -533,6 +691,7 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
             let mut go_to = None;
+            let mut as_graphics = None;
             egui::ScrollArea::vertical()
                 .id_salt("datablocks")
                 .max_height(LABELS_H)
@@ -548,6 +707,13 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                         );
                         if row.clicked() {
                             go_to = Some(block.at);
+                            // Any block, not only the ones guessed to be
+                            // graphics: what a block holds is a guess made
+                            // from who read it, and a block whose reader was
+                            // never seen to be called has no guess at all.
+                            // Looking at it is how you find out, and a hover
+                            // preview is gone the moment the mouse moves.
+                            as_graphics = Some((block.at, block.length));
                         }
                         // Who reads it, and who calls them: a graphics block
                         // plus its reader plus its reader's caller is most of
@@ -579,6 +745,11 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                         };
                         row.on_hover_ui(|ui| {
                             ui.label(read_by);
+                            ui.label(
+                                RichText::new("Click to read it as graphics")
+                                    .small()
+                                    .color(theme::DIM),
+                            );
                             if block.kind == crate::observe::DataKind::Graphics {
                                 sprites(app, ui, block.at, block.length);
                             }
@@ -587,6 +758,9 @@ fn data_blocks(app: &mut App, ui: &mut egui::Ui) {
                 });
             if let Some(addr) = go_to {
                 show_in_dump(app, addr);
+            }
+            if let Some((addr, length)) = as_graphics {
+                app.show_as_graphics(addr, length);
             }
         });
     });
@@ -644,12 +818,66 @@ fn video(app: &mut App, ui: &mut egui::Ui) {
     let scale = VIDEO_W / size.x;
     ui.vertical(|ui| {
         ui.label(RichText::new("Screen").small().color(theme::DIM));
-        egui::Frame::new()
+        let picture = egui::Frame::new()
             .fill(theme::CASE_DARK)
             .inner_margin(egui::Margin::same(VIDEO_BORDER as i8))
             .show(ui, |ui| {
-                ui.add(egui::Image::new(&texture).fit_to_exact_size(size * scale));
+                ui.add(
+                    egui::Image::new(&texture)
+                        .fit_to_exact_size(size * scale)
+                        .sense(egui::Sense::click()),
+                )
             });
+
+        // Pointing at something on the picture and being told what drew it.
+        // The bus watched it happen, so this is not a guess: it is the routine
+        // that last wrote those bytes.
+        let response = picture.inner;
+        let Some(at) = response.hover_pos() else {
+            return;
+        };
+        let rect = response.rect;
+        let (column, row) = (
+            ((at.x - rect.left()) / rect.width() * 32.0) as usize,
+            ((at.y - rect.top()) / rect.height() * 24.0) as usize,
+        );
+        if column >= 32 || row >= 24 {
+            return;
+        }
+        let drew = app.spec.bus.observer.drew_cell(column, row);
+        let mut go_to = None;
+        let clicked = response.clicked();
+        response.on_hover_ui(|ui| {
+            ui.label(format!("Character cell {column},{row}"));
+            if drew.is_empty() {
+                ui.label(
+                    RichText::new(if app.spec.bus.observer.enabled {
+                        "nothing has written here since watching began"
+                    } else {
+                        "nothing is being watched"
+                    })
+                    .color(theme::DIM),
+                );
+                return;
+            }
+            for (entry, bytes) in drew.iter().take(4) {
+                let name = app.notes.label(*entry);
+                let named = if name.is_empty() {
+                    format!("${entry:04X}")
+                } else {
+                    format!("{name} (${entry:04X})")
+                };
+                ui.label(format!("{bytes} of its bytes written by {named}"));
+            }
+        });
+        if clicked {
+            if let Some((entry, _)) = drew.first() {
+                go_to = Some(*entry);
+            }
+        }
+        if let Some(entry) = go_to {
+            app.show_in_listing(entry);
+        }
     });
 }
 
@@ -736,8 +964,22 @@ fn registers_lcd(app: &mut App, ui: &mut egui::Ui) {
         ui.separator();
         flag_chip(ui, "IFF1", c.iff1);
         flag_chip(ui, "IFF2", c.iff2);
+        // Shown when it is halted, and its space kept when it is not. The
+        // panel sizes itself to its contents, so a word appearing at the end
+        // of this row widened the panel and shoved the stack, the labels and
+        // the screen along beside it — every frame, since HALT is entered and
+        // left once a frame while a program waits for the interrupt.
+        let halted = RichText::new("HALTED").color(theme::AMBER).monospace();
         if c.halted {
-            ui.label(RichText::new("HALTED").color(theme::AMBER).monospace());
+            ui.label(halted);
+        } else {
+            let galley = egui::WidgetText::from(halted).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Monospace,
+            );
+            ui.allocate_space(galley.size());
         }
     });
 }
@@ -864,7 +1106,6 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     if app.dbg.follow_pc {
         app.dbg.view_addr = pc;
     }
-    refresh_autodoc(app);
 
     ui.horizontal(|ui| {
         ui.label("Go to:");
@@ -884,9 +1125,23 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
-    let peek = |a: u16| app.peek(a);
-    // Start a little above the anchor, aligned to a real opcode boundary.
-    let mut addr = disasm::sync_start(&peek, app.dbg.view_addr, 12);
+    // As many lines as the listing has room for, and no more. The rows are a
+    // window onto memory rather than a list with ends: any that do not fit
+    // would give the area a scrollbar of its own, and the wheel would move
+    // within those rows instead of travelling through the address space —
+    // which is what "infinite scroll stopped working" was.
+    app.dbg.lines = ((LISTING_H / row_height(ui)).floor() as usize).max(8);
+
+    // The line being followed sits in the middle of the listing, with as much
+    // above it as below: an instruction at the top edge has no context before
+    // it, which is half of what a disassembly is read for.
+    if app.dbg.follow_pc || app.dbg.centre {
+        let peek = |a: u16| app.peek(a);
+        app.dbg.top = back(&peek, app.dbg.view_addr, app.dbg.lines / 2);
+        app.dbg.centre = false;
+    }
+
+    let mut addr = app.dbg.top;
 
     // Take a copy of the bytes on show, so the listing can be drawn without
     // holding a borrow of the machine while the rest of the window is built.
@@ -920,10 +1175,17 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     // The listing is a window onto the whole address space, not a list with
     // ends: rolling the wheel moves it through memory an instruction at a
     // time, so it can be followed as far as it goes in either direction.
+    // Taken once for the frame: the listing asks about every row, and the
+    // notes are borrowed mutably inside it.
+    let blocks: Vec<crate::blocks::Block> = app.notes.blocks().to_vec();
+
     let listing_top = ui.cursor().min.y;
     egui::ScrollArea::vertical()
         .id_salt("disasm")
         .max_height(LISTING_H)
+        // Never scrolls itself: rolling the wheel over it moves the window
+        // through memory instead, which has no ends to stop at.
+        .scroll([false, false])
         // A scroll area that shrinks to its contents makes its width depend on
         // what is inside it, which is the other half of the feedback that had
         // the listing shivering.
@@ -936,6 +1198,7 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                 let insn = disasm::disasm(&peek, addr);
                 let is_pc = addr == pc;
                 let has_bp = app.breakpoints().contains(&addr);
+                let marked = app.dbg.marked == Some(addr);
                 let bytes: String = insn
                     .bytes
                     .iter()
@@ -950,77 +1213,92 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                         rich = rich.color(Color32::BLACK).background_color(theme::AMBER);
                     } else if has_bp {
                         rich = rich.color(theme::RED);
+                    } else if marked {
+                        // Where you asked to be taken, on a band of its own so
+                        // it can be told from the current instruction.
+                        rich = rich.background_color(theme::MARK);
                     }
                     rich
                 };
 
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+                // Which block this row is in, and so which band it sits on.
+                // Neighbouring blocks take different shades, and code and data
+                // take different pairs, so the shape of the program reads off
+                // the listing without anything having to be labelled.
+                let band = crate::blocks::at(&blocks, addr)
+                    .map(|index| theme::band(index, blocks[index].kind));
 
-                    // The breakpoint marker sits in a gutter of its own, so a
-                    // dot appearing does not push the addresses sideways.
-                    cell(
-                        ui,
-                        RichText::new(if has_bp { "●" } else { " " })
-                            .monospace()
-                            .color(theme::RED),
-                        GUTTER_W,
-                    );
+                egui::Frame::NONE
+                    .fill(band.unwrap_or(Color32::TRANSPARENT))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = COLUMN_GAP;
 
-                    // What is written against this address. A guess is shown
-                    // in the dim colour, so it reads as a guess; typing over
-                    // one makes it the user's own and it goes to full ink.
-                    let mut label = app.notes.label(addr).to_string();
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut label)
-                            .id_salt(("note-label", addr))
-                            .desired_width(LABEL_W)
-                            .font(egui::TextStyle::Monospace)
-                            .text_color(if app.notes.label_is_auto(addr) {
-                                theme::DIM
-                            } else {
-                                theme::INK
-                            })
-                            .frame(egui::Frame::NONE),
-                    );
-                    if resp.changed() {
-                        app.notes.set_label(addr, &label);
-                    }
-                    finished_editing |= resp.lost_focus();
+                            // The breakpoint marker sits in a gutter of its own, so a
+                            // dot appearing does not push the addresses sideways.
+                            cell(
+                                ui,
+                                RichText::new(if has_bp { "●" } else { " " })
+                                    .monospace()
+                                    .color(theme::RED),
+                                GUTTER_W,
+                            );
 
-                    let mut listing = cell(ui, paint(format!("{addr:04X}")), ADDR_W);
-                    listing |= cell(ui, paint(bytes), VALUE_W);
-                    listing |= cell(ui, paint(insn.text.clone()), INSN_W);
-                    if listing.clicked() {
-                        clicked = Some(addr);
-                    }
+                            // What is written against this address. A guess is shown
+                            // in the dim colour, so it reads as a guess; typing over
+                            // one makes it the user's own and it goes to full ink.
+                            let mut label = app.notes.label(addr).to_string();
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(&mut label)
+                                    .id_salt(("note-label", addr))
+                                    .desired_width(LABEL_W)
+                                    .font(egui::TextStyle::Monospace)
+                                    .text_color(if app.notes.label_is_auto(addr) {
+                                        theme::DIM
+                                    } else {
+                                        theme::INK
+                                    })
+                                    .frame(egui::Frame::NONE),
+                            );
+                            if resp.changed() {
+                                app.notes.set_label(addr, &label);
+                            }
+                            finished_editing |= resp.lost_focus();
 
-                    // The semicolon is the listing's, not the file's: it marks
-                    // a comment where there is one and stays out of the way
-                    // where there is not.
-                    let mut comment = app.notes.comment(addr).to_string();
-                    // Multi-line, so a comment long enough to say something
-                    // useful can be read in full rather than trailing off the
-                    // end of a field. A row with nothing in it is still one
-                    // line tall, so the listing keeps its pitch.
-                    let resp = ui.add(
-                        egui::TextEdit::multiline(&mut comment)
-                            .id_salt(("note-comment", addr))
-                            .desired_width(COMMENT_W)
-                            .desired_rows(1)
-                            .font(egui::TextStyle::Monospace)
-                            .text_color(if app.notes.comment_is_auto(addr) {
-                                theme::DIM
-                            } else {
-                                theme::INK
-                            })
-                            .frame(egui::Frame::NONE),
-                    );
-                    if resp.changed() {
-                        app.notes.set_comment(addr, &comment);
-                    }
-                    finished_editing |= resp.lost_focus();
-                });
+                            let mut listing = cell(ui, paint(format!("{addr:04X}")), ADDR_W);
+                            listing |= cell(ui, paint(bytes), VALUE_W);
+                            listing |= cell(ui, paint(insn.text.clone()), INSN_W);
+                            if listing.clicked() {
+                                clicked = Some(addr);
+                            }
+
+                            // The semicolon is the listing's, not the file's: it marks
+                            // a comment where there is one and stays out of the way
+                            // where there is not.
+                            let mut comment = app.notes.comment(addr).to_string();
+                            // Multi-line, so a comment long enough to say something
+                            // useful can be read in full rather than trailing off the
+                            // end of a field. A row with nothing in it is still one
+                            // line tall, so the listing keeps its pitch.
+                            let resp = ui.add(
+                                egui::TextEdit::multiline(&mut comment)
+                                    .id_salt(("note-comment", addr))
+                                    .desired_width(COMMENT_W)
+                                    .desired_rows(1)
+                                    .font(egui::TextStyle::Monospace)
+                                    .text_color(if app.notes.comment_is_auto(addr) {
+                                        theme::DIM
+                                    } else {
+                                        theme::INK
+                                    })
+                                    .frame(egui::Frame::NONE),
+                            );
+                            if resp.changed() {
+                                app.notes.set_comment(addr, &comment);
+                            }
+                            finished_editing |= resp.lost_focus();
+                        });
+                    });
                 addr = addr.wrapping_add(insn.len.max(1) as u16);
             }
             if let Some(a) = clicked {
@@ -1063,161 +1341,46 @@ fn scroll_through_memory(app: &mut App, ui: &mut egui::Ui, top: f32) {
     if wheel == 0.0 {
         return;
     }
-    // A notch of the wheel is about one line, whichever way it goes.
-    let lines = (wheel / row_height(ui)).round() as i32;
+    // How far a roll of the wheel carries. A row of the listing is a point of
+    // wheel travel apiece, which moved the listing at a crawl next to every
+    // other window on the desktop, so it goes several lines to the row — and
+    // the part that does not add up to a whole line is kept rather than
+    // rounded away, which is the whole of a trackpad's output.
+    app.dbg.scroll_debt += wheel * LINES_PER_ROW / row_height(ui);
+    let lines = app.dbg.scroll_debt.trunc() as i32;
+    app.dbg.scroll_debt -= lines as f32;
     if lines == 0 {
         return;
     }
     app.dbg.follow_pc = false;
     let peek = |a: u16| app.peek(a);
-    let mut addr = app.dbg.view_addr;
+    let mut addr = app.dbg.top;
     if lines < 0 {
         for _ in 0..(-lines) {
             let insn = disasm::disasm(&peek, addr);
             addr = addr.wrapping_add(insn.len.max(1) as u16);
         }
     } else {
-        for _ in 0..lines {
-            // Back one instruction: the boundary above where we are.
-            addr = disasm::sync_start(&peek, addr.wrapping_sub(1), 4);
-        }
+        addr = back(&peek, addr, lines as usize);
     }
+    app.dbg.top = addr;
+    // The listing has been moved by hand, so the address on show is wherever
+    // the top of it now is: pressing a key afterwards carries on from here
+    // rather than from wherever the machine was left.
     app.dbg.view_addr = addr;
 }
 
-/// Make the guess again, if what it was made from has changed.
+/// The address `count` instructions above `addr`.
 ///
-/// Reading a few hundred instructions is cheap, but not cheap enough to do
-/// sixty times a second for no reason: it is redone when the listing moves or
-/// the machine stops somewhere new.
-fn refresh_autodoc(app: &mut App) {
-    // Watching costs something on every memory access, so it is only done
-    // while there is something reading the results.
-    app.spec.bus.observer.enabled = app.dbg.autodoc;
-    if !app.dbg.autodoc {
-        if !app.dbg.doc.is_empty() {
-            app.dbg.doc = crate::autodoc::Doc::default();
-        }
-        return;
+/// Backwards through a variable-length instruction set means finding the
+/// instruction that ends where you are, one at a time; there is no arithmetic
+/// that does it.
+fn back<F: Fn(u16) -> u8>(peek: &F, addr: u16, count: usize) -> u16 {
+    let mut addr = addr;
+    for _ in 0..count {
+        addr = disasm::previous(peek, addr);
     }
-    let from = (app.dbg.view_addr, app.cpu().pc);
-    if app.dbg.doc_from == Some(from) {
-        return;
-    }
-    app.dbg.doc_from = Some(from);
-    // Both the code on screen and the code being run are worth following: the
-    // listing may be somewhere the machine has not reached yet.
-    //
-    // A recording adds the best evidence there is. Static reading has to guess
-    // which bytes are code; a recording says where the program actually went,
-    // past the loader and the protection and into the game itself.
-    let mut entries = vec![from.0, from.1];
-    if let Some(rzx) = &app.rzx {
-        entries.extend(rzx.visited.iter().copied());
-    }
-    // Built from whatever ROM the machine is running: a game that has copied
-    // the print routine into RAM is then recognised wherever it put it.
-    let mut known = match app.roms.for_model(app.spec.bus.model) {
-        Some(rom) => crate::autodoc::Signatures::from_rom(rom),
-        None => crate::autodoc::Signatures::empty(),
-    };
-    // Anything else known goes in a file beside the notes: symbols from a ROM
-    // disassembly, signatures for loaders and compressors. Nobody can ship
-    // those here, and anybody who has them can drop them in.
-    let mut text = String::new();
-    for file in app.symbol_files() {
-        if let Ok(supplied) = std::fs::read_to_string(&file) {
-            text.push_str(&supplied);
-            text.push('\n');
-        }
-    }
-    known.add_from_text(&text);
-    let symbols = crate::autodoc::Symbols::from_text(&text);
-    let peek = |a: u16| app.peek(a);
-    let mut doc = crate::autodoc::analyse_with(&peek, &entries, &known);
-
-    // A name somebody supplied outranks anything worked out here.
-    for entry in doc.labels.keys().copied().collect::<Vec<_>>() {
-        if let Some((name, comment)) = symbols.get(entry) {
-            doc.labels.insert(entry, name.to_string());
-            if !comment.is_empty() {
-                doc.comments.insert(entry, comment.to_string());
-            }
-        }
-    }
-
-    // What was measured outranks what was read: a routine that wrote 6144
-    // bytes into the display file did that, whatever its instructions look
-    // like. Only routines the machine has actually been through have
-    // measurements, so the rest keep their static guess.
-    let observer = &app.spec.bus.observer;
-    let frames = observer.frames as u32;
-    let first_pixel = app.spec.bus.first_pixel_t();
-    let frame_t = app.spec.bus.frame_t();
-    let mut named: std::collections::BTreeMap<u16, String> = Default::default();
-
-    for (entry, seen) in &observer.routines {
-        if let Some((label, comment)) = crate::autodoc::describe_measured(seen, frames) {
-            // Where in the frame it runs, and what it appears to be handed:
-            // both are measurements, so both are said outright.
-            let phase = crate::autodoc::beam_phase(seen, first_pixel, frame_t);
-            let args = crate::autodoc::arguments(seen);
-            doc.labels.insert(*entry, format!("{label}_{entry:04X}"));
-            doc.comments
-                .insert(*entry, format!("{comment}{phase}{args}"));
-            named.insert(*entry, label);
-        }
-    }
-
-    // A routine is also described by what it calls. One whose callees read the
-    // keys, draw and keep the score is a game's turn, whatever its own
-    // instructions do — and that is worth more than anything read off them.
-    for (entry, seen) in &observer.routines {
-        if seen.calls == 0 {
-            continue;
-        }
-        let mut children: Vec<&str> = observer
-            .edges
-            .keys()
-            .filter(|(from, _)| from == entry)
-            .filter_map(|(_, to)| named.get(to).map(|s| s.as_str()))
-            .collect();
-        children.sort_unstable();
-        children.dedup();
-        if children.len() < 2 {
-            continue;
-        }
-        let what = children.join(", ");
-        doc.labels
-            .entry(*entry)
-            .and_modify(|label| {
-                if label.starts_with("routine_") || label.starts_with("game_") {
-                    *label = format!("game_turn_{entry:04X}");
-                }
-            })
-            .or_insert_with(|| format!("game_turn_{entry:04X}"));
-        let note = format!("Calls {what}: the shape of a turn of the game");
-        doc.comments
-            .entry(*entry)
-            .and_modify(|c| {
-                if c.is_empty() {
-                    *c = note.clone();
-                }
-            })
-            .or_insert(note);
-    }
-
-    // Into the notes, where they are kept with the rest. A guess replaces an
-    // earlier guess but never a line the user wrote.
-    for (addr, label) in &doc.labels {
-        app.notes.suggest(*addr, label, doc.comment(*addr));
-    }
-    for (addr, comment) in &doc.comments {
-        if !doc.labels.contains_key(addr) {
-            app.notes.suggest(*addr, "", comment);
-        }
-    }
-    app.dbg.doc = doc;
+    addr
 }
 
 /// A column heading: the same width as the column under it, and left
@@ -1321,24 +1484,130 @@ fn right_column(app: &mut App, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             // Laid out row by row to the listing's height rather than left to
             // the label's own, so a line of the dump sits on the same pitch as
-            // a line of disassembly.
+            // a line of disassembly. A byte at a time rather than a line at a
+            // time, because each one can be clicked and typed over.
             let base = app.dbg.mem_addr & !0x7;
+            let mut clicked: Option<(u16, Column)> = None;
             for row in 0..16u16 {
                 let addr = base.wrapping_add(row * 8);
-                let mut line = format!("{addr:04X}  ");
-                for i in 0..8u16 {
-                    line.push_str(&format!("{:02X} ", app.peek(addr.wrapping_add(i))));
-                }
-                line.push(' ');
-                for i in 0..8u16 {
-                    let b = app.peek(addr.wrapping_add(i));
-                    line.push(if (0x20..0x7f).contains(&b) {
-                        b as char
-                    } else {
-                        '.'
-                    });
-                }
-                cell(ui, RichText::new(line).monospace(), DUMP_W);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    cell(ui, RichText::new(format!("{addr:04X}  ")).monospace(), 46.0);
+                    for i in 0..8u16 {
+                        let at = addr.wrapping_add(i);
+                        let byte = app.peek(at);
+                        if byte_cell(app, ui, at, Column::Hex, format!("{byte:02X} ")) {
+                            clicked = Some((at, Column::Hex));
+                        }
+                    }
+                    ui.add_space(6.0);
+                    for i in 0..8u16 {
+                        let at = addr.wrapping_add(i);
+                        let byte = app.peek(at);
+                        let glyph = if (0x20..0x7f).contains(&byte) {
+                            byte as char
+                        } else {
+                            '.'
+                        };
+                        if byte_cell(app, ui, at, Column::Text, glyph.to_string()) {
+                            clicked = Some((at, Column::Text));
+                        }
+                    }
+                });
+            }
+            if let Some((at, column)) = clicked {
+                app.dbg.selected = Some((at, column));
+                app.dbg.half_typed = None;
             }
         });
+
+    typing_into_memory(app, ui);
+}
+
+/// One byte of the dump: clickable, and marked when it is the one being typed
+/// into. Returns whether it was clicked.
+fn byte_cell(app: &App, ui: &mut egui::Ui, at: u16, column: Column, text: String) -> bool {
+    let chosen = app.dbg.selected == Some((at, column));
+    let mut rich = RichText::new(text).monospace();
+    if chosen {
+        rich = rich.color(Color32::BLACK).background_color(theme::AMBER);
+    } else if app.dbg.selected.map(|(a, _)| a) == Some(at) {
+        // The same byte in the other column, so the two halves of the dump
+        // agree about which byte is being looked at.
+        rich = rich.background_color(theme::MARK);
+    }
+    ui.add(
+        egui::Label::new(rich)
+            .sense(egui::Sense::click())
+            .selectable(false),
+    )
+    .clicked()
+}
+
+/// Type over the byte that was clicked.
+///
+/// Hex digits in the numbers, a digit at a time: the first is the top half of
+/// the byte and the second the bottom, and the second moves on to the next
+/// byte, which is how a hex editor has always worked. Characters in the text
+/// beside them, one byte each.
+fn typing_into_memory(app: &mut App, ui: &mut egui::Ui) {
+    let Some((at, column)) = app.dbg.selected else {
+        return;
+    };
+    // Nothing is typed over while a field has the keyboard: the address box
+    // and the listing's labels are full of characters that are also hex.
+    if ui.memory(|memory| memory.focused().is_some()) {
+        return;
+    }
+
+    // Every character of every text event, not the first of each: one event
+    // can carry more than one character, and a hex byte is two of them.
+    let typed: Vec<char> = ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::Text(text) => Some(text.chars()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    });
+    let mut at = at;
+    for c in typed {
+        match column {
+            Column::Hex => {
+                let Some(digit) = c.to_digit(16) else {
+                    continue;
+                };
+                match app.dbg.half_typed {
+                    None => {
+                        // Shown as it is typed: the top half goes in now, so
+                        // the byte on screen is what the next digit completes.
+                        let byte = (digit as u8) << 4 | (app.peek(at) & 0x0f);
+                        app.poke_byte(at, byte);
+                        app.dbg.half_typed = Some(digit as u8);
+                    }
+                    Some(high) => {
+                        app.poke_byte(at, high << 4 | digit as u8);
+                        app.dbg.half_typed = None;
+                        at = at.wrapping_add(1);
+                    }
+                }
+            }
+            Column::Text => {
+                if !c.is_control() {
+                    app.poke_byte(at, c as u8);
+                    at = at.wrapping_add(1);
+                }
+            }
+        }
+        app.dbg.selected = Some((at, column));
+    }
+
+    // Off the bottom of what is on show: bring the dump along with it.
+    let base = app.dbg.mem_addr & !0x7;
+    if at < base || at >= base.wrapping_add(16 * 8) {
+        app.dbg.mem_addr = at;
+        app.dbg.mem_text = format!("{at:04X}");
+    }
 }

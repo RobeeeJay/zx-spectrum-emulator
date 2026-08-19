@@ -1,25 +1,37 @@
 //! ZX Spectrum 48K emulator with cycle-accurate Z80 emulation and live
 //! debugging views.
 
+pub mod appicon;
 pub mod audio;
 pub mod audio_out;
 pub mod autodoc;
+pub mod blocks;
+pub mod callgraph;
+pub mod crt;
 pub mod demo_rom;
+pub mod detect;
 pub mod disasm;
+pub mod flashload;
 pub mod flow;
+pub mod listing;
 pub mod logo;
+pub mod loops;
 pub mod machine;
 pub mod notes;
 pub mod observe;
 pub mod prefs;
 pub mod profiler;
+pub mod race;
 pub mod resources;
 pub mod rzx;
 pub mod screen;
 pub mod snapshot;
 pub mod svg;
 pub mod tape;
+pub mod timeline;
 pub mod tracker;
 pub mod ui;
+pub mod video_out;
 pub mod z80;
+pub mod zip;
 pub mod zx81;

@@ -110,9 +110,23 @@ fn a_tape_never_starts_itself() {
 fn the_block_list_follows_playback() {
     // A row that has scrolled out of view is brought back; a visible one is
     // left alone, so scrolling by hand sticks while the tape stays put.
-    assert!(needs_scroll(false, false), "off-screen row must scroll");
-    assert!(!needs_scroll(false, true), "visible row must not");
-    assert!(needs_scroll(true, true), "an explicit request wins");
+    assert!(
+        needs_scroll(false, false, true),
+        "off-screen row must scroll"
+    );
+    assert!(!needs_scroll(false, true, true), "visible row must not");
+    assert!(needs_scroll(true, true, true), "an explicit request wins");
+
+    // And nothing moves the list while the reader has hold of it, whatever
+    // else is asking.
+    assert!(
+        !needs_scroll(false, false, false),
+        "a reader who has scrolled away is not dragged back"
+    );
+    assert!(
+        !needs_scroll(true, true, false),
+        "nor by a request from the tape moving on"
+    );
 }
 
 #[test]
@@ -647,4 +661,256 @@ fn the_windows_that_were_open_are_opened_again() {
     assert!(app.show_tape, "so was the tape");
     assert!(!app.show_ram_map, "the RAM map was not");
     assert!(!app.show_profiler);
+}
+
+/// Pause and Stop are different things to a tape deck.
+///
+/// Pause holds the tape still with the head on it, so the hiss goes on and the
+/// scope has something to draw; Stop lifts the head off, which is silence. The
+/// two used to be the same call, and a paused deck therefore went as quiet as
+/// a stopped one.
+#[test]
+fn pause_leaves_the_head_on_the_tape_and_stop_lifts_it() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureTone {
+            len: 2168,
+            count: 100,
+        }],
+    ));
+    app.quality.noise = true;
+    app.quality.noise_level = 0.9;
+    let mut h = harness_for(app);
+    h.run_steps(2);
+
+    h.get_by_label("▶ Play").click();
+    h.run_steps(2);
+    assert!(
+        h.state().tape_ref().unwrap().head_down,
+        "Play should put the head down"
+    );
+
+    h.get_by_label("⏸ Pause").click();
+    h.run_steps(2);
+    let deck = h.state().tape_ref().unwrap();
+    assert!(!deck.playing, "Pause should stop the tape moving");
+    assert!(deck.head_down, "but leave the head where it was");
+
+    h.get_by_label("■ Stop").click();
+    h.run_steps(2);
+    assert!(
+        !h.state().tape_ref().unwrap().head_down,
+        "Stop should take the head off the tape"
+    );
+}
+
+/// The Noise switch and its slider reach the deck, which is where the hiss is
+/// made.
+#[test]
+fn the_noise_switch_tells_the_deck_to_hiss() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureTone {
+            len: 2168,
+            count: 100,
+        }],
+    ));
+    let mut h = harness_for(app);
+    h.run_steps(2);
+    assert!(!h.state().quality.noise, "it should start quiet");
+
+    // The deck's failings are put away until they are asked for.
+    h.get_by_label("Quality").click();
+    h.run_steps(2);
+    h.get_by_label("Noise").click();
+    h.run_steps(2);
+    assert!(h.state().quality.noise, "the Noise switch did nothing");
+
+    h.state_mut().quality.noise_level = 0.4;
+    h.state_mut().advance(1.0 / 50.0);
+    let deck = h.state().spec.bus.tape.as_ref().expect("a tape").quality;
+    assert!(
+        deck.noise && (deck.noise_level - 0.4).abs() < 0.001,
+        "the deck should have been told how loud: {deck:?}"
+    );
+}
+
+/// A block's row offers to stop the deck in front of it.
+///
+/// A tape stops where its author put a stop block, which is where the loader
+/// they wrote wanted it; somebody taking a game apart wants the deck to stop
+/// somewhere else. The button is on the row because the row is where the block
+/// is, and it appears on hover so the list stays a list.
+#[test]
+fn a_row_offers_to_put_a_stop_in_front_of_its_block() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![
+            Block::PureTone {
+                len: 2168,
+                count: 100,
+            },
+            Block::PureTone {
+                len: 1000,
+                count: 50,
+            },
+        ],
+    ));
+    let mut h = harness_for(app);
+    h.run_steps(2);
+    assert!(
+        h.query_by_label("⏸ Pause before").is_none(),
+        "the button should only be there under the pointer"
+    );
+
+    // With the deck on the second block, so pressing the button on the first
+    // row can be told apart from clicking the row: a click seeks there.
+    h.state_mut().tape_mut().unwrap().seek(1);
+    h.run_steps(2);
+
+    // Over the first block's row, which is the one the window has room for.
+    let over = h
+        .get_all_by_label_contains("1  Pure tone")
+        .next()
+        .and_then(|node| node.accesskit_node().bounding_box())
+        .map(|box_| egui::pos2(box_.x0 as f32 + 20.0, box_.y0 as f32 + 4.0))
+        .expect("the first block should be listed");
+    h.input_mut().events.push(egui::Event::PointerMoved(over));
+    h.run_steps(2);
+
+    h.get_by_label("⏸ Pause before").click();
+    h.run_steps(2);
+
+    let deck = h.state().tape_ref().unwrap();
+    assert_eq!(deck.blocks.len(), 3, "a block should have been put in");
+    assert!(
+        matches!(deck.blocks[0], Block::Pause(0)),
+        "and it should be a stop-the-tape block, in front of the first: {}",
+        deck.blocks[0].describe()
+    );
+    assert_eq!(
+        deck.block, 2,
+        "the deck should still be on the block it was on, which has moved \
+         along one — pressing the button should not seek the way clicking \
+         the row does"
+    );
+}
+
+/// And a stop block's own row offers to take it out again.
+///
+/// The stops put in from the list are the only blocks the list makes, so they
+/// are the only ones it takes away: every other block is what the tape holds.
+#[test]
+fn a_stop_blocks_row_offers_to_delete_it() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "t".into(),
+        vec![
+            Block::Pause(0),
+            Block::PureTone {
+                len: 2168,
+                count: 100,
+            },
+        ],
+    ));
+    let mut h = harness_for(app);
+    h.state_mut().tape_mut().unwrap().seek(1);
+    h.run_steps(2);
+
+    let over = h
+        .get_all_by_label_contains("1  Stop the tape")
+        .next()
+        .and_then(|node| node.accesskit_node().bounding_box())
+        .map(|box_| egui::pos2(box_.x0 as f32 + 20.0, box_.y0 as f32 + 4.0))
+        .expect("the stop block should be listed");
+    h.input_mut().events.push(egui::Event::PointerMoved(over));
+    h.run_steps(2);
+
+    assert!(
+        h.query_by_label("⏸ Pause before").is_none(),
+        "a stop block should not be offered another stop in front of it"
+    );
+    h.get_by_label("✖ Delete").click();
+    h.run_steps(2);
+
+    let deck = h.state().tape_ref().unwrap();
+    assert_eq!(deck.blocks.len(), 1, "the stop should have gone");
+    assert_eq!(
+        deck.block, 0,
+        "and the deck should still be on the tone, which has moved back one"
+    );
+}
+
+/// Scrolling the block list by hand stops it following the tape, and the tape
+/// catching up starts it again.
+///
+/// Somebody reading the list is reading something; having it dragged away
+/// every time the tape moves on is the window arguing with them. Once what is
+/// playing comes back into view of its own accord, the list takes over again.
+#[test]
+fn the_list_stops_following_when_it_is_scrolled_by_hand() {
+    let mut app = test_app();
+    app.spec.bus.tape = Some(Tape::from_blocks(
+        "many".into(),
+        (0..80)
+            .map(|i| Block::PureTone {
+                len: 2168,
+                count: 10 + i,
+            })
+            .collect(),
+    ));
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    assert!(
+        h.state().tape.following,
+        "it follows the tape to begin with"
+    );
+
+    // The wheel, over the list.
+    let over = h
+        .get_all_by_label_contains("1  Pure tone")
+        .next()
+        .and_then(|node| node.accesskit_node().bounding_box())
+        .map(|b| egui::pos2(b.x0 as f32 + 20.0, b.y0 as f32 + 4.0))
+        .expect("the list has rows");
+    h.input_mut().events.push(egui::Event::PointerMoved(over));
+    h.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(3);
+    assert!(
+        !h.state().tape.following,
+        "a scroll of the reader's own stops it following"
+    );
+
+    // The tape moving on does not drag the list back.
+    for block in 1..6 {
+        h.state_mut().tape_mut().unwrap().seek(block);
+        h.run_steps(2);
+        assert!(
+            h.state().tape.scroll_requested_for.is_none(),
+            "the list should stay where it was put, block {block}"
+        );
+    }
+
+    // But when what is playing comes into view, the list takes over again.
+    let mut resumed = false;
+    for block in 6..40 {
+        h.state_mut().tape_mut().unwrap().seek(block);
+        h.run_steps(2);
+        if h.state().tape.following {
+            resumed = true;
+            break;
+        }
+    }
+    assert!(
+        resumed,
+        "the list should follow again once the block being played is in view"
+    );
 }

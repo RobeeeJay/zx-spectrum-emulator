@@ -43,7 +43,9 @@ pub struct RamMapState {
     pixels: Vec<u8>,
     tex: Option<TextureHandle>,
     pub view: View,
-    pub scale: f32,
+    /// How big a byte was drawn last time, in points. A record of what the
+    /// window did rather than a setting: the map is drawn to the width it has.
+    pub drawn_zoom: f32,
     pub show_read: bool,
     pub show_write: bool,
     pub show_exec: bool,
@@ -77,7 +79,7 @@ impl Default for RamMapState {
             pixels: vec![0; 256 * 256 * 4],
             tex: None,
             view: View::AddressSpace,
-            scale: 2.0,
+            drawn_zoom: MIN_ZOOM,
             show_read: true,
             show_write: true,
             show_exec: true,
@@ -209,49 +211,89 @@ fn build_image(app: &mut App) {
     }
 }
 
+/// How big a byte is drawn, in points.
+///
+/// The narrowest a byte is drawn, in points.
+///
+/// The map is drawn to whatever width the window is — it is 256 bytes across
+/// and the window is a fixed width, so the two are the same thing — and this
+/// is only the floor for a window somebody has made very narrow, below which
+/// the map scrolls instead.
+const MIN_ZOOM: f32 = 1.0;
+
+/// How big a byte is drawn, given the width the map has to draw in.
+///
+/// The map is 256 bytes across whatever the view, and the window is a fixed
+/// width, so filling the width is a division. Below one point a byte the map
+/// scrolls instead of shrinking further, since a map nobody can see the
+/// individual bytes of says nothing.
+pub fn zoom_for(room: f32) -> f32 {
+    (room / 256.0).max(MIN_ZOOM)
+}
+
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.label("View:");
-        ui.selectable_value(&mut app.ram.view, View::AddressSpace, "Address space");
-        ui.selectable_value(&mut app.ram.view, View::AllMemory, "All memory")
-            .on_hover_text("Every RAM bank and ROM page, paged in or not");
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Show:");
-        ui.toggle_value(&mut app.ram.show_read, "Read");
-        ui.colored_label(theme::GREEN, "■");
-        ui.toggle_value(&mut app.ram.show_write, "Write");
-        ui.colored_label(theme::RED, "■");
-        ui.toggle_value(&mut app.ram.show_exec, "Execute");
-        ui.colored_label(theme::BLUE, "■");
+        // The theme's own selectable, not egui's: egui leaves the frame off an
+        // unselected button until the pointer arrives, and the stroke it then
+        // draws is a point on each side, so the button grows by two and shoves
+        // everything after it along the row.
+        if theme::selectable(ui, app.ram.view == View::AddressSpace, "Address space").clicked() {
+            app.ram.view = View::AddressSpace;
+        }
+        if theme::selectable(ui, app.ram.view == View::AllMemory, "All memory")
+            .on_hover_text("Every RAM bank and ROM page, paged in or not")
+            .clicked()
+        {
+            app.ram.view = View::AllMemory;
+        }
         ui.separator();
-        ui.toggle_value(&mut app.ram.show_overlays, "Overlays");
+        theme::toggle(ui, &mut app.ram.show_overlays, "Overlays");
     });
-    ui.horizontal_wrapped(|ui| {
-        theme::slider(
+    // Each channel with its own fade beside it: the switch, its colour, and
+    // how long its marks take to fade. The fades used to be three sliders on a
+    // row of their own, where which was which had to be read off their labels.
+    let (mut read, mut write, mut exec) = {
+        let t = app.tracker();
+        (t.fade_read, t.fade_write, t.fade_exec)
+    };
+    let channel =
+        |ui: &mut egui::Ui, on: &mut bool, name: &str, colour: egui::Color32, fade: &mut u8| {
+            theme::toggle(ui, on, name);
+            ui.colored_label(colour, "■");
+            ui.add_enabled_ui(*on, |ui| {
+                theme::slider(ui, egui::Slider::new(fade, 1..=64).text("fade"));
+            });
+        };
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 76.0;
+        channel(ui, &mut app.ram.show_read, "Read", theme::GREEN, &mut read);
+        ui.separator();
+        channel(ui, &mut app.ram.show_write, "Write", theme::RED, &mut write);
+    });
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 76.0;
+        channel(
             ui,
-            egui::Slider::new(&mut app.ram.scale, 0.5..=4.0).text("zoom"),
+            &mut app.ram.show_exec,
+            "Execute",
+            theme::BLUE,
+            &mut exec,
         );
+        ui.separator();
         theme::slider(
             ui,
             egui::Slider::new(&mut app.ram.gain, 0.25..=4.0).text("gain"),
         );
     });
-    ui.horizontal_wrapped(|ui| {
+    {
         let t = app.tracker_mut();
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut t.fade_read, 1..=64).text("read fade"),
-        );
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut t.fade_write, 1..=64).text("write fade"),
-        );
-        theme::slider(
-            ui,
-            egui::Slider::new(&mut t.fade_exec, 1..=64).text("exec fade"),
-        );
-    });
+        t.fade_read = read;
+        t.fade_write = write;
+        t.fade_exec = exec;
+    }
     ui.separator();
 
     build_image(app);
@@ -267,7 +309,14 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         }
     }
 
-    let scale = app.ram.scale;
+    // As wide as the window, since the window is a fixed width and the map is
+    // always 256 bytes across: a byte is drawn as a square of whatever that
+    // divides into. The vertical scrollbar's width comes off first, or the
+    // map would be a hair too wide for its own scroll area and gain a
+    // horizontal scrollbar it has no use for.
+    let room = ui.available_width() - ui.spacing().scroll.bar_width - 2.0;
+    let scale = zoom_for(room);
+    app.ram.drawn_zoom = scale;
     let size = Vec2::new(256.0 * scale, rows as f32 * scale);
     // Scrollable, so the map is still fully reachable at high zoom.
     let (rect, response) = egui::ScrollArea::both()
@@ -340,9 +389,23 @@ pub fn hover_at(app: &App, x: u16, y: usize) -> Option<Hover> {
     }
 }
 
+/// What is under the pointer, on one line.
+///
+/// Truncated rather than allowed to run on. The window is a fixed width and
+/// the line is not: a reading longer than the window made the whole thing
+/// wider than its own viewport, which brought up a horizontal scrollbar,
+/// which took height from the map, which changed the map's size — and the
+/// controls above it moved as the pointer went over the map. That is what
+/// "the buttons jump about on hover" was.
 fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
+    let line = |ui: &mut egui::Ui, text: String| {
+        ui.add(egui::Label::new(egui::RichText::new(text).monospace()).truncate());
+    };
     let Some(hover) = app.ram.hover.clone() else {
-        ui.monospace("hover for details; click to show the address in the debugger");
+        line(
+            ui,
+            "hover for details; click to show the address in the debugger".into(),
+        );
         return;
     };
     let value = match hover.addr {
@@ -355,10 +418,11 @@ fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
         None => "not paged in".to_string(),
     };
     let t = app.tracker();
-    ui.monospace(format!(
+    let text = format!(
         "{} +${:04X} {}  = ${value:02X}   reads {}   writes {}",
         hover.what, hover.offset, where_, t.read_count[hover.phys], t.write_count[hover.phys],
-    ));
+    );
+    line(ui, text);
     if response.clicked() {
         if let Some(addr) = hover.addr {
             app.dbg.follow_pc = false;
@@ -391,11 +455,7 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
 
     if app.on_zx81() {
         zx81_overlays(app, painter, &band, &outline);
-        let py = row_y(app.cpu().pc as u32);
-        painter.line_segment(
-            [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
-            Stroke::new(1.0, Color32::WHITE),
-        );
+        program_counter(app, painter, rect, row_y(app.cpu().pc as u32));
         return;
     }
 
@@ -445,11 +505,25 @@ fn address_space_overlays(app: &App, painter: &egui::Painter, rect: Rect, scale:
         );
     }
 
-    // Where the CPU is right now.
-    let py = row_y(app.cpu().pc as u32);
+    program_counter(app, painter, rect, row_y(app.cpu().pc as u32));
+}
+
+/// Where the CPU is, as a line across the row it is executing in.
+///
+/// Labelled, like everything else drawn over the map. It was a bare white line
+/// that moved up and down as the machine ran, which reads as something wrong
+/// with the window rather than as the one part of the picture that is alive.
+fn program_counter(app: &App, painter: &egui::Painter, rect: Rect, y: f32) {
     painter.line_segment(
-        [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
+        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
         Stroke::new(1.0, Color32::WHITE),
+    );
+    painter.text(
+        egui::pos2(rect.right() - 3.0, y + 1.0),
+        egui::Align2::RIGHT_TOP,
+        format!("PC ${:04X}", app.cpu().pc),
+        egui::FontId::monospace(9.0),
+        Color32::WHITE,
     );
 }
 

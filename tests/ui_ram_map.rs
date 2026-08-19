@@ -1,6 +1,6 @@
 //! RAM access map controls.
 
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use zx_rustrum::machine::Spectrum;
 use zx_rustrum::ui::{App, Roms};
@@ -49,14 +49,96 @@ fn reads_writes_and_executes_can_each_be_toggled() {
 fn each_channel_has_its_own_fade_control() {
     let mut h = harness();
     h.run_steps(3);
-    // A slider contributes more than one node (the drag value and its label),
-    // so count matches rather than expecting exactly one.
-    for l in ["read fade", "write fade", "exec fade"] {
-        assert!(
-            h.query_all_by_label(l).count() > 0,
-            "expected a {l} slider in the RAM map window"
-        );
-    }
+    // A slider contributes two nodes, its drag value and its label, so three
+    // sliders are six of them.
+    assert_eq!(
+        h.query_all_by_label("fade").count(),
+        6,
+        "one fade slider for each of read, write and execute"
+    );
+
+    // Each fade is on its channel's row and to the right of the switch, with
+    // Read and Write sharing a row and Execute on the next with the gain.
+    // They used to be three sliders on a row of their own, where which was
+    // which had to be read off their labels. Everything is matched by row,
+    // since the harness draws the whole application and "Execute" is a word
+    // the debugger uses too.
+    let boxes = |label: &str| -> Vec<(f32, f32)> {
+        h.query_all_by_label(label)
+            .filter_map(|node| node.accesskit_node().bounding_box())
+            .map(|b| (b.x0 as f32, b.y0 as f32))
+            .collect()
+    };
+    let fades = boxes("fade");
+    let switch = |name: &str| -> (f32, f32) {
+        boxes(name)
+            .into_iter()
+            .find(|(_, y)| fades.iter().any(|(_, fy)| (fy - y).abs() < 6.0))
+            .unwrap_or_else(|| panic!("{name} should be on a row with a fade slider"))
+    };
+    let fade_after = |at: (f32, f32)| -> f32 {
+        fades
+            .iter()
+            .filter(|(x, y)| (y - at.1).abs() < 6.0 && *x > at.0)
+            .map(|(x, _)| *x)
+            .fold(f32::MAX, f32::min)
+    };
+    let (read, write, exec) = (switch("Read"), switch("Write"), switch("Execute"));
+    assert!(
+        (read.1 - write.1).abs() < 6.0,
+        "Read and Write share a row: {read:?} {write:?}"
+    );
+    assert!(
+        exec.1 > read.1,
+        "and Execute is on the row below: {exec:?} against {read:?}"
+    );
+    assert!(
+        read.0 < fade_after(read) && fade_after(read) < write.0,
+        "the read fade sits between Read and Write: {read:?} {} {write:?}",
+        fade_after(read)
+    );
+    assert!(
+        fade_after(write) > write.0,
+        "and the write fade after Write: {write:?} {}",
+        fade_after(write)
+    );
+    assert!(
+        fade_after(exec) > exec.0,
+        "and the execute fade after Execute: {exec:?} {}",
+        fade_after(exec)
+    );
+
+    // The gain is the last thing on the Execute row, past its fade.
+    let gain = boxes("gain")
+        .into_iter()
+        .find(|(_, y)| (y - exec.1).abs() < 6.0)
+        .expect("the gain belongs on the Execute row");
+    assert!(
+        gain.0 > fade_after(exec),
+        "and comes after the execute fade: {gain:?}"
+    );
+
+    // Overlays moved up to the view row, beside All memory.
+    let all_memory = boxes("All memory")[0];
+    let overlays = boxes("Overlays")[0];
+    assert!(
+        (overlays.1 - all_memory.1).abs() < 6.0 && overlays.0 > all_memory.0,
+        "Overlays belongs on the view row, after All memory: {overlays:?} \
+         against {all_memory:?}"
+    );
+}
+
+/// The map is drawn at a fixed two points to the byte, so there is no zoom to
+/// set and no slider for it.
+#[test]
+fn the_map_has_no_zoom_control() {
+    let mut h = harness();
+    h.run_steps(3);
+    assert_eq!(
+        h.query_all_by_label("zoom").count(),
+        0,
+        "the zoom slider should be gone"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -211,4 +293,237 @@ fn the_view_can_be_switched_from_the_window() {
     h.get_by_label("Address space").click();
     h.run_steps(3);
     assert!(matches!(h.state().ram.view, View::AddressSpace));
+}
+
+/// The map window is the tape window's width, and the map fills it.
+///
+/// Both windows hold something of a fixed size — the cassette in one, 256
+/// bytes across in the other — so neither has anything to gain from being
+/// dragged wider, and two windows of one width sit together without a ragged
+/// edge. The map is then drawn to whatever that width is rather than to a
+/// zoom somebody has to set.
+#[test]
+fn the_window_is_the_tape_windows_width_and_the_map_fills_it() {
+    use zx_rustrum::ui::cassette::WINDOW_W;
+    use zx_rustrum::ui::ram_map::zoom_for;
+
+    assert_eq!(
+        App::fix_width_of("ram_map"),
+        App::fix_width_of("tape"),
+        "the two windows should be the same width"
+    );
+    assert_eq!(App::fix_width_of("ram_map"), Some(WINDOW_W));
+    assert_eq!(
+        App::fix_width_of("debugger"),
+        None,
+        "and a window with nothing of a fixed size in it is the user's to size"
+    );
+
+    // A byte is a square of whatever 256 divides the room into.
+    let room = WINDOW_W - 24.0;
+    let zoom = zoom_for(room);
+    assert!(
+        (zoom * 256.0 - room).abs() < 0.01,
+        "the map should fill the width it is given: {zoom} x 256 against {room}"
+    );
+    assert!(
+        zoom > 2.0,
+        "which at this width is more than the two points a byte it used to be \
+         fixed at: {zoom}"
+    );
+    assert_eq!(
+        zoom_for(100.0),
+        1.0,
+        "and a window made very narrow scrolls rather than shrinking the bytes \
+         away"
+    );
+
+    // And the map is drawn to the width it is given rather than to a zoom of
+    // its own: widen the space by 300 points and a byte grows by 300/256 of a
+    // point.
+    let drawn_at = |width: f32| -> f32 {
+        let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+        app.show_ram_map = true;
+        app.show_debugger = false;
+        app.show_back_buffer = false;
+        app.show_tape = false;
+        app.running = false;
+        let mut h: Harness<'_, App> = Harness::builder().with_size([width, 900.0]).build_ui_state(
+            |ui, app: &mut App| zx_rustrum::ui::ram_map::ui(app, ui),
+            app,
+        );
+        h.run_steps(3);
+        h.state().ram.drawn_zoom
+    };
+    let (narrow, wide) = (drawn_at(600.0), drawn_at(900.0));
+    assert!(
+        ((wide - narrow) - 300.0 / 256.0).abs() < 0.05,
+        "a byte should grow with the window: {narrow} at 600 points, {wide} at \
+         900"
+    );
+}
+
+/// The view buttons look the same whether the pointer is over them or not.
+///
+/// egui's own selectable button paints no frame while it is unselected and the
+/// pointer is elsewhere, and paints one the moment the pointer arrives: the
+/// outline appears out of nowhere under the cursor, which is what "the buttons
+/// jump about" was. The theme's selectable draws its frame either way.
+///
+/// Layout says nothing about this — the button occupies the same rectangle
+/// throughout — so what is counted is what was painted over it.
+#[test]
+fn the_view_buttons_look_the_same_hovered_or_not() {
+    let frames_over = |h: &Harness<'_, App>, at: egui::Rect| -> usize {
+        h.output()
+            .shapes
+            .iter()
+            .filter(|clipped| matches!(clipped.shape, egui::Shape::Rect(_)))
+            .filter(|clipped| {
+                clipped
+                    .shape
+                    .visual_bounding_rect()
+                    .intersect(at)
+                    .is_positive()
+            })
+            .count()
+    };
+    let button = |h: &Harness<'_, App>| -> egui::Rect {
+        let b = h
+            .get_by_label("Address space")
+            .accesskit_node()
+            .bounding_box()
+            .expect("the view button should be somewhere");
+        egui::Rect::from_min_max(
+            egui::pos2(b.x0 as f32 + 2.0, b.y0 as f32 + 2.0),
+            egui::pos2(b.x1 as f32 - 2.0, b.y1 as f32 - 2.0),
+        )
+    };
+
+    let mut h = harness();
+    h.run_steps(3);
+    let at = button(&h);
+    let cold = frames_over(&h, at);
+    assert!(
+        cold > 0,
+        "the button should be framed with the pointer elsewhere"
+    );
+
+    h.input_mut()
+        .events
+        .push(egui::Event::PointerMoved(at.center()));
+    h.run_steps(3);
+    assert_eq!(
+        frames_over(&h, button(&h)),
+        cold,
+        "and the same number of shapes with the pointer on it"
+    );
+}
+
+/// The controls do not move as the pointer goes over the map.
+///
+/// The line under the map says what is beneath the pointer, and it is longer
+/// than the line that invites you to hover. In a window whose width is fixed,
+/// a line longer than the window made the content wider than its own viewport,
+/// which brought up a horizontal scrollbar, which took height from the map,
+/// which changed the map's size — and everything above it moved. The line is
+/// truncated to the width it has instead.
+#[test]
+fn hovering_the_map_does_not_move_the_controls() {
+    // At the width the window really is, where the readout has room to
+    // overflow: in a wide test window the line fits and nothing moves either
+    // way.
+    let narrow = || -> Harness<'static, App> {
+        let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+        app.show_ram_map = true;
+        app.show_debugger = false;
+        app.show_back_buffer = false;
+        app.show_tape = false;
+        app.running = false;
+        Harness::builder()
+            .with_size([zx_rustrum::ui::cassette::WINDOW_W, 900.0])
+            .build_ui_state(
+                |ui, app: &mut App| zx_rustrum::ui::ram_map::ui(app, ui),
+                app,
+            )
+    };
+    let mut h = narrow();
+    h.run_steps(3);
+    let boxes = |h: &Harness<'_, App>| -> Vec<(f32, f32)> {
+        ["Address space", "All memory", "Overlays", "Read", "Execute"]
+            .into_iter()
+            .map(|label| {
+                let b = h
+                    .get_by_label(label)
+                    .accesskit_node()
+                    .bounding_box()
+                    .expect("it should be somewhere");
+                (b.x0 as f32, b.y0 as f32)
+            })
+            .collect()
+    };
+    let before = boxes(&h);
+
+    // Over the map itself, which is under the controls and above the readout.
+    let below = h
+        .get_by_label("Execute")
+        .accesskit_node()
+        .bounding_box()
+        .map(|b| egui::pos2(b.x0 as f32 + 40.0, b.y1 as f32 + 120.0))
+        .expect("the map is below the Execute row");
+    h.input_mut().events.push(egui::Event::PointerMoved(below));
+    h.run_steps(3);
+
+    assert_eq!(
+        boxes(&h),
+        before,
+        "nothing above the map should have moved when the pointer went over it"
+    );
+    assert!(
+        h.state().ram.hover.is_some(),
+        "and the pointer should have been over the map, or this proves nothing"
+    );
+}
+
+/// The line that moves is the program counter, and it says so.
+///
+/// It was a bare white line running across the map, moving up and down as the
+/// machine ran: with nothing to name it, it reads as something wrong with the
+/// window rather than as the one part of the picture that is alive.
+#[test]
+fn the_moving_line_is_labelled_with_the_program_counter() {
+    let mut h = harness();
+    h.state_mut().spec.cpu.pc = 0x8123;
+    h.run_steps(3);
+
+    let painted: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        painted.iter().any(|t| t == "PC $8123"),
+        "the map should say what the moving line is: {painted:?}"
+    );
+
+    // And it goes when the overlays do.
+    h.get_by_label("Overlays").click();
+    h.run_steps(3);
+    let painted: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !painted.iter().any(|t| t.starts_with("PC $")),
+        "with the overlays off there should be no line to label: {painted:?}"
+    );
 }

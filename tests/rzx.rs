@@ -61,6 +61,28 @@ fn something_that_is_not_a_recording_is_refused() {
     assert!(error.contains("not an RZX"), "{error}");
 }
 
+/// What it ran, not what it was asked for.
+///
+/// Instructions are run whole, so asking for one fetch and getting a prefixed
+/// instruction runs two. A caller playing a recorded frame in several goes
+/// takes the count off what is left of the frame, and a count that stops at
+/// what was asked for loses the overshoot every time — so the frame is thought
+/// to have further to run than it has, and runs on into input that was never
+/// recorded.
+#[test]
+fn a_fetch_count_says_what_was_run() {
+    let mut spec = Spectrum::new();
+    spec.bus.poke(0x8000, 0xED); // LD A,R: the prefix and the opcode
+    spec.bus.poke(0x8001, 0x5F);
+    spec.cpu.pc = 0x8000;
+
+    let (_, ran) = spec.run_fetches(1);
+    assert_eq!(
+        ran, 2,
+        "one fetch was asked for and a two-fetch instruction was run, which is          two fetches however many were wanted"
+    );
+}
+
 /// Playing one back runs the machine along the path it took when it was
 /// recorded, which is what makes it worth having.
 #[test]
@@ -152,7 +174,7 @@ fn notes_are_kept_beside_the_recording() {
     );
 
     // And they go back to the tape's when the recording is stopped.
-    app.stop_recording();
+    app.stop_playback();
     assert_eq!(
         app.notes.file(),
         Some(Notes::sidecar(std::path::Path::new("tapes/somethingelse.tap")).as_path())
@@ -180,8 +202,7 @@ fn a_recording_tells_autodoc_where_the_program_goes() {
         visited.len()
     );
 
-    app.dbg.autodoc = true;
-    app.dbg.follow_pc = true;
+    app.spec.bus.observer.enabled = true;
     let doc = {
         let entries: Vec<u16> = visited.iter().copied().collect();
         let peek = |a: u16| app.peek(a);
@@ -324,4 +345,362 @@ fn every_string(h: &egui_kittest::Harness<'_, App>) -> Vec<String> {
     let mut found = Vec::new();
     walk(&h.root(), &mut found);
     found
+}
+
+/// Opening a recording remembers where it came from, so the next one opens
+/// there. Nothing did, so the picker fell back to wherever a snapshot or a
+/// tape was last opened — which for most people is not where they keep
+/// recordings.
+#[test]
+fn loading_a_recording_remembers_its_directory() {
+    use zx_rustrum::prefs::FileKind;
+
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    assert_ne!(
+        app.prefs.dir_for(FileKind::Recording).map(|d| d.as_path()),
+        Some(std::path::Path::new("recordings")),
+        "the test would prove nothing if it were already set"
+    );
+
+    app.load_path(&path);
+    assert!(app.rzx.is_some(), "the recording should have loaded");
+    assert_eq!(
+        app.prefs.dir_for(FileKind::Recording).map(|d| d.as_path()),
+        Some(std::path::Path::new("recordings")),
+        "and the next Load recording should open where this one came from"
+    );
+}
+
+/// The interrupt a recording asks for is taken, and one the machine misses on
+/// its own is dropped.
+///
+/// The ULA holds the interrupt line down for a few dozen T-states and then
+/// lets it go, so a program with interrupts disabled across the top of a frame
+/// misses that one. That window is measured against the frame while the
+/// machine runs on its own — but a recording's frames are counted in opcode
+/// fetches and wander away from the T-state frame, so there it runs from the
+/// moment the recording asked. Measured against the frame in both worlds, the
+/// interrupt a recording asked for was thrown away as missed and the machine
+/// ran on without ever taking one.
+#[test]
+fn the_interrupt_window_is_timed_from_when_the_line_goes_down() {
+    use zx_rustrum::machine::{Spectrum, IRQ_LEN};
+
+    // EI, then a stretch of NOPs to run through.
+    let mut spec = Spectrum::new();
+    spec.bus.poke(0x8000, 0xFB);
+    for at in 0x8001..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.step_instruction(); // EI, which defers the interrupt by one
+    spec.step_instruction();
+
+    // Well past the top of the frame, where a recording's boundary can fall.
+    while spec.bus.tstates < IRQ_LEN * 4 {
+        spec.step_instruction();
+    }
+    spec.bus.playback = Some(zx_rustrum::machine::Playback::default());
+    spec.bus.raise_interrupt();
+    spec.run_fetches(1);
+    assert_eq!(
+        spec.cpu.pc, 0x0038,
+        "the interrupt was asked for here and should have been taken here"
+    );
+
+    // And one the machine misses on its own is let go, as the ULA lets it go.
+    let mut spec = Spectrum::new();
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.cpu.iff1 = false;
+    spec.bus.raise_interrupt();
+    while spec.bus.tstates < IRQ_LEN * 2 {
+        spec.run_fetches(1);
+    }
+    spec.cpu.iff1 = true;
+    spec.run_fetches(2);
+    assert!(
+        spec.cpu.pc >= 0x8000,
+        "the line was let go long before this, so nothing should be waiting \
+         to fire into ${:04X}",
+        spec.cpu.pc
+    );
+}
+
+/// A recording plays back exactly: every frame the machine reads what the
+/// recording holds for it, and no more. Reading more than was recorded means
+/// the machine has taken a path the recording never took.
+///
+/// Two thousand frames, which is forty seconds of play. They stay in step for
+/// a good deal longer than that — Manic Miner for the whole recording, Space
+/// Harrier for 7,891 frames and Vindicator for 13,328 — and then drift, for
+/// something this does not yet explain. Asserting where they part company
+/// would be writing today's accuracy into a test; asserting a stretch they are
+/// exact over catches the thing that had them adrift by the second frame.
+#[test]
+fn the_recordings_play_back_without_coming_adrift() {
+    for name in ["manic.rzx", "spaceharrier.rzx", "vindicator.zip"] {
+        let path = std::path::PathBuf::from("recordings").join(name);
+        if !path.exists() {
+            continue;
+        }
+        let mut app = app();
+        // The ROM matters: a game with IM 1 spends every frame in the ROM's
+        // interrupt handler, and without one it sits on $FF at $0038 forever.
+        if let Some(rom) = app.roms.rom48.clone() {
+            app.spec.load_rom(&rom);
+        }
+        app.load_path(&path);
+        if app.rzx.is_none() {
+            continue;
+        }
+        // One recording frame per call, so what is left of each frame's input
+        // can be read before the next frame replaces it. Both halves matter:
+        // reading more than was recorded means the machine went somewhere the
+        // recording never went, and reading less means it never got to the
+        // code that reads at all — which is what a missed interrupt looks
+        // like, and which a count of overruns alone would call perfect.
+        let mut unused = 0;
+        for _ in 0..2000 {
+            app.advance(1.0 / 50.0);
+            if let Some(playback) = app.spec.bus.playback.as_ref() {
+                if playback.cursor != playback.inputs.len() {
+                    unused += 1;
+                }
+            }
+        }
+        let played = app.rzx.as_ref().map(|rzx| rzx.frame).unwrap_or(0);
+        assert!(played > 1500, "{name} only played {played} frames");
+        let short = app
+            .spec
+            .bus
+            .playback
+            .as_ref()
+            .map(|playback| playback.short)
+            .unwrap_or(0);
+        assert_eq!(
+            short, 0,
+            "{name} asked for {short} bytes of input the recording did not hold"
+        );
+        assert_eq!(
+            unused, 0,
+            "{name} left the recorded input unread in {unused} of {played} frames"
+        );
+    }
+}
+
+/// A reset puts the T-state counter back to nothing, and the interrupt window
+/// has to go with it.
+///
+/// Timing the ordinary case from a stored moment left that number behind after
+/// a reset — which is what loading a tape does — with the counter back at zero
+/// and the stored moment in the future. The subtraction saturated, nothing was
+/// ever missed, and every interrupt was taken wherever in the frame the
+/// program happened to enable them: a game drawn against the interrupt then
+/// draws against nothing, which looks like the picture tearing itself apart.
+#[test]
+fn a_reset_does_not_leave_the_interrupt_window_open() {
+    use zx_rustrum::machine::{Spectrum, FRAME_T, IRQ_LEN};
+
+    let mut spec = Spectrum::new();
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+
+    // Run for a while, so anything remembered about the interrupt is from a
+    // frame far in the past, and then reset as loading a tape does.
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    for _ in 0..8 {
+        spec.run(FRAME_T);
+    }
+    spec.reset();
+
+    // A program that enables interrupts in the middle of a frame, long after
+    // the ULA would have let the line go.
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.cpu.iff1 = true;
+    // Well past the top of the frame first: an interrupt asked for up there is
+    // taken, and rightly.
+    while spec.bus.tstates < IRQ_LEN * 8 {
+        spec.run_fetches(1);
+    }
+    spec.bus.irq_pending = true;
+    spec.run_fetches(2);
+
+    assert_ne!(
+        spec.cpu.pc, 0x0038,
+        "the line was let go thousands of T-states ago and this interrupt \
+         should have gone with it"
+    );
+}
+
+/// Playing back a recording of a real machine puts nothing on the screen that
+/// comes and goes.
+///
+/// A byte that alternates between two values frame after frame is text or a
+/// sprite being drawn and rubbed out again, which is what flickering looks
+/// like from the inside. SPIN's recording of Space Harrier on real hardware
+/// has none of it, so neither should our replay of it.
+#[test]
+fn a_recording_of_real_hardware_does_not_flicker_on_replay() {
+    let path = std::path::PathBuf::from("recordings/spaceharrier.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    if let Some(rom) = app.roms.rom48.clone() {
+        app.spec.load_rom(&rom);
+    }
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+
+    // Well inside the stretch that replays exactly, and in the game rather
+    // than on a menu.
+    while app.rzx.as_ref().map(|rzx| rzx.frame).unwrap_or(0) < 5000 {
+        app.advance(1.0 / 50.0);
+    }
+
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..10 {
+        app.advance(1.0 / 50.0);
+        frames.push((0x4000..0x5B00u32).map(|at| app.peek(at as u16)).collect());
+    }
+    let flickering = (0..frames[0].len())
+        .filter(|at| {
+            let values: Vec<u8> = frames.iter().map(|frame| frame[*at]).collect();
+            values
+                .windows(3)
+                .all(|three| three[0] == three[2] && three[0] != three[1])
+        })
+        .count();
+
+    assert_eq!(
+        flickering, 0,
+        "{flickering} bytes of the screen went back and forth every frame, and \
+         on the machine this was recorded from none did"
+    );
+}
+
+/// A machine that was paused stays paused when a recording is loaded into it.
+///
+/// Somebody who stopped the machine to look at something has not asked for a
+/// recording to start running the moment it arrives — and the frame it starts
+/// on is worth looking at. A machine that was running plays it straight away,
+/// as before.
+#[test]
+fn a_paused_machine_stays_paused_when_a_recording_is_loaded() {
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+
+    let mut paused = app();
+    paused.running = false;
+    paused.load_path(&path);
+    assert!(paused.rzx.is_some(), "the recording should have loaded");
+    assert!(
+        !paused.running,
+        "it was paused before, so it should still be paused"
+    );
+    assert!(
+        paused.status.contains("paused"),
+        "and say so: {:?}",
+        paused.status
+    );
+
+    // The machine is ready: the snapshot is in and the first frame is waiting.
+    assert_eq!(
+        paused.rzx.as_ref().map(|rzx| rzx.frame),
+        Some(0),
+        "at the first frame of the recording"
+    );
+    assert!(
+        paused.spec.bus.playback.is_some(),
+        "with the recording's input ready to be handed out"
+    );
+
+    // And pressing Run plays it.
+    paused.running = true;
+    for _ in 0..10 {
+        paused.advance(1.0 / 50.0);
+    }
+    assert!(
+        paused.rzx.as_ref().is_some_and(|rzx| rzx.frame > 0),
+        "once started, it should play"
+    );
+
+    // A machine that was running does not stop to ask.
+    let mut running = app();
+    running.running = true;
+    running.load_path(&path);
+    assert!(running.running, "it was running, so it plays straight away");
+}
+
+/// While a recording plays, its frames are the machine's frames.
+///
+/// A recording counts a frame in opcode fetches, and on the machine it was made
+/// on that boundary was the start of a video frame — that is where the ULA's
+/// interrupt came from. Letting the T-state frame run on beside it lets the two
+/// drift apart, and then everything timed against the picture happens at the
+/// wrong height: the interrupt was going off with the beam two hundred lines
+/// down, part-way through the screen it was meant to be starting.
+#[test]
+fn the_recordings_frame_is_the_video_frame() {
+    let path = std::path::PathBuf::from("recordings/manic.rzx");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    if let Some(rom) = app.roms.rom48.clone() {
+        app.spec.load_rom(&rom);
+    }
+    app.load_path(&path);
+    if app.rzx.is_none() {
+        return;
+    }
+    app.running = true;
+
+    // A frame of the recording per call, so each one ends on a boundary the
+    // recording set. The video frame should have started again there.
+    let view = app.view();
+    for n in 0..40 {
+        app.advance(1.0 / 50.0);
+        let t = app.spec.bus.tstates;
+        assert!(
+            t < app.spec.bus.model.t_per_line(),
+            "frame {n} of the recording ended at T {t}, which is {} lines into \
+             a video frame that should have just begun",
+            t / app.spec.bus.model.t_per_line()
+        );
+        let (_, y) = zx_rustrum::screen::pixel_at_t(
+            view,
+            app.spec.bus.first_pixel_t(),
+            app.spec.bus.model.t_per_line(),
+            t,
+        );
+        let line = y - view.border_top as i64;
+        assert!(
+            line < -50,
+            "and the beam should be up in the border above the picture, not on \
+             line {line}"
+        );
+    }
 }

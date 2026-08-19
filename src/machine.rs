@@ -115,6 +115,7 @@ const TABLE_LEN: usize = (FRAME_T_128 + 512) as usize;
 
 /// Slow-motion drawing: stop the CPU after a fixed number of writes to the
 /// watched area so the screen visibly fills in over several host frames.
+#[derive(Clone)]
 pub struct SlowDraw {
     pub enabled: bool,
     /// Writes allowed per host frame before the CPU is parked.
@@ -156,6 +157,7 @@ pub enum Slot {
     Ram(usize),
 }
 
+#[derive(Clone)]
 pub struct SpectrumBus {
     pub model: Model,
     /// 16K (48K machine) or 32K (128K machine) of ROM.
@@ -175,11 +177,44 @@ pub struct SpectrumBus {
 
     pub tracker: Tracker,
 
+    /// What to put back to undo the instruction being executed: the address
+    /// and the byte that was there before each write. Only collected while
+    /// somebody is stepping by hand, since a running machine writes millions
+    /// of bytes a second and none of them is going to be stepped back over.
+    pub undo: Option<Vec<(u16, u8)>>,
+
+    /// When the interrupt line went down, in T-states since the machine
+    /// started, while a recording is playing. The ULA lets it go again after a
+    /// few dozen, and a recording's frame boundary is not the T-state frame's,
+    /// so there it has to be counted from the moment it was asked for.
+    pub irq_raised: u64,
+
+    /// The recording being made, if one is. A frame of an RZX is a number of
+    /// opcode fetches and the bytes every IN in that stretch gave back, and
+    /// neither can be worked out after the fact.
+    pub capture: Option<crate::rzx::Capture>,
+
     /// T-states elapsed in the current frame.
+    ///
+    /// The ULA's clock, always: the frame is 69,888 of these on a 48K whatever
+    /// the CPU is doing, and every table indexed by it — the contention
+    /// pattern, the floating bus, the beam — means what it always did. What a
+    /// faster CPU changes is how many of its own cycles fit into one of these,
+    /// not how many of these there are.
     pub tstates: u32,
     pub frame: u64,
     /// True while the ULA is asserting /INT for this frame.
     pub irq_pending: bool,
+    /// How many times the CPU's clock the machine's own: 1 is the machine as
+    /// built, and 2, 4 or 8 an accelerator. See `docs/cpu-turbo.md`.
+    pub turbo: u32,
+    /// CPU cycles run but not yet paid for in ULA time.
+    ///
+    /// A cycle costs `1 / turbo` of a T-state, and a T-state is the smallest
+    /// thing the ULA has: the remainder is carried from one instruction to the
+    /// next rather than rounded away, so a million cycles at 8× cost exactly
+    /// an eighth of a million T-states.
+    cpu_debt: u32,
 
     pub border: u8,
     /// Border colour at the start of the frame, plus every mid-frame change,
@@ -197,6 +232,35 @@ pub struct SpectrumBus {
     /// of the screen the beam has not reached yet can show what is still on
     /// the glass rather than what the CPU has since written.
     pub screen_prev: Vec<u8>,
+    /// The frame as the ULA has painted it so far: each line copied out of the
+    /// display file at the moment the beam reached it.
+    ///
+    /// A game that races the beam writes to a line just after the beam has
+    /// passed it and puts it back before the beam comes round again, so the
+    /// display file at any one moment is not what a television showed. Reading
+    /// it at whatever moment the window repaints makes such a line blink.
+    pub painted: Vec<u8>,
+    /// How each of this frame's cells was disturbed, if it was: [`SNOW`] or
+    /// [`DOUBLE`], one byte a cell.
+    ///
+    /// Empty until something makes the screen snow, which is rare — a program
+    /// has to point I into the screen's own RAM — and cleared as it is used.
+    snow: Vec<u8>,
+    /// How many marks are in `snow`, so a frame with none costs nothing.
+    snow_marks: u32,
+    /// For a cell lost to snow, the byte that replaced the low half of the
+    /// address the ULA read from — the R register as it stood.
+    snow_r: Vec<u8>,
+    /// How many character cells of this frame have been copied into `painted`,
+    /// counting across each line and then down.
+    ///
+    /// A cell rather than a whole line: the ULA fetches a cell every four
+    /// T-states, and a game racing the beam writes to a cell the moment that
+    /// cell has been fetched — often several times within one line. Copying a
+    /// whole line the moment the beam entered it took the version from before
+    /// any of those writes, which is a frame late for every sprite drawn
+    /// behind the beam within a line.
+    painted_cells: u32,
     /// Keyboard matrix: one byte per half-row, bit clear = key down.
     pub keys: [u8; 8],
     pub ear: bool,
@@ -205,11 +269,23 @@ pub struct SpectrumBus {
 
     pub audio: Audio,
 
+    /// The last byte written to port $FE, which the EAR input hears through
+    /// the loudspeaker when no tape is playing.
+    pub last_fe: u8,
+    /// Whether the MIC bit feeds back as well as the speaker's, which is what
+    /// an issue 2 board does. On by default: a tape protection that listens
+    /// for the line to be alive hears nothing on a dead one, and the tape it
+    /// is listening to is still rolling on a real machine long after its last
+    /// block — which no tape file has anything to say about.
+    pub issue2: bool,
     /// Cassette player. Its EAR output is read through port $FE bit 6.
     pub tape: Option<Tape>,
     /// Run faster while the tape is playing, so loading does not take the
     /// same four minutes it did in 1983.
     pub tape_boost: bool,
+    /// Hand whole blocks to the ROM's loader instead of playing them, so a
+    /// tape loads in the time it takes to copy it. See [`crate::flashload`].
+    pub tape_flash: bool,
 
     /// Scratch space for tape edges on their way to the mixer.
     tape_edge_scratch: Vec<(u64, bool)>,
@@ -222,6 +298,11 @@ pub struct SpectrumBus {
     /// Opcode fetches since the machine started, which is how a recording
     /// measures the length of a frame.
     pub fetches: u32,
+    /// Which parts of the picture were written behind the beam and which
+    /// ahead of it, while anybody is watching. `None` is not watching, which
+    /// is every case but Race the Beam: marking every write costs a branch and
+    /// a couple of stores on the busiest path there is.
+    pub tints: Option<Tints>,
     /// What each routine is seen to do, while it is switched on.
     pub observer: crate::observe::Observer,
     /// What the debugger is watching for, and what it caught. The bus is
@@ -253,22 +334,36 @@ impl SpectrumBus {
             late_timing: false,
             slots: [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)],
             tracker: Tracker::new(),
+            snow: Vec::new(),
+            snow_r: Vec::new(),
+            snow_marks: 0,
+            tints: None,
+            undo: None,
+            capture: None,
+            irq_raised: 0,
             tstates: 0,
             frame: 0,
             irq_pending: false,
+            turbo: 1,
+            cpu_debt: 0,
             border: 7,
             border_start: 7,
             border_events: Vec::with_capacity(4096),
             border_prev: Vec::with_capacity(4096),
             border_prev_start: 7,
             screen_prev: vec![0; 6912],
+            painted: vec![0; 6912],
+            painted_cells: 0,
             keys: [0xff; 8],
             ear: false,
             speaker: false,
             mic: false,
             audio: Audio::new(model.cpu_hz()),
             tape: None,
+            last_fe: 0,
+            issue2: true,
             tape_boost: true,
+            tape_flash: false,
             tape_edge_scratch: Vec::new(),
             slow: SlowDraw::default(),
             screen_writes: 0,
@@ -325,7 +420,7 @@ impl SpectrumBus {
         [[0, 1, 2, 3], [4, 5, 6, 7], [4, 5, 6, 3], [4, 7, 6, 3]];
 
     /// Recompute the four 16K slots from the paging registers.
-    fn apply_paging(&mut self) {
+    pub(crate) fn apply_paging(&mut self) {
         if !self.model.has_paging() {
             self.slots = [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)];
             return;
@@ -430,6 +525,219 @@ impl SpectrumBus {
             .unwrap_or(0)
     }
 
+    /// Copy out every line the beam has passed since this was last asked.
+    ///
+    /// Called before anything writes to the screen, and again at the end of the
+    /// frame: between those two, nothing can change a line without the version
+    /// the beam saw having been kept first.
+    pub fn catch_up_painting(&mut self) {
+        let reached = self.cells_reached();
+        self.paint_cells_to(reached);
+    }
+
+    /// Copy cells into the painted frame up to, but not including, `upto`.
+    fn paint_cells_to(&mut self, upto: u32) {
+        let snowing = self.snow_marks > 0;
+        while self.painted_cells < upto {
+            let line = (self.painted_cells / 32) as u16;
+            let cell = (self.painted_cells % 32) as u16;
+            // The display file's thirds-and-rows order, and the attribute
+            // that goes with the cell.
+            let from = ((line & 0xc0) << 5) | ((line & 0x07) << 8) | ((line & 0x38) << 2);
+            let attr = 0x1800 + (line / 8) * 32;
+            // How the ULA's fetch went. Nearly every frame has nothing wrong
+            // with it, and this runs six thousand times a frame, so the empty
+            // case does no work.
+            let disturbed = if snowing {
+                self.snow
+                    .get(self.painted_cells as usize)
+                    .copied()
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let (bitmap, attribute) = match disturbed {
+                // Read from the wrong address: bits 6..0 of R stand in for
+                // the low seven of it, so the byte comes from somewhere else
+                // in the same part of the screen — which is why snow is made
+                // of the program's own graphics rather than of noise. The
+                // coincidence is with one fetch, and that fetch is a pixel
+                // one; the attribute is read a T-state later and is fine.
+                SNOW => {
+                    let r = self.snow_r[self.painted_cells as usize] as u16;
+                    let wrong = ((from + cell) & 0xff80) | (r & 0x7f);
+                    (self.video(wrong), self.video(attr + cell))
+                }
+                // Not fetched at all: what went out was the cell before it,
+                // which is why it shows as a repeated bar.
+                DOUBLE => (
+                    self.painted[(from + cell - 1) as usize],
+                    self.painted[(attr + cell - 1) as usize],
+                ),
+                _ => (self.video(from + cell), self.video(attr + cell)),
+            };
+            self.painted[(from + cell) as usize] = bitmap;
+            self.painted[(attr + cell) as usize] = attribute;
+            // The beam has now put this byte out, so whatever was written
+            // there has been shown and there is nothing left to say about it.
+            if let Some(tints) = self.tints.as_mut() {
+                tints.clear(from + cell);
+                if line.is_multiple_of(8) {
+                    tints.clear(attr + cell);
+                }
+            }
+            self.painted_cells += 1;
+        }
+    }
+
+    /// The CPU has put `addr` on the bus for a refresh.
+    ///
+    /// The ULA shares the lower RAM with the CPU and tells the two apart by
+    /// watching the address bus. A refresh address in that RAM — which is I in
+    /// $40..$7F on a 48K, and also $C0..$FF on a 128K with a contended page
+    /// banked at $C000 — arrives once per instruction and disturbs the fetch
+    /// the ULA is making. Which way it is disturbed depends on where in the
+    /// ULA's eight-T-state cycle the last T-state of the M1 falls:
+    ///
+    /// - on the third, where the first cell of the pair is fetched, that fetch
+    ///   is made from the wrong address: bits 6..0 of R are picked up into the
+    ///   low byte of it. That is the snow, and it is made of the program's own
+    ///   graphics — the same 256 bytes of the screen, the wrong one of them.
+    /// - on the fifth, where the second cell is fetched, it is not fetched at
+    ///   all and the first cell goes out again in its place. That is the
+    ///   "double effect", and it shows as an eight-pixel bar repeated.
+    ///
+    /// The reference counts the ULA's cycle from two T-states before the first
+    /// fetch of the pair, so its third and fifth are the two fetches this
+    /// emulator counts as the first and third T-states of the eight.
+    ///
+    /// Only where there is a shared bus to be confused about: the +2A and +3
+    /// gate array drives it itself and does neither.
+    pub fn refresh(&mut self, addr: u16) {
+        if !self.model.has_floating_bus() || !self.contended_addr(addr) {
+            return;
+        }
+        // The M1 cycle has already been counted, so its last T-state — the one
+        // that has to coincide with the ULA's — is one back from here.
+        let at = self.tstates.wrapping_sub(1);
+        let Some((cell, kind)) = self.disturbed_cell(at) else {
+            return;
+        };
+        // A cell the beam has already been over cannot be disturbed: the ULA
+        // read it before the CPU got here.
+        if cell < self.painted_cells {
+            return;
+        }
+        if self.snow.is_empty() {
+            self.snow = vec![0; (192 * 32) as usize];
+            self.snow_r = vec![0; (192 * 32) as usize];
+        }
+        if self.snow[cell as usize] == 0 {
+            self.snow_marks += 1;
+        }
+        self.snow[cell as usize] = kind;
+        // The low byte of the address the ULA reads from, when it is snow.
+        self.snow_r[cell as usize] = addr as u8;
+    }
+
+    /// How many of each kind, for tests: (snow, double).
+    pub fn snow_kinds(&self) -> (u32, u32) {
+        let snow = self.snow.iter().filter(|k| **k == SNOW).count() as u32;
+        let double = self.snow.iter().filter(|k| **k == DOUBLE).count() as u32;
+        (snow, double)
+    }
+
+    /// How many of this frame's fetches have been disturbed, for tests and for
+    /// anybody wondering why the picture looks like that.
+    pub fn snow_marks(&self) -> u32 {
+        self.snow_marks
+    }
+
+    /// Which cell the ULA is fetching at T-state `at`, and how a refresh
+    /// landing there disturbs it.
+    ///
+    /// The ULA works in pairs of cells over eight T-states: the first cell's
+    /// bitmap and attribute, then the second's, then four T-states with the
+    /// bus left alone. Counting from one as the reference does, the third
+    /// T-state is where the second cell's bitmap is fetched and the fifth is
+    /// the first idle one.
+    fn disturbed_cell(&self, at: u32) -> Option<(u32, u8)> {
+        let first = self.first_pixel_t();
+        let since = at.checked_sub(first + 1)?;
+        let per_line = self.model.t_per_line();
+        let line = since / per_line;
+        if line >= 192 {
+            return None;
+        }
+        let along = since % per_line;
+        if along >= 128 {
+            return None;
+        }
+        let pair = (along / 8) * 2;
+        match along % 8 {
+            2 => Some((line * 32 + pair + 1, SNOW)),
+            4 => Some((line * 32 + pair + 1, DOUBLE)),
+            _ => None,
+        }
+    }
+
+    /// Has the beam already put this byte of the display file out this frame?
+    ///
+    /// An attribute byte covers eight lines and is fetched again on every one
+    /// of them, so it counts as passed once the beam has started the row: a
+    /// write after that point is late for at least part of what it governs.
+    fn beam_has_passed(&self, offset: u16) -> bool {
+        let cell = (offset & 31) as u32;
+        let line = if offset < 0x1800 {
+            // Undo the display file's thirds-and-rows order.
+            ((offset >> 8) & 0x07) | ((offset >> 2) & 0x38) | ((offset >> 5) & 0xc0)
+        } else {
+            (offset - 0x1800) / 32 * 8
+        } as u32;
+        self.painted_cells > line * 32 + cell
+    }
+
+    /// How many character cells of the picture the ULA has fetched.
+    ///
+    /// One every four T-states along a line, thirty-two to a line, and the
+    /// fetch runs two T-states ahead of the pixels it puts out.
+    fn cells_reached(&self) -> u32 {
+        let first = self.first_pixel_t();
+        if self.tstates + 2 < first {
+            return 0;
+        }
+        let since = self.tstates + 2 - first;
+        let per_line = self.model.t_per_line();
+        let line = since / per_line;
+        if line >= 192 {
+            return 192 * 32;
+        }
+        let along = (since % per_line) / 4;
+        (line * 32 + along.min(32)).min(192 * 32)
+    }
+
+    /// Read a byte of the frame the ULA is painting now.
+    ///
+    /// Up to where the beam has reached this is this frame; past it, it is
+    /// still the frame before, because the buffer is painted over rather than
+    /// cleared. That is what racing the beam wants behind the cursor: the
+    /// raster effect as it is being built, running into what it looked like
+    /// last time round.
+    pub fn video_painting(&self, offset: u16) -> u8 {
+        self.painted
+            .get(offset as usize & 0x1fff)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Read a byte of the frame as the ULA painted it.
+    pub fn video_painted(&self, offset: u16) -> u8 {
+        self.screen_prev
+            .get(offset as usize & 0x1fff)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Read a byte of the displayed screen, wherever it is banked.
     #[inline]
     pub fn video(&self, offset: u16) -> u8 {
@@ -500,10 +808,33 @@ impl SpectrumBus {
     /// they are paged in.
     #[inline]
     fn contended_addr(&self, addr: u16) -> bool {
+        // An accelerated machine is not sharing the ULA's bus on the ULA's
+        // terms any more, and the switch exists to get work done rather than
+        // to reproduce a stall. At 1× every delay is exactly what it was.
+        if self.turbo > 1 {
+            return false;
+        }
         match self.slot_of(addr) {
             Slot::Ram(bank) => self.model.bank_is_contended(bank),
             Slot::Rom(_) => false,
         }
+    }
+
+    /// Charge the ULA's clock for cycles of the CPU's.
+    ///
+    /// At 1× they are the same clock and this adds what it is given. Above it,
+    /// the cycles are divided and what does not divide is carried: the ULA has
+    /// nothing smaller than a T-state, and a fraction of one thrown away every
+    /// instruction is a machine running slower than it says it does.
+    #[inline]
+    fn cpu_cycles(&mut self, cycles: u32) {
+        if self.turbo <= 1 {
+            self.tstates += cycles;
+            return;
+        }
+        self.cpu_debt += cycles;
+        self.tstates += self.cpu_debt / self.turbo;
+        self.cpu_debt %= self.turbo;
     }
 
     // ---- timing ------------------------------------------------------------
@@ -515,7 +846,7 @@ impl SpectrumBus {
         if self.contended_addr(addr) {
             self.tstates += self.delay() as u32;
         }
-        self.tstates += t;
+        self.cpu_cycles(t);
     }
 
     /// Internal cycles: the address stays on the bus, so contention is
@@ -524,10 +855,13 @@ impl SpectrumBus {
     fn contend_addr(&mut self, addr: u16, times: u32) {
         if self.contended_addr(addr) {
             for _ in 0..times {
-                self.tstates += self.delay() as u32 + 1;
+                // The stall is the ULA's and the cycle is the CPU's, so they
+                // are charged to their own clocks rather than added together.
+                self.tstates += self.delay() as u32;
+                self.cpu_cycles(1);
             }
         } else {
-            self.tstates += times;
+            self.cpu_cycles(times);
         }
     }
 
@@ -536,8 +870,14 @@ impl SpectrumBus {
         let t = self.tstates as usize;
         if t < self.contention.len() {
             self.contention[t]
-        } else {
+        } else if self.contention.is_empty() {
             0
+        } else {
+            // Past the end of the frame, which only happens while a recording
+            // is playing and its frame is running long. The ULA has gone round
+            // again and is contending the next frame's display, so the pattern
+            // repeats rather than stopping.
+            self.contention[t % self.contention.len()]
         }
     }
 
@@ -554,34 +894,34 @@ impl SpectrumBus {
             (true, true) => {
                 self.io_stall();
                 let sampled = self.tstates;
-                self.tstates += 1;
+                self.cpu_cycles(1);
                 self.io_stall();
-                self.tstates += 3;
+                self.cpu_cycles(3);
                 sampled
             }
             // C:1, C:1, C:1, C:1
             (true, false) => {
                 self.io_stall();
                 let sampled = self.tstates;
-                self.tstates += 1;
+                self.cpu_cycles(1);
                 for _ in 0..3 {
                     self.io_stall();
-                    self.tstates += 1;
+                    self.cpu_cycles(1);
                 }
                 sampled
             }
             // N:1, C:3 — the ULA stalls the CPU even for an uncontended page.
             (false, true) => {
-                self.tstates += 1;
+                self.cpu_cycles(1);
                 self.io_stall();
                 let sampled = self.tstates;
-                self.tstates += 3;
+                self.cpu_cycles(3);
                 sampled
             }
             // N:4
             (false, false) => {
                 let sampled = self.tstates;
-                self.tstates += 4;
+                self.cpu_cycles(4);
                 sampled
             }
         }
@@ -589,6 +929,10 @@ impl SpectrumBus {
 
     #[inline]
     fn io_stall(&mut self) {
+        // The same switch as the memory contention: nothing above 1×.
+        if self.turbo > 1 {
+            return;
+        }
         self.tstates += self.delay() as u32;
     }
 
@@ -635,10 +979,20 @@ impl SpectrumBus {
         self.tape_advance()
     }
 
+    /// The EAR level as it stood at T-state `at`, which is where the ULA put
+    /// it on the bus rather than where the instruction ended.
+    pub fn tape_level_at(&mut self, at: u64) -> bool {
+        self.tape_advance_to(at)
+    }
+
     /// Advance the tape to the present, mixing in every edge it produced at
     /// the T-state it happened, and return the resulting EAR level.
     fn tape_advance(&mut self) -> bool {
-        let now = self.total_t();
+        self.tape_advance_to(self.total_t())
+    }
+
+    /// The same, at a given T-state rather than at the present one.
+    fn tape_advance_to(&mut self, now: u64) -> bool {
         if self.tape.is_none() {
             return self.ear;
         }
@@ -670,9 +1024,17 @@ impl SpectrumBus {
     /// Keep the tape running even when the CPU is not polling the port, so the
     /// oscilloscope and block position stay live.
     pub fn tape_tick(&mut self) {
-        if self.tape_playing() {
+        // Also while the tape is merely paused, if the head is still on it:
+        // the hiss goes on, and the scope has nothing to draw unless somebody
+        // keeps asking the deck what it can hear.
+        if self.tape_playing() || self.tape.as_ref().is_some_and(|t| t.head_down) {
             self.tape_advance();
         }
+        // The hiss goes to the loudspeaker as a level rather than as edges: a
+        // quiet one never crosses the reader's threshold, so through a gap
+        // there would be nothing to hear, and a tape with the volume up hisses
+        // through its gaps.
+        self.audio.tape_hiss = self.tape.as_ref().map_or(0.0, |t| t.audible_hiss());
     }
 
     pub fn tape_playing(&self) -> bool {
@@ -752,6 +1114,18 @@ impl SpectrumBus {
         v
     }
 
+    /// What bit 6 reads back when no tape is playing.
+    ///
+    /// The EAR input is not dead with the tape stopped: the machine hears its
+    /// own loudspeaker. On an issue 3 board bit 6 follows bit 4 of the last
+    /// write to $FE, and on an issue 2 it follows bit 3 as well — which is
+    /// what a loader is asking about when it writes to the port and reads
+    /// straight back.
+    fn ear_feedback(&self) -> bool {
+        let mask = if self.issue2 { 0x18 } else { 0x10 };
+        self.last_fe & mask != 0
+    }
+
     /// The floating bus: what the ULA had on the bus at T-state `t`.
     /// The +2A/+3 has none, so it reads back as $FF.
     fn floating_bus(&self, t: u32) -> u8 {
@@ -779,26 +1153,70 @@ impl SpectrumBus {
             1 => screen_attr_offset(line as u16, cell),
             2 => screen_bitmap_offset(line as u16, cell + 1),
             3 => screen_attr_offset(line as u16, cell + 1),
-            _ => return 0xff,
+            // The four T-states in eight when the ULA is not fetching. The bus
+            // is not driven then, and what is on it is the last byte the ULA
+            // put there — the attribute of the second cell of the pair. It
+            // does not read back as $FF: an IO read is stalled to a free slot
+            // before it samples, so every such read landed in here, and a game
+            // that waits for a particular byte to come back waited for ever.
+            _ => screen_attr_offset(line as u16, cell + 1),
         };
         self.video(offset)
     }
 
     /// End-of-frame bookkeeping: flush sound, re-arm the interrupt.
+    /// Put the interrupt line down, and note when: the ULA lets it go again
+    /// after a few dozen T-states whether anything took it or not.
+    pub fn raise_interrupt(&mut self) {
+        self.irq_pending = true;
+        self.irq_raised = self.total_t();
+    }
+
+    /// End the video frame here, wherever the T-state count has got to.
+    ///
+    /// For a recording, whose frames are counted in opcode fetches: on the
+    /// machine it was made on, that boundary *was* the start of a video frame,
+    /// because that is where the ULA's interrupt came from. Letting the
+    /// T-state frame run on its own beside it lets the two drift apart, and
+    /// then everything timed against the picture — which is most of what a
+    /// game does with the border and the display file — happens at the wrong
+    /// place on screen.
+    pub fn end_frame_here(&mut self) {
+        // Whatever is left of this T-state frame is the start of the next one.
+        self.tstates = 0;
+        self.finish_frame();
+    }
+
     pub fn end_frame(&mut self) {
         self.tstates -= self.model.frame_t();
+        self.finish_frame();
+    }
+
+    /// The housekeeping a finished frame needs, however it ended.
+    fn finish_frame(&mut self) {
+        // Whatever the beam had left to paint, so the frame handed on is a
+        // whole one.
+        self.paint_cells_to(192 * 32);
+        // Snow belongs to the frame it happened in.
+        if self.snow_marks > 0 {
+            self.snow.iter_mut().for_each(|mark| *mark = 0);
+            self.snow_marks = 0;
+        }
         self.frame += 1;
         // While a recording is playing, the frame boundary is where the
         // recording says it is — an instruction count, not a T-state count —
         // so the interrupt is raised there instead of here.
         self.irq_pending = self.playback.is_none();
+        if let Some(capture) = &mut self.capture {
+            capture.end_frame(self.fetches);
+        }
         self.screen_writes = self.screen_writes_acc;
         self.screen_writes_acc = 0;
-        // Keep the finished frame; the renderer needs it for the part of the
-        // screen the ULA has not redrawn yet.
-        let bank = self.screen_bank() * 0x4000;
-        self.screen_prev
-            .copy_from_slice(&self.ram[bank..bank + 6912]);
+        // Keep the finished frame: what the ULA painted, line by line, rather
+        // than what the display file holds now. A game that races the beam has
+        // already rubbed out the lines it drew before the beam reached them.
+        self.screen_prev.copy_from_slice(&self.painted);
+        self.painted_cells = 0;
         std::mem::swap(&mut self.border_events, &mut self.border_prev);
         self.border_prev_start = self.border_start;
         self.border_start = self.border;
@@ -833,6 +1251,10 @@ pub fn screen_attr_addr(line: u16, cell: u16) -> u16 {
 }
 
 impl Bus for SpectrumBus {
+    fn refresh(&mut self, addr: u16) {
+        SpectrumBus::refresh(self, addr);
+    }
+
     fn fetch_op(&mut self, addr: u16) -> u8 {
         // Counted for RZX playback, which measures a frame in opcode fetches:
         // a prefixed instruction is two or more of them, so counting whole
@@ -853,12 +1275,48 @@ impl Bus for SpectrumBus {
         self.mem(addr)
     }
 
+    fn read_operand(&mut self, addr: u16) -> u8 {
+        // Timed exactly as a read, because that is what the Z80 does; counted
+        // as code, because that is what it is.
+        self.access(addr, 3);
+        let phys = self.phys_index(addr);
+        self.tracker.on_read(phys, addr);
+        self.observer.on_fetch(addr);
+        self.mem(addr)
+    }
+
     fn write(&mut self, addr: u16, value: u8) {
         self.access(addr, 3);
         let phys = self.phys_index(addr);
         self.tracker.on_write(phys, addr);
-        self.observer.on_write(addr);
+        self.observer.on_write(addr, value);
+        if self.undo.is_some() {
+            // What was there before, so it can be put back. Read before the
+            // write rather than worked out afterwards, because afterwards it
+            // is gone. A write into ROM changes nothing and undoes to the same
+            // nothing, so it needs no special case.
+            let was = self.mem(addr);
+            if let Some(undo) = self.undo.as_mut() {
+                undo.push((addr, was));
+            }
+        }
         if (SCREEN_START..SCREEN_END).contains(&addr) {
+            // Whatever the beam has already put out is kept before this write
+            // can change it: a game racing the beam rubs a line out the moment
+            // it has been painted.
+            self.catch_up_painting();
+            if self.tints.is_some() {
+                let offset = addr - SCREEN_START;
+                let kind = if self.beam_has_passed(offset) {
+                    Tint::Late
+                } else {
+                    Tint::Early
+                };
+                let now = self.total_t();
+                if let Some(tints) = self.tints.as_mut() {
+                    tints.mark(offset, kind, now);
+                }
+            }
             self.screen_writes_acc += 1;
             if self.breaks.screen {
                 self.break_hit.get_or_insert(Event::Screen(addr));
@@ -882,38 +1340,24 @@ impl Bus for SpectrumBus {
     }
 
     fn io_read(&mut self, port: u16) -> u8 {
-        let sampled = self.contend_io(port);
-        self.observer.on_port(port, false);
-        // A recording replaces the hardware, not just the keyboard: the
-        // floating bus, the tape and the sound chip all read back what they
-        // read back on the day.
-        if let Some(playback) = &mut self.playback {
-            let byte = playback.next();
-            if self.breaks.ay && self.model.has_ay() && port & 0xc002 == 0xc000 {
-                self.break_hit.get_or_insert(Event::Ay);
-            }
-            return byte;
+        let byte = self.io_read_uncaptured(port);
+        if let Some(capture) = &mut self.capture {
+            // Every byte an IN gave back, in order: that is what playing the
+            // recording hands out again, in place of the hardware.
+            capture.inputs.push(byte);
         }
-        // AY register read: $FFFD.
-        if self.model.has_ay() && port & 0xc002 == 0xc000 {
-            if self.breaks.ay {
-                self.break_hit.get_or_insert(Event::Ay);
-            }
-            return self.audio.ay.read();
-        }
-        if port & 1 == 0 {
-            let ear = self.tape_level();
-            self.keyboard(port, ear)
-        } else {
-            self.floating_bus(sampled)
-        }
+        byte
     }
 
     fn io_write(&mut self, port: u16, value: u8) {
         let sampled = self.contend_io(port);
         self.observer.on_port(port, true);
+        if self.breaks.port_out {
+            self.break_hit.get_or_insert(Event::Out(port, value));
+        }
 
         if port & 1 == 0 {
+            self.last_fe = value;
             let new = value & 7;
             if new != self.border && self.border_events.len() < BORDER_EVENT_CAP {
                 // Timed at the start of the IORQ cycle, which is when the ULA
@@ -1008,12 +1452,22 @@ pub struct Breaks {
     /// Moving about within the ROM is not entering it, so a ROM routine
     /// calling another one does not count.
     pub rom: bool,
+    /// Any IN at all: a program reading a port, whichever port it is.
+    pub port_in: bool,
+    /// Any OUT at all.
+    pub port_out: bool,
 }
 
 impl Breaks {
     /// Whether anything at all is being watched.
     pub fn any(&self) -> bool {
-        self.screen || self.beeper || self.ay || self.interrupt || self.rom
+        self.screen
+            || self.beeper
+            || self.ay
+            || self.interrupt
+            || self.rom
+            || self.port_in
+            || self.port_out
     }
 }
 
@@ -1055,6 +1509,10 @@ pub enum Event {
     Interrupt,
     /// Went into the ROM from this address.
     Rom(u16),
+    /// Read a port, and which.
+    In(u16),
+    /// Wrote to a port, and what.
+    Out(u16, u8),
 }
 
 impl Event {
@@ -1066,10 +1524,36 @@ impl Event {
             Event::Ay => "Used the sound chip".to_string(),
             Event::Interrupt => "Took the frame interrupt".to_string(),
             Event::Rom(from) => format!("Went into the ROM from ${from:04X}"),
+            Event::In(port) => format!("Read port ${port:04X}"),
+            Event::Out(port, value) => format!("Wrote ${value:02X} to port ${port:04X}"),
         }
     }
 }
 
+/// Everything needed to put the machine back the way it was before one
+/// instruction.
+///
+/// Not a copy of the machine: that would be sixty-four kilobytes of RAM a
+/// step, plus the tape, the audio and everything the observer has watched. An
+/// instruction writes a byte or two, so what it changed is small even when the
+/// machine is not.
+///
+/// What is not put back: the sound already played, where the tape has reached,
+/// and anything the ULA has already painted. Those are outside the machine's
+/// memory and cannot be recalled; the picture catches up on the next frame.
+#[derive(Clone)]
+pub struct Undo {
+    pub cpu: Z80,
+    /// Each address written, and the byte that was there before.
+    pub writes: Vec<(u16, u8)>,
+    pub tstates: u32,
+    pub border: u8,
+    pub page_reg: u8,
+    pub page_reg_1ffd: u8,
+    pub frames_completed: u32,
+}
+
+#[derive(Clone)]
 pub struct Spectrum {
     pub cpu: Z80,
     pub bus: SpectrumBus,
@@ -1087,6 +1571,72 @@ impl Default for Spectrum {
         Self::new()
     }
 }
+
+/// When a byte of the display file was written, relative to the beam.
+///
+/// Writing to a part of the picture the ULA has already put out means the
+/// change will not be seen until the next frame; writing to a part it has not
+/// reached yet means it will be seen in this one. Which of the two a game is
+/// doing is the difference between a sprite that appears and a sprite that
+/// flickers, and neither shows up in a finished picture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Tint {
+    /// Nothing has been written here, or the beam has since been over it.
+    #[default]
+    None,
+    /// Written after the beam had passed: too late for this frame.
+    Late,
+    /// Written before the beam got there: it will be shown this frame.
+    Early,
+}
+
+/// The marks on the display file, one per byte of it.
+#[derive(Clone, Debug)]
+pub struct Tints {
+    kind: Vec<Tint>,
+    /// When each was written, in T-states since the machine started.
+    when: Vec<u64>,
+}
+
+impl Default for Tints {
+    fn default() -> Self {
+        Tints {
+            kind: vec![Tint::None; 0x1b00],
+            when: vec![0; 0x1b00],
+        }
+    }
+}
+
+impl Tints {
+    /// The mark on a byte of the display file, and when it was made.
+    pub fn at(&self, offset: u16) -> (Tint, u64) {
+        let at = offset as usize & 0x1fff;
+        match (self.kind.get(at), self.when.get(at)) {
+            (Some(kind), Some(when)) => (*kind, *when),
+            _ => (Tint::None, 0),
+        }
+    }
+
+    fn mark(&mut self, offset: u16, kind: Tint, when: u64) {
+        let at = offset as usize & 0x1fff;
+        if at < self.kind.len() {
+            self.kind[at] = kind;
+            self.when[at] = when;
+        }
+    }
+
+    fn clear(&mut self, offset: u16) {
+        let at = offset as usize & 0x1fff;
+        if at < self.kind.len() {
+            self.kind[at] = Tint::None;
+        }
+    }
+}
+
+/// A fetch made from the wrong address, the low half of it the R register.
+pub const SNOW: u8 = 1;
+/// A fetch not made at all, the cell before it put out again instead.
+pub const DOUBLE: u8 = 2;
 
 /// Where the ROM ends and RAM begins, on every machine here.
 const ROM_END: u16 = 0x4000;
@@ -1122,6 +1672,8 @@ impl Spectrum {
         let tape = self.bus.tape.take();
         let audio = std::mem::replace(&mut self.bus.audio, crate::audio::Audio::new(1.0));
         let tape_boost = self.bus.tape_boost;
+        let turbo = self.bus.turbo;
+        let tape_flash = self.bus.tape_flash;
         let slow_enabled = self.bus.slow.enabled;
         let late = self.bus.late_timing;
 
@@ -1133,6 +1685,8 @@ impl Spectrum {
         self.bus.audio.ay.reset();
         self.bus.tape = tape;
         self.bus.tape_boost = tape_boost;
+        self.bus.turbo = turbo;
+        self.bus.tape_flash = tape_flash;
         self.bus.slow.enabled = slow_enabled;
         self.load_rom(rom);
         self.reset();
@@ -1167,8 +1721,28 @@ impl Spectrum {
 
     fn check_interrupt(&mut self) {
         if self.bus.irq_pending {
-            if self.bus.tstates >= IRQ_LEN {
-                // Missed the window entirely.
+            // The ULA holds the interrupt line down for thirty-odd T-states
+            // and then lets it go, so a program with interrupts disabled
+            // across the top of the frame misses that one entirely.
+            //
+            // Measured against the frame while the machine runs on its own,
+            // which is where the ULA measures it from. A recording's frames
+            // are counted in opcode fetches and wander away from the T-state
+            // frame, so there the window runs from the moment the recording
+            // asked for the interrupt.
+            //
+            // Two rules rather than one clock for both. Timing the ordinary
+            // case from a stored T-state as well left that number behind after
+            // a reset — which is what loading a tape does — with the counter
+            // back at zero and the stored moment in the future, so the
+            // subtraction saturated, nothing was ever missed, and every
+            // interrupt was taken wherever in the frame the program happened
+            // to enable them.
+            let missed = match self.bus.playback {
+                None => self.bus.tstates >= IRQ_LEN,
+                Some(_) => self.bus.total_t().saturating_sub(self.bus.irq_raised) >= IRQ_LEN as u64,
+            };
+            if missed {
                 self.bus.irq_pending = false;
             } else if self.cpu.interrupt(&mut self.bus) {
                 self.bus.irq_pending = false;
@@ -1195,7 +1769,54 @@ impl Spectrum {
     }
 
     /// Execute exactly one instruction (after any pending interrupt).
+    /// One instruction, with what it took to get there kept so it can be
+    /// undone. Only used while somebody is stepping by hand.
+    pub fn step_recording(&mut self) -> Undo {
+        let before = Undo {
+            cpu: self.cpu.clone(),
+            writes: Vec::new(),
+            tstates: self.bus.tstates,
+            border: self.bus.border,
+            page_reg: self.bus.page_reg,
+            page_reg_1ffd: self.bus.page_reg_1ffd,
+            frames_completed: self.frames_completed,
+        };
+        self.bus.undo = Some(Vec::new());
+        self.step_instruction();
+        let writes = self.bus.undo.take().unwrap_or_default();
+        Undo { writes, ..before }
+    }
+
+    /// Put the machine back as it was before that instruction.
+    ///
+    /// The paging registers go back first, so the addresses that were written
+    /// mean the same thing again before anything is written to them.
+    pub fn undo_step(&mut self, undo: &Undo) {
+        self.bus.page_reg = undo.page_reg;
+        self.bus.page_reg_1ffd = undo.page_reg_1ffd;
+        if self.bus.model.has_paging() {
+            self.bus.apply_paging();
+        }
+        for (addr, was) in undo.writes.iter().rev() {
+            self.bus.poke(*addr, *was);
+        }
+        self.cpu = undo.cpu.clone();
+        self.bus.tstates = undo.tstates;
+        self.bus.border = undo.border;
+        self.frames_completed = undo.frames_completed;
+    }
+
     pub fn step_instruction(&mut self) {
+        // Answering the ROM's loader is done in place of the instruction at
+        // its first address, so the routine never runs at all. One comparison
+        // when the switch is off, and it is only on while somebody is loading
+        // a tape in a hurry.
+        if self.bus.tape_flash
+            && self.cpu.pc == crate::flashload::LD_BYTES
+            && crate::flashload::load_block(self) != crate::flashload::Loaded::NotOurs
+        {
+            return;
+        }
         self.check_interrupt();
 
         let watching = self.profiler.running || self.bus.observer.enabled || self.bus.breaks.rom;
@@ -1209,6 +1830,11 @@ impl Spectrum {
         // needed while it is on, and it is one comparison when it is not.
         let was_outside_rom = self.bus.breaks.rom && self.cpu.pc >= ROM_END;
 
+        if self.bus.observer.enabled {
+            // Before the instruction runs: a port is touched part-way through
+            // one, and the observer needs to know which instruction that was.
+            self.bus.observer.executing = pc0;
+        }
         self.cpu.step(&mut self.bus);
 
         // Going into the ROM from outside it is a program calling a ROM
@@ -1218,7 +1844,13 @@ impl Spectrum {
             self.bus.break_hit.get_or_insert(Event::Rom(pc0));
         }
 
-        if self.bus.tstates >= self.bus.frame_t() {
+        // A recording's frame is the video frame, so while one is playing the
+        // frame ends where the recording says and nowhere else. Ending it on
+        // the T-state count as well paints the screen twice inside one
+        // recorded frame whenever the machine takes longer over the recorded
+        // instructions than the machine that recorded them did — which is
+        // what the flicker in Space Harrier's recording was.
+        if self.bus.playback.is_none() && self.bus.tstates >= self.bus.frame_t() {
             self.bus.end_frame();
             self.frames_completed += 1;
         }
@@ -1254,9 +1886,16 @@ impl Spectrum {
                 };
                 let pushed = stack_word(sp1);
                 let popped = stack_word(sp0);
+                // The first two bytes of the instruction that ran: enough to
+                // tell an unconditional jump from a conditional one, which the
+                // stack pointer cannot say since neither touches it.
+                let opcode = [
+                    self.bus.peek_raw(pc0),
+                    self.bus.peek_raw(pc0.wrapping_add(1)),
+                ];
                 self.bus
                     .observer
-                    .on_instruction(pc0, sp0, pc1, sp1, registers, |a| {
+                    .on_instruction(pc0, sp0, pc1, sp1, registers, opcode, |a| {
                         if a == sp1 {
                             pushed
                         } else {
@@ -1344,7 +1983,13 @@ impl Spectrum {
                 return (Stop::Breakpoint(pc), done);
             }
         }
-        (Stop::Budget, done_now(&self.bus).min(fetches))
+        // The true count, which can be more than was asked for: instructions
+        // are run whole, and a prefixed one is two fetches or more. Reporting
+        // the budget instead loses the overshoot, and a caller running a
+        // recorded frame in several goes then thinks the frame has further to
+        // run than it has — so it runs on and reads input that was never
+        // recorded.
+        (Stop::Budget, done_now(&self.bus))
     }
 
     /// True when the instruction at `pc` is one that "step over" should run to
@@ -1361,6 +2006,50 @@ impl Spectrum {
                 0xb0 | 0xb1 | 0xb2 | 0xb3 | 0xb8 | 0xb9 | 0xba | 0xbb
             ),
             _ => false,
+        }
+    }
+}
+
+impl SpectrumBus {
+    /// What an IN gives back, before the recording is told about it.
+    fn io_read_uncaptured(&mut self, port: u16) -> u8 {
+        let sampled = self.contend_io(port);
+        self.observer.on_port(port, false);
+        if self.breaks.port_in {
+            self.break_hit.get_or_insert(Event::In(port));
+        }
+        // A recording replaces the hardware, not just the keyboard: the
+        // floating bus, the tape and the sound chip all read back what they
+        // read back on the day.
+        if let Some(playback) = &mut self.playback {
+            let byte = playback.next();
+            if self.breaks.ay && self.model.has_ay() && port & 0xc002 == 0xc000 {
+                self.break_hit.get_or_insert(Event::Ay);
+            }
+            return byte;
+        }
+        // AY register read: $FFFD.
+        if self.model.has_ay() && port & 0xc002 == 0xc000 {
+            if self.breaks.ay {
+                self.break_hit.get_or_insert(Event::Ay);
+            }
+            return self.audio.ay.read();
+        }
+        if port & 1 == 0 {
+            let playing = self.tape.as_ref().is_some_and(|t| t.playing);
+            // At the T-state the ULA put the byte on the bus, not at the end
+            // of the instruction: the contention stall comes before that
+            // point, so reading the tape afterwards samples it late by however
+            // much the ULA happened to stall this particular read.
+            let at = self.frame * self.model.frame_t() as u64 + sampled as u64;
+            let ear = if playing {
+                self.tape_level_at(at)
+            } else {
+                self.ear_feedback()
+            };
+            self.keyboard(port, ear)
+        } else {
+            self.floating_bus(sampled)
         }
     }
 }

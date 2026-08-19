@@ -548,3 +548,104 @@ fn each_rom_of_a_paged_machine_has_its_own_symbols() {
         "a 48K has no ROM to choose between: {names:?}"
     );
 }
+
+/// Port $FE is the border, the beeper, the MIC socket and the keyboard at
+/// once. What the code does with the byte is the whole of the evidence: bit 6
+/// is the EAR line and only the tape has any use for it.
+#[test]
+fn the_tape_is_told_from_the_keyboard_by_the_bit_it_tests() {
+    let (label, comment) = routine(&[
+        0xDB, 0xFE, // IN A,($FE)
+        0xE6, 0x40, // AND $40 — the EAR line
+        0x28, 0xFA, // JR Z,-6
+        0xC9,
+    ]);
+    assert_eq!(label, "load_from_tape", "said {comment:?}");
+    assert!(comment.contains("EAR"), "{comment:?}");
+}
+
+/// A keyboard read puts a half-row mask in the high byte of the port address.
+#[test]
+fn the_keyboard_is_told_by_its_half_row_mask() {
+    let (label, comment) = routine(&[
+        0x01, 0xFE, 0x7F, // LD BC,$7FFE — one row
+        0xDB, 0xFE, // IN A,($FE)
+        0xC9,
+    ]);
+    assert_eq!(label, "read_keys", "said {comment:?}");
+    assert!(comment.contains("half-row"), "{comment:?}");
+}
+
+/// And the beeper by the bit it toggles.
+#[test]
+fn the_beeper_is_told_by_the_bit_it_toggles() {
+    let (label, _) = routine(&[
+        0xEE, 0x10, // XOR $10 — the speaker
+        0xD3, 0xFE, // OUT ($FE),A
+        0x10, 0xFA, // DJNZ -6
+        0xC9,
+    ]);
+    assert_eq!(label, "play_sound");
+}
+
+/// With nothing to say which of the four it is, nothing is claimed. Guessing
+/// here is what had the ROM's tape loader filed under the keyboard.
+#[test]
+fn port_fe_with_no_other_evidence_claims_nothing() {
+    let (label, comment) = routine(&[
+        0xDB, 0xFE, // IN A,($FE)
+        0x4F, // LD C,A
+        0xC9,
+    ]);
+    assert_eq!(label, "reads_port_fe");
+    assert!(
+        comment.contains("nothing here to say which"),
+        "it should admit what it does not know: {comment:?}"
+    );
+}
+
+/// A conditional return is a guard clause, not the end of a routine.
+///
+/// The test used to be "starts with RET and has no comma in it", meant to tell
+/// `RET` from `RET cc` — but a conditional return is written `RET Z`, with no
+/// comma anywhere. Anything beginning with a guard was therefore read as four
+/// instructions, which is most of a game: DRAWHG in Manic Miner came out as
+/// four instructions instead of 109.
+#[test]
+fn a_conditional_return_does_not_end_a_routine() {
+    use zx_rustrum::autodoc::ends_routine;
+
+    for text in ["RET", "RETI", "RETN"] {
+        assert!(ends_routine(text), "{text} is the end of a routine");
+    }
+    for text in [
+        "RET Z", "RET NZ", "RET C", "RET NC", "RET PO", "RET PE", "RET P", "RET M",
+    ] {
+        assert!(!ends_routine(text), "{text} is a guard clause, not the end");
+    }
+
+    // And a routine that starts with one is read past it.
+    let features = read_routine(
+        &|a: u16| {
+            let code: [u8; 8] = [
+                0xFE, 0xFF, // CP $FF
+                0xC8, // RET Z      <- a guard, not the end
+                0x21, 0x00, 0x40, // LD HL,$4000
+                0x36, 0xC9, // LD (HL),$C9
+            ];
+            code.get(a.wrapping_sub(0x8000) as usize)
+                .copied()
+                .unwrap_or(0xC9)
+        },
+        0x8000,
+    );
+    assert!(
+        features.length > 3,
+        "stopped after {} instructions, so the guard is still ending it",
+        features.length
+    );
+    assert!(
+        features.constants.contains(&0x4000),
+        "the code after the guard was never read"
+    );
+}

@@ -1,7 +1,9 @@
 //! egui front end: main window plus the detachable debug viewports.
 
 pub mod back_buffer;
+pub mod callflow;
 pub mod cassette;
+pub mod crt;
 pub mod debugger;
 pub mod profiler;
 pub mod ram_map;
@@ -13,7 +15,7 @@ use eframe::egui;
 use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportId};
 
 use crate::audio_out::AudioOut;
-use crate::machine::{Model, Spectrum, Stop};
+use crate::machine::{self, Model, Spectrum, Stop};
 use crate::prefs::{FileKind, Prefs, WindowRect};
 use crate::screen;
 use crate::snapshot;
@@ -23,6 +25,71 @@ use crate::zx81::{self, Zx81};
 fn beam_at(bus: &crate::machine::SpectrumBus, view: screen::View, px: usize, py: usize) -> u32 {
     let t = screen::t_at_pixel(view, bus.first_pixel_t(), bus.model.t_per_line(), px, py);
     t.clamp(0, bus.frame_t() as i64 - 1) as u32
+}
+
+/// Draw the ULA's beam over the picture: a line along what it is painting now
+/// and a bright point where it has got to.
+///
+/// The line rather than only the point, because a point moving two pixels a
+/// T-state is a speck nobody can follow; the line says which raster line the
+/// machine is working on, which is what somebody watching a screen being
+/// drawn wants to know.
+fn draw_beam(
+    painter: &egui::Painter,
+    bus: &crate::machine::SpectrumBus,
+    view: screen::View,
+    picture: egui::Rect,
+    scale: f32,
+) {
+    let (x, y) = screen::pixel_at_t(
+        view,
+        bus.first_pixel_t(),
+        bus.model.t_per_line(),
+        bus.tstates,
+    );
+    let (width, height) = (
+        (view.border_x * 2 + 256) as i64,
+        (view.border_top + 192 + view.border_bottom) as i64,
+    );
+    let at = |px: f32, py: f32| picture.min + egui::vec2(px * scale, py * scale);
+
+    // Where it is, in the machine's own terms, so it can be read rather than
+    // judged by eye. The line is counted from the first line of the display,
+    // so the top border is negative — which is where the beam is when the
+    // frame interrupt goes off.
+    let line = y - view.border_top as i64;
+    painter.text(
+        picture.min + egui::vec2(4.0, 4.0),
+        egui::Align2::LEFT_TOP,
+        format!("T {} · line {line}", bus.tstates),
+        egui::FontId::monospace(11.0),
+        egui::Color32::from_rgba_unmultiplied(255, 240, 180, 200),
+    );
+
+    // Off the picture is where the beam really is during the flyback and the
+    // top border a cropped view does not show, and drawing it at the edge
+    // would say it was somewhere it is not.
+    if y < 0 || y >= height {
+        return;
+    }
+    let row = egui::Rect::from_min_max(at(0.0, y as f32), at(width as f32, y as f32 + 1.0));
+    painter.rect_filled(
+        row,
+        0.0,
+        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 36),
+    );
+
+    if (0..width).contains(&x) {
+        // Two pixels wide: that is how much of the line goes out in one
+        // T-state, so it is as narrow as the beam can honestly be drawn.
+        let spot =
+            egui::Rect::from_min_max(at(x as f32, y as f32), at(x as f32 + 2.0, y as f32 + 1.0));
+        painter.rect_filled(
+            spot,
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(255, 240, 180, 220),
+        );
+    }
 }
 
 /// ROM images found at startup, used when switching machines.
@@ -141,6 +208,72 @@ pub fn zoom_label(scale: f32) -> String {
     }
 }
 
+/// What the clock can be wound up to, as multiples of the machine's own.
+///
+/// A machine's clock is its clock — everything about the ULA is counted in
+/// T-states of it — so a faster one is the same machine running quicker rather
+/// than a different machine. The steps are doublings because that is what the
+/// hardware which did this offered: 3.5, 7, 14 and 28MHz, each the one before
+/// it twice over.
+pub const CLOCK_MULTIPLES: &[f32] = &[1.0, 2.0, 4.0, 8.0];
+
+/// Why the switches that change the picture's size cannot be moved while a
+/// video is being written.
+pub const HELD_WHILE_RECORDING: &str =
+    "Held while a video is being recorded: the file is one size throughout, \
+     and changing it part way would shear the picture from there on. Stop the \
+     recording to change it. Composite can be switched either way.";
+
+/// Whether the clock is offered in the window.
+///
+/// Not at the moment. What it does is speed the whole machine, ULA included,
+/// so the interrupt comes twice as often at twice the clock and a game reading
+/// the frame counter runs fast rather than smoothly. An accelerator that
+/// leaves the video at 50Hz is a different thing — the CPU's clock and the
+/// ULA's stop being one clock, which is a change to how time is kept here
+/// rather than a multiplier on it. The machinery stays, and the switch comes
+/// back when it is that.
+pub const SHOW_CLOCK: bool = true;
+
+/// The clock dropdown: the machine's own speed, and multiples of it.
+///
+/// In MHz rather than in multiples, since that is what a clock is measured in,
+/// and worked out from whichever machine is running: a 48K's own is 3.5MHz and
+/// a 128K's 3.5469, so "twice" is a different number on each.
+/// What one entry of the clock dropdown says.
+///
+/// The machine's own clock is marked, because "3.50MHz" means nothing to
+/// somebody who does not already know what a 48K runs at — and knowing which
+/// one is the machine as built is the difference between choosing a speed and
+/// wondering whether the emulator is lying about something.
+pub fn clock_option_label(mult: f32, base: f64) -> String {
+    let hz = format!("{:.2}MHz", base * mult as f64 / 1_000_000.0);
+    if mult <= 1.0 {
+        format!("{hz}  (default)")
+    } else {
+        format!("{hz}  ({mult:.0}x)")
+    }
+}
+
+pub fn clock_dropdown(mult: &mut f32, base: f64, ui: &mut egui::Ui) {
+    // The button carries the clock alone; the list says which is the machine's
+    // own and what each of the others is a multiple of.
+    let closed = format!("{:.2}MHz", base * *mult as f64 / 1_000_000.0);
+    theme::dropdown(ui, 88.0, closed, |ui| {
+        for m in CLOCK_MULTIPLES {
+            if ui
+                .selectable_label(
+                    (*mult - m).abs() < f32::EPSILON,
+                    clock_option_label(*m, base),
+                )
+                .clicked()
+            {
+                *mult = *m;
+            }
+        }
+    });
+}
+
 /// The speed presets, as a dropdown. The slider beside it still takes any
 /// value; the list is for the ones worth a single click.
 pub fn speed_dropdown(speed: &mut f32, ui: &mut egui::Ui) {
@@ -148,7 +281,16 @@ pub fn speed_dropdown(speed: &mut f32, ui: &mut egui::Ui) {
         .iter()
         .find(|(_, mult)| (*speed - mult).abs() < f32::EPSILON)
         .map(|(name, _)| (*name).to_string())
-        .unwrap_or_else(|| format!("{:.0}%", *speed * 100.0));
+        // Racing runs at four thousandths of speed, which rounds to "0%".
+        .unwrap_or_else(|| {
+            if (*speed - RACE_SPEED).abs() < f32::EPSILON {
+                "5s/frame".to_string()
+            } else if *speed < 0.01 {
+                format!("{:.1}%", *speed * 100.0)
+            } else {
+                format!("{:.0}%", *speed * 100.0)
+            }
+        });
     theme::dropdown(ui, 74.0, selected, |ui| {
         for (name, mult) in SPEED_PRESETS {
             if ui
@@ -187,6 +329,11 @@ const MAX_RECORDED_FRAMES: f32 = 24.0;
 /// document a program, not enough to grow without limit over a long recording.
 const VISITED_CAP: usize = 4096;
 
+/// How many hand-stepped instructions can be stepped back over. Enough to see
+/// how the machine got where it is, which is what stepping back is for; a
+/// hundred would be a recording, and there is one of those already.
+pub const REWIND: usize = 20;
+
 pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("1%", 0.01),
     ("5%", 0.05),
@@ -195,8 +342,42 @@ pub const SPEED_PRESETS: [(&str, f32); 8] = [
     ("50%", 0.5),
     ("100%", 1.0),
     ("200%", 2.0),
-    ("Max", 20.0),
+    ("Max", MAX_SPEED),
 ];
+
+/// How much emulated time Fastload will do in one host frame before it
+/// stops to draw, in frames of the machine's own.
+const FASTLOAD_FRAMES: u32 = 24;
+
+/// And how much of the host's time it will spend doing it. The window has to
+/// go on answering while it works, so it stops to draw twenty times a second —
+/// which is still a hundred times the machine time Max speed manages.
+const FASTLOAD_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// How much of a hurry the tape is loaded in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hurry {
+    /// At the speed it was recorded at.
+    Normal,
+    /// The machine flat out while the tape moves.
+    Max,
+    /// And blocks handed to the ROM's loader rather than played at all.
+    Fastload,
+}
+
+/// How long a write stays marked before it has blended into the colour it
+/// should be, in seconds of the user's time. Long enough to see where a write
+/// landed while the frame it landed in is still on screen.
+pub const TINT_SECONDS: f32 = 2.0;
+
+/// Five seconds to a frame: 0.02s of machine time in 5s of ours. Slow enough
+/// that a frame's drawing can be followed by eye, which is the only speed at
+/// which watching the beam tells anybody anything.
+pub const RACE_SPEED: f32 = 0.02 / 5.0;
+
+/// As fast as the emulator will go. The work per host frame is capped as well,
+/// so this is a ceiling rather than a promise.
+pub const MAX_SPEED: f32 = 20.0;
 
 /// Putting a window back where it was left takes a few frames, and sometimes
 /// does not take at all.
@@ -267,6 +448,9 @@ pub struct App {
     pub show_ram_map: bool,
     pub show_debugger: bool,
     pub show_back_buffer: bool,
+    /// The program's loop, drawn.
+    pub show_callflow: bool,
+    pub callflow: callflow::CallFlowState,
     /// Memory read as graphics.
     pub show_sprites: bool,
     pub sprites: sprites::SpriteView,
@@ -275,14 +459,63 @@ pub struct App {
 
     screen_pixels: Vec<u8>,
     screen_tex: Option<TextureHandle>,
+    /// Whether the picture is shown on a tube: the curve of the glass and the
+    /// gaps between the lines.
+    pub crt: bool,
+    /// Whether it arrives as composite video: colour smeared sideways, and the
+    /// dot crawl the subcarrier beats against the dot clock. A monitor fed RGB
+    /// had the tube and none of this, so it is a switch of its own — but only
+    /// with the tube, since the aerial lead led to a television.
+    pub composite: bool,
+    /// The televised picture, kept between frames so it is not reallocated.
+    crt_pixels: Vec<u8>,
+    /// Whether the texture that exists was made with a gap under every line,
+    /// which is what decides its height.
+    crt_drawn: bool,
+    /// The video file being written, while one is.
+    pub video: Option<crate::video_out::Recording>,
+    /// Emulated frames that have gone by without a frame of video written for
+    /// them.
+    ///
+    /// The window repaints when the window system says so — sixty times a
+    /// second on this screen, or not at all while it is behind another window
+    /// — and the machine draws fifty. Writing a frame per repaint puts the
+    /// wrong number of frames in the file and everything in it happens at the
+    /// wrong speed; counting the machine's frames and writing that many is
+    /// what makes a second of the file a second of the machine.
+    video_due: f64,
+    /// Which machine frame the last one was counted at.
+    video_at: u64,
+    /// How many times the machine's own clock it is being run at. One is the
+    /// machine as it was built; the rest are the same machine running quicker,
+    /// which is what an accelerator did.
+    pub clock_mult: f32,
     pub scale: f32,
     /// Show the whole overscan area, or crop the border to television size.
     pub overscan: bool,
-    /// Follow the raster with the mouse: everything up to the cursor is this
-    /// frame, the rest is what was on screen before.
-    pub race_the_beam: bool,
+    /// Follow the raster with the mouse: the frame is replayed from its
+    /// interrupt to wherever the cursor is.
+    pub cursor_beam: bool,
     /// Beam position under the cursor last frame, in T-states.
     pub beam_t: Option<u32>,
+    /// Run at five seconds a frame with the picture fading behind the beam,
+    /// so a frame can be watched being drawn.
+    pub racing: bool,
+    /// How bright a pixel is left by the time the beam comes round to it
+    /// again, as a fraction of how bright it was drawn.
+    pub fade_floor: f32,
+    /// The speed to go back to when racing is switched off.
+    speed_before_race: f32,
+    /// Whether the deck stopping itself has already been mentioned, so it is
+    /// said once rather than sixty times a second.
+    said_tape_stopped: bool,
+    /// How well the deck is asked to behave. Kept here rather than on the deck
+    /// so that it survives one tape being taken out and another put in.
+    pub quality: crate::tape::Quality,
+    /// The frame being raced: a copy of the machine taken at the interrupt,
+    /// run forward to wherever the cursor is. Only ever set while the machine
+    /// is stopped.
+    pub race: Option<crate::race::Race>,
 
     pub ram: ram_map::RamMapState,
     pub dbg: debugger::DebuggerState,
@@ -291,6 +524,13 @@ pub struct App {
     pub profiler: profiler::ProfilerWindowState,
 
     pub last_stop: Option<Stop>,
+    /// The last few instructions stepped by hand, newest last, so they can be
+    /// stepped back over. What each one holds is what it changed rather than a
+    /// copy of the machine.
+    pub rewind: std::collections::VecDeque<crate::machine::Undo>,
+    /// The machine as it was when recording started, waiting to be written
+    /// into the file when it stops.
+    pub recording_from: Option<Vec<u8>>,
     /// Emulated T-states left over from the previous host frame.
     leftover: f32,
 
@@ -350,15 +590,31 @@ impl App {
             show_ram_map: true,
             show_debugger: true,
             show_back_buffer: false,
+            show_callflow: false,
+            callflow: callflow::CallFlowState::default(),
             show_sprites: false,
             sprites: sprites::SpriteView::default(),
             show_tape: false,
             show_profiler: false,
             screen_pixels: vec![0; screen::View::OVERSCAN.buffer_len()],
             screen_tex: None,
+            crt: false,
+            composite: false,
+            crt_pixels: Vec::new(),
+            crt_drawn: false,
+            video: None,
+            video_due: 0.0,
+            video_at: 0,
+            clock_mult: 1.0,
             scale: 2.0,
             overscan: true,
-            race_the_beam: false,
+            cursor_beam: false,
+            racing: false,
+            fade_floor: 0.5,
+            speed_before_race: 1.0,
+            said_tape_stopped: false,
+            quality: crate::tape::Quality::default(),
+            race: None,
             beam_t: None,
             ram: ram_map::RamMapState::default(),
             dbg: debugger::DebuggerState::default(),
@@ -366,6 +622,8 @@ impl App {
             tape: tape::TapeWindowState::default(),
             profiler: profiler::ProfilerWindowState::default(),
             last_stop: None,
+            rewind: std::collections::VecDeque::new(),
+            recording_from: None,
             leftover: 0.0,
             status_is_error: false,
             title_shown: String::new(),
@@ -582,13 +840,176 @@ impl App {
         let layout = egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true);
         ui.allocate_ui_with_layout(row, layout, |ui| {
             theme::group_label(ui, "Windows");
-            ui.toggle_value(&mut self.show_ram_map, "RAM map");
-            ui.toggle_value(&mut self.show_debugger, "Debugger");
-            ui.toggle_value(&mut self.show_tape, "Tape");
-            ui.toggle_value(&mut self.show_back_buffer, "Back buffer");
-            ui.toggle_value(&mut self.show_sprites, "Sprites");
-            ui.toggle_value(&mut self.show_profiler, "Profiler");
+            theme::toggle(ui, &mut self.show_ram_map, "RAM map");
+            theme::toggle(ui, &mut self.show_debugger, "Debugger");
+            theme::toggle(ui, &mut self.show_tape, "Tape");
+            theme::toggle(ui, &mut self.show_back_buffer, "Back buffer");
+            theme::toggle(ui, &mut self.show_sprites, "Graphics");
+            theme::toggle(ui, &mut self.show_callflow, "Call flow");
+            theme::toggle(ui, &mut self.show_profiler, "Profiler");
         });
+    }
+
+    /// Start recording what the machine does, from where it is now.
+    ///
+    /// The snapshot is taken first: a recording is a machine to start from and
+    /// then every byte read from a port after it, and one without the first is
+    /// a list of numbers.
+    pub fn start_recording(&mut self) {
+        if self.rzx.is_some() {
+            self.set_status("A recording is already playing".to_string(), true);
+            return;
+        }
+        self.recording_from = Some(snapshot::save_sna(&self.spec));
+        self.spec.bus.capture = Some(crate::rzx::Capture {
+            start_t: self.spec.bus.tstates,
+            mark: self.spec.bus.fetches,
+            ..Default::default()
+        });
+        self.set_status("Recording".to_string(), false);
+    }
+
+    /// How many frames have been recorded so far, if anything is being.
+    pub fn recorded_frames(&self) -> Option<usize> {
+        self.spec
+            .bus
+            .capture
+            .as_ref()
+            .map(|capture| capture.frames.len())
+    }
+
+    /// Stop recording and hand back the file's bytes, or nothing if there was
+    /// nothing to record.
+    pub fn stop_recording(&mut self) -> Option<Vec<u8>> {
+        let capture = self.spec.bus.capture.take()?;
+        let snapshot = self.recording_from.take();
+        if capture.frames.is_empty() {
+            self.set_status("Nothing was recorded".to_string(), true);
+            return None;
+        }
+        let recording = crate::rzx::Recording {
+            creator: APP_NAME.to_string(),
+            snapshot: snapshot.map(|data| crate::rzx::Snapshot {
+                extension: "sna".to_string(),
+                data,
+            }),
+            frames: capture.frames,
+            start_t: capture.start_t,
+        };
+        Some(crate::rzx::write(&recording))
+    }
+
+    /// Where a recording should go by default: beside the tape that is in the
+    /// deck, under the same name. A machine with nothing loaded has nothing to
+    /// be named after, so it gets a plain one.
+    pub fn recording_path(&self) -> std::path::PathBuf {
+        match &self.tape_path {
+            Some(path) => path.with_extension("rzx"),
+            None => std::path::PathBuf::from("recording.rzx"),
+        }
+    }
+
+    /// Where a snapshot should go by default: beside the tape in the deck,
+    /// under the same name. A machine with nothing loaded has nothing to be
+    /// named after, so it gets a plain one.
+    pub fn snapshot_path(&self) -> std::path::PathBuf {
+        match &self.tape_path {
+            Some(path) => path.with_extension("sna"),
+            None => std::path::PathBuf::from("snapshot.sna"),
+        }
+    }
+
+    /// Write the machine as it stands out as a `.sna`.
+    ///
+    /// A snapshot is the machine's registers and its RAM, and nothing about
+    /// where the tape had reached or what the sound was doing: those are not
+    /// in the format, and a snapshot that claimed to hold them would be
+    /// lying about what comes back.
+    pub fn save_snapshot(&mut self) {
+        if self.on_zx81() {
+            self.set_status("The ZX81 has no snapshot format here".to_string(), true);
+            return;
+        }
+        let bytes = snapshot::save_sna(&self.spec);
+        let suggested = self.snapshot_path();
+        let dialog = rfd::FileDialog::new()
+            .add_filter("Snapshot", &["sna"])
+            .set_file_name(
+                suggested
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "snapshot.sna".to_string()),
+            );
+        let directory = suggested
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.prefs.dir_for(FileKind::Snapshot).cloned())
+            .filter(|dir| dir.is_dir());
+        let dialog = match directory {
+            Some(dir) => dialog.set_directory(dir),
+            None => dialog,
+        };
+        let Some(path) = dialog.save_file() else {
+            self.set_status("Snapshot not saved".to_string(), false);
+            return;
+        };
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => {
+                self.prefs.remember_file(FileKind::Snapshot, &path);
+                self.set_status(
+                    format!("Wrote {} ({} bytes)", path.display(), bytes.len()),
+                    false,
+                );
+            }
+            Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
+        }
+    }
+
+    /// Stop recording and ask where to put it.
+    ///
+    /// The dialog opens beside the tape in the deck, under the same name with
+    /// an `.rzx` on it, which is where somebody would go looking for a
+    /// recording of that game.
+    pub fn save_recording(&mut self) {
+        let Some(bytes) = self.stop_recording() else {
+            return;
+        };
+        let suggested = self.recording_path();
+        let dialog = rfd::FileDialog::new().set_file_name(
+            suggested
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "recording.rzx".to_string()),
+        );
+        // Beside the tape if there is one, and otherwise wherever the last
+        // recording went.
+        let directory = suggested
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.prefs.dir_for(FileKind::Recording).cloned())
+            .filter(|dir| dir.is_dir());
+        let dialog = match directory {
+            Some(dir) => dialog.set_directory(dir),
+            None => dialog,
+        };
+        let Some(path) = dialog.save_file() else {
+            self.set_status("Recording thrown away".to_string(), true);
+            return;
+        };
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => {
+                // Where recordings go, for the next time one is opened or
+                // written.
+                self.prefs.remember_file(FileKind::Recording, &path);
+                self.set_status(
+                    format!("Wrote {} ({} bytes)", path.display(), bytes.len()),
+                    false,
+                );
+            }
+            Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
+        }
     }
 
     /// A file picker that opens where the last file of that kind came from.
@@ -596,7 +1017,9 @@ impl App {
         let mut dialog = rfd::FileDialog::new();
         dialog = match kind {
             Some(FileKind::Rom) => dialog.add_filter("ROM image", &["rom", "bin"]),
-            Some(FileKind::Tape) => dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81"]),
+            Some(FileKind::Tape) => {
+                dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81", "zip"])
+            }
             Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80"]),
             // No filter, deliberately. rfd's macOS backend sets the panel's
             // allowed types from the extension list through an API that wants
@@ -608,11 +1031,12 @@ impl App {
                 .add_filter(
                     "Tape, snapshot or ROM",
                     &[
-                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "rom", "bin", "rzx",
+                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "rom", "bin", "rzx", "zip",
                     ],
                 )
                 .add_filter("Tape", &["tzx", "tap", "p", "81", "p81"])
                 .add_filter("Snapshot", &["sna", "z80"])
+                .add_filter("Archive", &["zip"])
                 .add_filter("ROM image", &["rom", "bin"]),
         };
         // For the catch-all picker, start wherever the most recent file of any
@@ -640,31 +1064,103 @@ impl App {
     }
 
     /// Put a tape in the deck of whichever machine is running.
+    /// Load whatever is worth loading out of an archive.
+    ///
+    /// The first file of a kind this can read, which is how a download of one
+    /// game is usually shaped: the tape, a scan of the inlay and a text file
+    /// about the cracking group. An archive with nothing loadable in it does
+    /// nothing, rather than guessing at the readme.
+    fn load_zip(&mut self, path: &std::path::Path) {
+        let data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                return self.set_status(format!("Could not read {}: {e}", path.display()), true)
+            }
+        };
+        let wanted = ["tzx", "tap", "p", "81", "p81", "rzx", "sna", "z80"];
+        let Some((name, bytes)) = crate::zip::first_with_extension(&data, &wanted) else {
+            return self.set_status(
+                format!(
+                    "{} holds nothing this can load",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                true,
+            );
+        };
+
+        let inner = std::path::Path::new(&name);
+        let ext = inner
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "rzx" => self.load_recording_bytes(path, &bytes),
+            "sna" | "z80" => match snapshot::probe_model_bytes(&ext, &bytes) {
+                Ok(model) => {
+                    self.switch_model(model);
+                    let loaded = if ext == "sna" {
+                        snapshot::load_sna(&mut self.spec, &bytes)
+                    } else {
+                        snapshot::load_z80(&mut self.spec, &bytes)
+                    };
+                    match loaded {
+                        Ok(()) => {
+                            self.set_status(format!("Loaded {name} from {}", path.display()), false)
+                        }
+                        Err(e) => self.set_status(format!("{name}: {e}"), true),
+                    }
+                }
+                Err(e) => self.set_status(format!("{name}: {e}"), true),
+            },
+            _ => {
+                // A ZX81 program only plays into a ZX81, the same as one that
+                // arrived on its own.
+                if matches!(ext.as_str(), "p" | "81" | "p81") && !self.on_zx81() {
+                    self.switch_to_zx81(self.zx81_ram);
+                }
+                self.insert_tape_bytes(path, &name, &bytes);
+            }
+        }
+    }
+
     fn insert_tape(&mut self, path: &std::path::Path) {
         match crate::tape::Tape::load(path) {
-            Ok(t) => {
-                let blocks = t.blocks.len();
-                let zx81 = matches!(t.blocks.first(), Some(crate::tape::Block::Zx81 { .. }));
-                let name = t.name.clone();
-                self.set_tape(Some(t));
-                self.show_tape = true;
-                self.tape.scroll_to_current = true;
-                self.tape.last_block = None;
-                self.prefs.remember_file(FileKind::Tape, path);
-                self.tape_path = Some(path.to_path_buf());
-                self.reload_notes();
-                // A tape waits for Play, as a real one does; a ZX81 also needs
-                // LOAD "" typed at it first, which is easy to forget.
-                let hint = if zx81 {
-                    " — type LOAD \"\" then press Play"
-                } else {
-                    " — press Play"
-                };
-                let plural = if blocks == 1 { "block" } else { "blocks" };
-                self.set_status(format!("Tape: {name} ({blocks} {plural}){hint}"), false);
-            }
+            Ok(t) => self.accept_tape(path, t),
             Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
         }
+    }
+
+    /// The same, for a tape that came out of an archive. The notes still go
+    /// beside the archive: that is the file the user has, and unpacking it
+    /// somewhere temporary to hold the annotations would lose them.
+    fn insert_tape_bytes(&mut self, path: &std::path::Path, name: &str, data: &[u8]) {
+        match crate::tape::Tape::from_bytes(name, data) {
+            Ok(t) => self.accept_tape(path, t),
+            Err(e) => self.set_status(format!("Tape load failed: {e}"), true),
+        }
+    }
+
+    fn accept_tape(&mut self, path: &std::path::Path, t: crate::tape::Tape) {
+        let blocks = t.blocks.len();
+        let zx81 = matches!(t.blocks.first(), Some(crate::tape::Block::Zx81 { .. }));
+        let name = t.name.clone();
+        self.set_tape(Some(t));
+        self.show_tape = true;
+        self.tape.scroll_to_current = true;
+        self.tape.last_block = None;
+        self.prefs.remember_file(FileKind::Tape, path);
+        self.tape_path = Some(path.to_path_buf());
+        self.reload_notes();
+        // A tape waits for Play, as a real one does; a ZX81 also needs
+        // LOAD "" typed at it first, which is easy to forget.
+        let hint = if zx81 {
+            " — type LOAD \"\" then press Play"
+        } else {
+            " — press Play"
+        };
+        let plural = if blocks == 1 { "block" } else { "blocks" };
+        self.set_status(format!("Tape: {name} ({blocks} {plural}){hint}"), false);
     }
 
     /// Write the notes out a little after they last changed.
@@ -702,7 +1198,18 @@ impl App {
                 return self.set_status(format!("Could not read {}: {e}", path.display()), true)
             }
         };
-        let recording = match crate::rzx::parse(&bytes) {
+        self.load_recording_bytes(path, &bytes);
+        // Where recordings are kept, for the next time one is opened. Only
+        // for a file that is really a recording on disk: an archive is
+        // remembered as whatever it was opened as.
+        self.prefs.remember_file(FileKind::Recording, path);
+    }
+
+    /// A recording from bytes rather than from a file, so one that arrived
+    /// inside an archive can be played without being written out first. The
+    /// path is still the archive's, which is where the notes go.
+    fn load_recording_bytes(&mut self, path: &std::path::Path, bytes: &[u8]) {
+        let recording = match crate::rzx::parse(bytes) {
             Ok(recording) => recording,
             Err(e) => return self.set_status(format!("{}: {e}", path.display()), true),
         };
@@ -744,20 +1251,28 @@ impl App {
             max_speed: false,
         });
         self.spec.bus.playback = Some(crate::machine::Playback::default());
-        self.running = true;
+        // A machine that was paused stays paused: somebody who stopped it to
+        // look at something has not asked for a recording to start running the
+        // moment it is loaded, and the first frame of one is worth looking at.
+        let waiting = !self.running;
         // The notes belong beside the recording now: it is what is being read.
         self.reload_notes();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
         self.set_status(
-            format!(
-                "Playing {}{by}: {frames} frames. The keyboard is the recording's, not yours.",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ),
+            if waiting {
+                format!("Loaded {name}{by}: {frames} frames, paused. Press Run to play it.")
+            } else {
+                format!(
+                    "Playing {name}{by}: {frames} frames. The keyboard is the \
+                     recording's, not yours."
+                )
+            },
             false,
         );
     }
 
     /// Stop playing, and give the machine back to the user.
-    pub fn stop_recording(&mut self) {
+    pub fn stop_playback(&mut self) {
         self.rzx = None;
         self.spec.bus.playback = None;
         self.reload_notes();
@@ -768,50 +1283,97 @@ impl App {
         let Some(rzx) = &self.rzx else { return };
         if rzx.finished() {
             let done = rzx.recording.len();
-            self.stop_recording();
+            self.stop_playback();
             self.running = false;
             self.set_status(format!("The recording ended after {done} frames"), false);
             return;
         }
 
-        // A recording is a frame at a time, so the speed control counts frames
-        // rather than T-states. At maximum speed it runs as many as the cap
+        // A recording is measured in frames rather than T-states, so the speed
+        // control counts frames. At maximum speed it runs as many as the cap
         // allows every host frame instead of counting at all.
-        let mut due = if rzx.max_speed {
-            MAX_RECORDED_FRAMES as u32
+        //
+        // The budget is kept as a fraction of a frame rather than a whole
+        // number of them: below one frame per host frame — which is where
+        // Race the Beam lives, at five seconds a frame — a whole number is
+        // zero nearly always and one now and then, so the picture jumps a
+        // frame at a time instead of the beam crawling down it.
+        let mut budget = if rzx.max_speed {
+            MAX_RECORDED_FRAMES
         } else {
             let rate = crate::machine::CPU_HZ as f32 / self.spec.bus.model.frame_t() as f32;
-            let owed = rzx.owed + dt * rate * self.speed * boost;
-            let due = owed.min(MAX_RECORDED_FRAMES) as u32;
-            if let Some(rzx) = &mut self.rzx {
-                rzx.owed = owed - due as f32;
-            }
-            due
+            (rzx.owed + dt * rate * self.speed * boost).min(MAX_RECORDED_FRAMES)
         };
 
-        while due > 0 {
+        // In slow motion the frame is run in pieces, so the picture moves
+        // under the beam instead of jumping a frame at a time; at normal
+        // speed and above, whole frames, with the fraction carried over.
+        //
+        // From the speed the user asked for, not from the budget: a frame of
+        // a 128K recording is a little longer than the fiftieth of a second a
+        // host frame takes, so at full speed the budget is 0.99 frames a call
+        // and every frame would be split for no reason.
+        let crawling = self.speed < 1.0 && !rzx.max_speed;
+        while budget > 0.0 {
             let Some(rzx) = &mut self.rzx else { return };
             if rzx.finished() {
                 return;
             }
+            let whole_frame = rzx.recording.frames[rzx.frame].fetches.max(1) as u32;
+            // What the budget will pay for, of the frame the recording is on.
+            // A budget too small to buy a single fetch buys nothing and is
+            // carried over: rounding it up to one would run a sliver of the
+            // next frame after every whole one, and leave the machine a few
+            // dozen instructions into a frame it has not been asked to begin.
+            let started = rzx.remaining > 0;
+            let ask = if budget >= 1.0 {
+                if started {
+                    rzx.remaining
+                } else {
+                    whole_frame
+                }
+            } else if crawling || started {
+                let piece = (budget * whole_frame as f32) as u32;
+                if started {
+                    rzx.remaining.min(piece)
+                } else {
+                    piece
+                }
+            } else {
+                0
+            };
+            if ask == 0 {
+                break;
+            }
             // A frame that was interrupted part-way through is picked up where
-            // it stopped, with the input it had already been handed.
-            if rzx.remaining == 0 {
+            // it stopped, with the input it had already been handed. A frame
+            // is not begun — and its input not put in front of the machine —
+            // until there is budget to run some of it.
+            if !started {
                 let frame = &rzx.recording.frames[rzx.frame];
-                rzx.remaining = frame.fetches as u32;
+                let fetches = frame.fetches as u32;
                 let inputs = frame.inputs.clone();
+                if let Some(rzx) = &mut self.rzx {
+                    rzx.remaining = fetches;
+                }
                 if let Some(playback) = &mut self.spec.bus.playback {
                     playback.inputs = inputs;
                     playback.cursor = 0;
                 }
             }
-            let remaining = self.rzx.as_ref().map_or(0, |rzx| rzx.remaining);
-            let (stop, ran) = self.spec.run_fetches(remaining);
+            let (stop, ran) = self.spec.run_fetches(ask);
+            budget -= ran as f32 / whole_frame as f32;
             let pc = self.spec.cpu.pc;
 
             let mut ended = false;
             if let Some(rzx) = &mut self.rzx {
-                rzx.remaining -= ran;
+                // A prefixed instruction is two fetches or more, so the last
+                // one can carry past what was asked for. Saturating rather
+                // than wrapping: the frame is over either way, and taking the
+                // difference off an unsigned count leaves it enormous, which
+                // ran the frame to the end of the recording and read input
+                // that was never recorded.
+                rzx.remaining = rzx.remaining.saturating_sub(ran);
                 if rzx.remaining == 0 {
                     rzx.frame += 1;
                     // Where the recording actually got to: AutoDoc reads this
@@ -823,16 +1385,25 @@ impl App {
                 }
             }
             if ended {
-                // The frame boundary is the recording's, so the interrupt is
-                // raised here rather than by the T-state count.
-                self.spec.bus.irq_pending = true;
-                due -= 1;
+                // The frame boundary is the recording's, so the video frame
+                // ends here and the interrupt is raised here — not wherever
+                // the T-state count happens to have reached. On the machine
+                // the recording was made on these were the same moment, and
+                // letting them drift apart puts every screen effect at the
+                // wrong height.
+                self.spec.bus.end_frame_here();
+                self.spec.bus.raise_interrupt();
             }
             self.last_stop = Some(stop);
             if !matches!(stop, Stop::Budget) {
                 self.handle_stop(stop);
                 return;
             }
+        }
+        // What is left over is owed to the next host frame, so a pace of a
+        // fifth of a frame a second adds up to a frame every five seconds.
+        if let Some(rzx) = &mut self.rzx {
+            rzx.owed = budget.max(0.0);
         }
     }
 
@@ -939,6 +1510,7 @@ impl App {
                 Ok(data) => self.load_rom_image(path, data),
                 Err(e) => self.set_status(format!("ROM load failed: {e}"), true),
             },
+            "zip" => self.load_zip(path),
             other => self.set_status(format!("Unsupported file type: .{other}"), true),
         }
     }
@@ -950,13 +1522,9 @@ impl App {
         // to match what the viewport builder takes: mixing them would grow
         // every window by the height of its title bar on each launch.
         if let (Some(outer), Some(inner)) = (outer, inner) {
-            // The tape window's width is not up for negotiation, so it is not
-            // recorded either: only its height and where it sits.
-            let w = if name == "tape" {
-                cassette::WINDOW_W
-            } else {
-                inner.width()
-            };
+            // A window with a fixed width does not have that width recorded:
+            // only its height and where it sits.
+            let w = Self::fix_width_of(name).unwrap_or_else(|| inner.width());
             self.prefs.set_window(
                 name,
                 WindowRect {
@@ -982,6 +1550,19 @@ impl App {
     /// is only diffed against the frame before, so a window that is rebuilt —
     /// which happens whenever it has not been drawn for a while — comes back
     /// without the constraint.
+    /// Windows whose width is not up for negotiation, and what it is.
+    ///
+    /// The tape window is built around the cassette. The RAM map is 256 bytes
+    /// across however it is drawn, so it is given the same width and drawn to
+    /// fill it: two windows of one width sit together without a ragged edge,
+    /// and neither has anything to gain from being dragged wider.
+    pub fn fix_width_of(name: &str) -> Option<f32> {
+        match name {
+            "tape" | "ram_map" => Some(cassette::WINDOW_W),
+            _ => None,
+        }
+    }
+
     fn fix_width(&self, ctx: &egui::Context, width: f32) {
         ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize([width, 320.0].into()));
         ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize([width, 8000.0].into()));
@@ -1013,10 +1594,10 @@ impl App {
             Some(r) => ([r.x, r.y], [r.w, r.h]),
             None => (default_pos, default_size),
         };
-        // The tape window is built around the cassette, so its width is not
-        // the user's to choose; the height still is.
-        if name == "tape" {
-            size[0] = cassette::WINDOW_W;
+        // A fixed-width window's width is not the user's to choose; the
+        // height still is.
+        if let Some(w) = Self::fix_width_of(name) {
+            size[0] = w;
         }
         let placement = self.placed.entry(name).or_insert(Placement {
             asked_at: std::time::Instant::now(),
@@ -1066,6 +1647,7 @@ impl App {
         self.prefs.display_scale = Some(self.scale);
         self.prefs.overscan = Some(self.overscan);
         self.prefs.open_windows = Some(self.open_windows());
+        self.remember_tape_settings();
         self.prefs.save();
         self.last_saved = Some(self.prefs.to_text());
         self.last_save_at = Some(std::time::Instant::now());
@@ -1080,6 +1662,7 @@ impl App {
         self.prefs.display_scale = Some(self.scale);
         self.prefs.overscan = Some(self.overscan);
         self.prefs.open_windows = Some(self.open_windows());
+        self.remember_tape_settings();
         let text = self.prefs.to_text();
         if self.last_saved.as_deref() == Some(text.as_str()) {
             self.last_save_at = Some(std::time::Instant::now());
@@ -1088,8 +1671,109 @@ impl App {
         self.save_window_state();
     }
 
+    /// Put the tape window's settings into the preferences.
+    ///
+    /// Everything the window is set to, since a deck somebody has dialled in —
+    /// a head out of square by a particular amount, a hiss at a particular
+    /// level — is tedious to find again. Writing is left to the settling save,
+    /// which only writes when something has actually changed, so dragging a
+    /// slider does not write the file forty times a second.
+    fn remember_tape_settings(&mut self) {
+        let q = self.quality;
+        let tape = &self.tape;
+        let pairs: [(&str, String); 13] = [
+            ("tape_scope", tape.show_scope.to_string()),
+            ("tape_quality_shown", tape.show_quality.to_string()),
+            ("tape_scope_us", tape.window_us.to_string()),
+            (
+                "tape_scope_trigger",
+                match tape.trigger {
+                    crate::ui::tape::Trigger::Rising => "rising",
+                    crate::ui::tape::Trigger::Falling => "falling",
+                    crate::ui::tape::Trigger::Off => "free",
+                }
+                .to_string(),
+            ),
+            (
+                "tape_speed",
+                match (self.tape_flash(), self.tape_boost()) {
+                    (true, _) => "fastload",
+                    (false, true) => "max",
+                    (false, false) => "normal",
+                }
+                .to_string(),
+            ),
+            ("tape_wobble", q.wobble.to_string()),
+            ("tape_wow", q.wow.to_string()),
+            ("tape_flutter", q.flutter.to_string()),
+            ("tape_alignment", q.alignment.to_string()),
+            ("tape_alignment_offset", q.alignment_offset.to_string()),
+            ("tape_alignment_wobble", q.alignment_wobble.to_string()),
+            ("tape_noise", q.noise.to_string()),
+            ("tape_noise_level", q.noise_level.to_string()),
+        ];
+        for (key, value) in pairs {
+            self.prefs.set(key, value);
+        }
+    }
+
+    /// Take the tape window's settings back out of the preferences.
+    fn apply_tape_settings(&mut self) {
+        if let Some(on) = self.prefs.get_as("tape_scope") {
+            self.tape.show_scope = on;
+        }
+        if let Some(on) = self.prefs.get_as("tape_quality_shown") {
+            self.tape.show_quality = on;
+        }
+        if let Some(us) = self
+            .prefs
+            .get_as::<f32>("tape_scope_us")
+            .filter(|v| *v > 0.0)
+        {
+            self.tape.window_us = us;
+        }
+        match self.prefs.get("tape_scope_trigger") {
+            Some("rising") => self.tape.trigger = crate::ui::tape::Trigger::Rising,
+            Some("falling") => self.tape.trigger = crate::ui::tape::Trigger::Falling,
+            Some("free") => self.tape.trigger = crate::ui::tape::Trigger::Off,
+            _ => {}
+        }
+        match self.prefs.get("tape_speed") {
+            Some("fastload") => self.set_hurry(Hurry::Fastload),
+            Some("max") => self.set_hurry(Hurry::Max),
+            Some("normal") => self.set_hurry(Hurry::Normal),
+            _ => {}
+        }
+        let q = &mut self.quality;
+        if let Some(v) = self.prefs.get_as("tape_wobble") {
+            q.wobble = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_wow") {
+            q.wow = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_flutter") {
+            q.flutter = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_alignment") {
+            q.alignment = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_alignment_offset") {
+            q.alignment_offset = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_alignment_wobble") {
+            q.alignment_wobble = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_noise") {
+            q.noise = v;
+        }
+        if let Some(v) = self.prefs.get_as("tape_noise_level") {
+            q.noise_level = v;
+        }
+    }
+
     /// Take the display settings from the preferences file, if it has any.
     pub fn apply_prefs(&mut self) {
+        self.apply_tape_settings();
         if let Some(scale) = self.prefs.display_scale.filter(|s| *s > 0.0) {
             self.scale = scale;
         }
@@ -1103,6 +1787,7 @@ impl App {
             self.show_tape = is_open("tape");
             self.show_back_buffer = is_open("back_buffer");
             self.show_sprites = is_open("sprites");
+            self.show_callflow = is_open("callflow");
             self.show_profiler = is_open("profiler");
         }
     }
@@ -1116,6 +1801,7 @@ impl App {
             ("tape", self.show_tape),
             ("back_buffer", self.show_back_buffer),
             ("sprites", self.show_sprites),
+            ("callflow", self.show_callflow),
             ("profiler", self.show_profiler),
         ]
         .into_iter()
@@ -1165,6 +1851,146 @@ impl App {
         match &self.zx81 {
             Some(zx) => &zx.cpu,
             None => &self.spec.cpu,
+        }
+    }
+
+    /// Show an address in the disassembly and mark the row, so what was asked
+    /// for can be picked out of the twenty-odd lines around it.
+    pub fn show_in_listing(&mut self, addr: u16) {
+        self.dbg.view_addr = addr;
+        self.dbg.follow_pc = false;
+        self.dbg.marked = Some(addr);
+        // Put in the middle of the listing rather than at whatever line it
+        // happens to fall on, so what was asked for is where the eye goes.
+        self.dbg.centre = true;
+    }
+
+    /// Read a block of memory as pictures: open the graphics viewer on it,
+    /// bring it forward, and start with a sprite size the block divides into.
+    ///
+    /// Nothing in the bytes says how wide a sprite is meant to be — that is
+    /// the one thing the viewer asks for — but a block's length usually
+    /// divides by the size of the sprites in it, which is a better place to
+    /// start guessing from than whatever was set last.
+    pub fn show_as_graphics(&mut self, addr: u16, length: u16) {
+        self.sprites.addr = addr;
+        self.sprites.addr_text = format!("{addr:04X}");
+        self.sprites.block_length = Some(length);
+        self.show_sprites = true;
+        self.sprites.raise = true;
+
+        // The largest square sprite the block divides into, up to four cells:
+        // a sheet of 16x16 sprites is 32 bytes each and a sheet of 8x8 is 8,
+        // and either divides the block exactly.
+        for cells in (1..=4usize).rev() {
+            let stride = (cells * cells * 8) as u16;
+            if length >= stride && length.is_multiple_of(stride) {
+                self.sprites.cells_across = cells;
+                self.sprites.cells_down = cells;
+                break;
+            }
+        }
+        // And enough across to show the whole block without scrolling, when
+        // that is a sensible number.
+        let stride = self.sprites.stride().max(1);
+        let sprites = (length / stride) as usize;
+        self.sprites.columns = sprites.clamp(1, 8);
+    }
+
+    /// The same, from another window: open the debugger, bring it to the
+    /// front and give it the focus. Sending somebody to a listing in a window
+    /// that is behind the one they are looking at is sending them nowhere.
+    pub fn show_in_debugger(&mut self, addr: u16) {
+        self.show_in_listing(addr);
+        self.show_debugger = true;
+        self.dbg.raise = true;
+    }
+
+    /// Write a byte into the machine that is running, as the debugger does
+    /// when somebody types over one. The ROM ignores it, as the hardware does.
+    /// Run to the end of the frame the machine is part-way through.
+    ///
+    /// What is wanted is a picture the ULA has finished painting: stopping
+    /// wherever the machine happens to be leaves half a frame drawn and the
+    /// rest of it left over from before. So it runs to the frame boundary,
+    /// which is where the beam has finished the screen and gone back to the
+    /// top, and stops there.
+    pub fn next_frame(&mut self) {
+        self.running = false;
+        // At full speed, whatever else is set: the point is to arrive at the
+        // frame boundary. Slow draw parks the CPU after a few writes and its
+        // allowance is only refilled while the machine is running, so leaving
+        // it on meant this worked once — on whatever allowance was left — and
+        // then did nothing at all.
+        let slow = self.spec.bus.slow.enabled;
+        self.spec.bus.slow.enabled = false;
+        self.spec.bus.slow.begin_slice();
+
+        let was = self.frame_count();
+        for _ in 0..32 {
+            match &mut self.zx81 {
+                Some(zx) => {
+                    let frame = zx.frame_t();
+                    zx.run(frame);
+                }
+                None => {
+                    self.spec.run(self.spec.bus.frame_t());
+                }
+            }
+            if self.frame_count() != was {
+                break;
+            }
+        }
+        self.spec.bus.slow.enabled = slow;
+        self.spec.bus.slow.begin_slice();
+        self.dbg.follow_pc = true;
+        self.status = format!("Frame {}", self.frame_count());
+    }
+
+    /// Frames the machine has finished, whichever machine is running.
+    pub fn frame_count(&self) -> u64 {
+        match &self.zx81 {
+            Some(zx) => zx.bus.frame,
+            None => self.spec.bus.frame,
+        }
+    }
+
+    /// Show the byte behind a pixel of the picture in the memory dump.
+    ///
+    /// The coordinates are of the whole picture, border and all, so the border
+    /// is taken off before working out which cell of the display file the
+    /// pixel belongs to. A click on the border itself has no byte behind it
+    /// and is left alone.
+    pub fn show_pixel_in_memory(&mut self, px: usize, py: usize) {
+        // Only while the machine is stopped and the debugger is open to show
+        // the answer. A click on a running picture is somebody playing a game,
+        // not somebody asking where a byte is.
+        if self.running || !self.show_debugger {
+            return;
+        }
+        let view = self.view();
+        let (Some(x), Some(y)) = (
+            px.checked_sub(view.border_x),
+            py.checked_sub(view.border_top),
+        ) else {
+            return;
+        };
+        if x >= 256 || y >= 192 {
+            return;
+        }
+        let addr = crate::machine::screen_bitmap_addr(y as u16, (x / 8) as u16);
+        self.dbg.mem_addr = addr;
+        self.dbg.mem_text = format!("{addr:04X}");
+        self.dbg.selected = Some((addr, crate::ui::debugger::Column::Hex));
+        self.dbg.half_typed = None;
+        self.show_debugger = true;
+        self.dbg.raise = true;
+    }
+
+    pub fn poke_byte(&mut self, addr: u16, value: u8) {
+        match &mut self.zx81 {
+            Some(zx) => zx.bus.poke(addr, value),
+            None => self.spec.bus.poke(addr, value),
         }
     }
 
@@ -1255,8 +2081,56 @@ impl App {
     pub fn step_machine(&mut self) {
         match &mut self.zx81 {
             Some(zx) => zx.step_instruction(),
-            None => self.spec.step_instruction(),
+            None => {
+                // Kept so it can be stepped back over. Only while stepping by
+                // hand: a running machine writes millions of bytes a second
+                // and none of them is going to be walked back through.
+                let undo = self.spec.step_recording();
+                if self.rewind.len() == REWIND {
+                    self.rewind.pop_front();
+                }
+                self.rewind.push_back(undo);
+            }
         }
+    }
+
+    /// How many instructions can be stepped back over.
+    ///
+    /// Enough to see how the machine got where it is, which is what stepping
+    /// back is for; a hundred would be a recording, and there is one of those
+    /// already.
+    pub fn can_step_back(&self) -> bool {
+        !self.rewind.is_empty()
+    }
+
+    /// Let the machine run, and throw away what could have been stepped back
+    /// over.
+    ///
+    /// Running writes what an undo cannot put back: a step over a CALL is
+    /// thousands of instructions, and the entries kept from before it describe
+    /// a machine that no longer exists. Stepping back into that would put the
+    /// registers somewhere plausible and leave the memory wrong, which is
+    /// worse than not offering it.
+    pub fn forget_rewind(&mut self) {
+        self.rewind.clear();
+    }
+
+    /// Put the last instruction back the way it was.
+    pub fn step_back(&mut self) {
+        let Some(undo) = self.rewind.pop_back() else {
+            self.set_status("Nothing to step back to".to_string(), false);
+            return;
+        };
+        self.running = false;
+        self.spec.undo_step(&undo);
+        self.dbg.follow_pc = true;
+        self.dbg.centre = true;
+        self.last_stop = Some(crate::machine::Stop::Stepped);
+        self.status = format!(
+            "Stepped back to ${:04X}, {} left",
+            self.cpu().pc,
+            self.rewind.len()
+        );
     }
 
     /// The mixer of the machine that is running.
@@ -1274,6 +2148,56 @@ impl App {
         }
     }
 
+    /// Is a loader of the game's own reading the tape at this moment?
+    ///
+    /// Told by the sampling loop it is sitting in, which nearly every loader
+    /// shares — see [`crate::flashload::at_sampler`]. Blocks cannot be handed
+    /// to one of those, so what Fastload does for them is let the
+    /// machine run.
+    pub fn loader_is_reading(&self) -> bool {
+        self.loader_reading().is_some()
+    }
+
+    /// Which loader's sampling loop it is, so the window can say so rather
+    /// than only saying that one is at work.
+    pub fn loader_reading(&self) -> Option<&'static str> {
+        if self.zx81.is_some() {
+            return None;
+        }
+        crate::flashload::sampler(&self.spec)
+    }
+
+    /// How much of a hurry a tape is loaded in. The three settle the two
+    /// switches underneath between them: hurrying a tape means running the
+    /// machine flat out as well, so they were never independent.
+    pub fn set_hurry(&mut self, hurry: Hurry) {
+        match hurry {
+            Hurry::Normal => {
+                self.set_tape_flash(false);
+                *self.tape_boost_mut() = false;
+            }
+            Hurry::Max => {
+                self.set_tape_flash(false);
+                *self.tape_boost_mut() = true;
+            }
+            Hurry::Fastload => {
+                self.set_tape_flash(true);
+                *self.tape_boost_mut() = true;
+            }
+        }
+    }
+
+    /// Whether whole blocks are handed to the ROM's loader rather than
+    /// played. The ZX81's ROM is a different one and has no such routine, so
+    /// it is a Spectrum switch only.
+    pub fn tape_flash(&self) -> bool {
+        self.zx81.is_none() && self.spec.bus.tape_flash
+    }
+
+    pub fn set_tape_flash(&mut self, on: bool) {
+        self.spec.bus.tape_flash = on;
+    }
+
     pub fn tape_boost_mut(&mut self) -> &mut bool {
         match &mut self.zx81 {
             Some(zx) => &mut zx.bus.tape_boost,
@@ -1285,6 +2209,20 @@ impl App {
         self.tape_ref().is_some_and(|t| t.playing)
     }
 
+    /// Whether the tape is actually loading something, as against sitting in
+    /// the silence the program is meant to be watched through.
+    ///
+    /// Only the last pause of a tape, or one before a block that stops the
+    /// tape, is worth coming back to normal speed for: that is where the
+    /// loading ends and the program takes over. The silences between the
+    /// blocks of a multi-load are the loader getting ready for the next one,
+    /// and dropping to normal speed through every one of them makes a hurried
+    /// tape barely quicker than an unhurried one.
+    pub fn tape_is_loading(&self) -> bool {
+        self.tape_ref()
+            .is_some_and(|t| t.playing && !t.pause_ends_the_tape())
+    }
+
     /// Clock of the running machine: tape times are in its T-states, and the
     /// ZX81's is not the Spectrum's.
     pub fn cpu_hz(&self) -> f64 {
@@ -1292,6 +2230,72 @@ impl App {
             zx81::CPU_HZ
         } else {
             crate::machine::CPU_HZ
+        }
+    }
+
+    /// The clock of whichever machine is running, before it is wound up.
+    pub fn machine_cpu_hz(&self) -> f64 {
+        match &self.zx81 {
+            Some(_) => zx81::CPU_HZ,
+            None => self.spec.bus.model.cpu_hz(),
+        }
+    }
+
+    /// The clock the CPU is actually being run at.
+    pub fn clock_hz(&self) -> f64 {
+        self.machine_cpu_hz() * self.turbo() as f64
+    }
+
+    /// How many times the machine's own clock the CPU is being run at, after
+    /// the two places it has to be held at one.
+    ///
+    /// **A recording playing.** An RZX frame is a number of opcode fetches and
+    /// the recording's frame boundary is the video frame; a CPU getting
+    /// through those fetches in a quarter of the ULA time would put four
+    /// frames of input into one frame of picture.
+    ///
+    /// **A tape playing.** Every loader counts turns of its own loop against
+    /// pulses that are in ULA time, so at 4× it counts four times as many for
+    /// the same pulse and every length it knows is wrong. Nothing loads at
+    /// all. That is what an accelerated machine did, which is why they had a
+    /// switch — and here the switch throws itself.
+    pub fn turbo(&self) -> u32 {
+        if self.rzx.is_some() || self.tape_is_playing() {
+            return 1;
+        }
+        (self.clock_mult.max(1.0) as u32).clamp(1, 8)
+    }
+
+    /// Why the CPU is not running at what the dropdown says, if it is not.
+    pub fn turbo_held_because(&self) -> Option<&'static str> {
+        if self.clock_mult <= 1.0 {
+            return None;
+        }
+        if self.rzx.is_some() {
+            return Some("a recording is playing");
+        }
+        if self.tape_is_playing() {
+            return Some("a tape is loading");
+        }
+        None
+    }
+
+    /// Tell the mixer what the clock is now.
+    ///
+    /// Sound is made of T-states, so a machine running at twice its clock plays
+    /// every note an octave up — which is what an accelerated one did, and only
+    /// comes out that way if the mixer counts in the same T-states the machine
+    /// does.
+    pub fn apply_clock(&mut self) {
+        // The ULA's clock, not the CPU's: samples are made of T-states of the
+        // machine and those still pass at 3.5MHz however fast the CPU is being
+        // run. A beeper note comes out an octave up at 2× on its own, because
+        // the loop that makes it comes round in half the T-states — which is
+        // what an accelerated machine sounded like.
+        let hz = self.machine_cpu_hz();
+        match &mut self.zx81 {
+            Some(zx) => zx.bus.audio.set_cpu_hz(hz),
+            None => self.spec.bus.audio.set_cpu_hz(hz),
         }
     }
 
@@ -1333,6 +2337,37 @@ impl App {
         self.set_status(format!("Switched to a {}", ram.name()), false);
     }
 
+    /// The picture as it was last drawn: RGBA, the size of [`App::view`].
+    pub fn picture(&self) -> &[u8] {
+        &self.screen_pixels
+    }
+
+    /// The machine as it stood `t` T-states into the frame being raced.
+    ///
+    /// The snapshot is taken the first time it is asked for, and again
+    /// whenever the machine has moved since — stepping an instruction makes
+    /// the frame that was being raced somebody else's.
+    fn raced_to(&mut self, t: u32) -> &Spectrum {
+        let stale = self
+            .race
+            .as_ref()
+            .is_none_or(|race| !race.is_of(&self.spec));
+        if stale {
+            self.race = Some(crate::race::Race::start(&self.spec));
+        }
+        self.race.as_mut().expect("just made one").at(t)
+    }
+
+    /// Is the machine going slowly enough to watch the picture being drawn?
+    ///
+    /// The beam is shown and the picture is drawn as it is painted under the
+    /// same condition, so the two always agree: a beam crawling over a picture
+    /// that only changes when the frame ends would be telling a lie about
+    /// where the machine is.
+    pub fn crawling(&self) -> bool {
+        self.speed < 1.0 || self.spec.bus.slow.enabled
+    }
+
     /// How much border to draw.
     pub fn view(&self) -> screen::View {
         if self.overscan {
@@ -1349,15 +2384,50 @@ impl App {
     /// Advance the emulation by however much wall-clock time has passed.
     /// Run the machine for a slice of wall-clock time, as a frame of the UI
     /// would. Public so tests can stop it at a breakpoint without a window.
+    /// Say so when the tape stops itself.
+    ///
+    /// A tape can carry a block that tells the deck to stop — the end of a
+    /// part of a multi-load, where the program takes over and asks for the
+    /// next part later. Nothing said so, and a deck that stops on its own part
+    /// way through a tape looks exactly like a load that has gone wrong.
+    /// Gauntlet III's does it half way through its first side.
+    fn announce_tape_stops(&mut self) {
+        let stopped = self
+            .tape_ref()
+            .is_some_and(|tape| tape.stopped_by_block && !tape.playing);
+        if stopped && !self.said_tape_stopped {
+            self.said_tape_stopped = true;
+            self.set_status(
+                "The tape asked the deck to stop — press Play for the next part".to_string(),
+                false,
+            );
+        } else if !stopped {
+            self.said_tape_stopped = false;
+        }
+    }
+
     pub fn advance(&mut self, dt: f32) {
+        self.announce_tape_stops();
+        // The deck is told how to behave rather than asked: a tape put in
+        // after the sliders were set gets the same treatment as one already
+        // in the machine.
+        let quality = self.quality;
+        if let Some(tape) = self.tape_mut() {
+            tape.quality = quality;
+        }
         if !self.running {
             return;
         }
+        // Racing the beam is a way of looking at a stopped machine: it replays
+        // one frame from its interrupt, and a machine that is running has
+        // moved on to another frame before the cursor has been read.
+        self.cursor_beam = false;
+        self.race = None;
         if self.zx81.is_some() {
             // A ZX81 loads at about fifty bytes a second, so the boost matters
             // even more here than it does on a Spectrum.
-            let boost = if self.tape_boost() && self.tape_is_playing() {
-                8.0
+            let boost = if self.tape_boost() && self.tape_is_loading() {
+                MAX_SPEED
             } else {
                 1.0
             };
@@ -1397,9 +2467,10 @@ impl App {
             self.spec.bus.audio.flush();
             return;
         }
-        // Loading a real tape takes minutes; run faster while it moves.
-        let boost = if self.tape_boost() && self.tape_is_playing() {
-            8.0
+        // Loading a real tape takes minutes; run as fast as the emulator will
+        // go while it moves.
+        let boost = if self.tape_boost() && self.tape_is_loading() {
+            MAX_SPEED
         } else {
             1.0
         };
@@ -1410,8 +2481,10 @@ impl App {
         } else {
             1.0
         };
-        let want =
-            self.spec.bus.model.cpu_hz() as f32 * dt * self.speed * boost * pace + self.leftover;
+        // The ULA's clock is what the budget is in: a faster CPU does more
+        // inside the same T-states rather than being given more of them.
+        self.spec.bus.turbo = self.turbo();
+        let want = self.machine_cpu_hz() as f32 * dt * self.speed * boost * pace + self.leftover;
         let budget = want.max(0.0) as u32;
         self.leftover = want - budget as f32;
 
@@ -1421,9 +2494,45 @@ impl App {
         self.spec.bus.audio.speed_ok = (0.85..=1.2).contains(&effective);
 
         // Cap the work per host frame so "Max" speed cannot lock up the UI.
-        let budget = budget.min(self.spec.bus.frame_t() * 24);
+        //
+        // Fastload lifts the cap while a tape is moving, and keeps the
+        // window answering by watching the clock instead: a game with a loader
+        // of its own reads the tape itself, and the only thing that gets it
+        // loaded quickly is letting the machine run. Twenty-four frames of
+        // work a host frame is about twelve seconds of waiting for a Speedlock
+        // tape; a tenth of a second of real work a host frame gets it down to
+        // about one.
+        // Right to the end of the tape, silence included. Max speed comes back
+        // to normal for the pause the tape ends on, so that a loader finishing
+        // sounds and looks as it should; Fastload is a promise to get
+        // it over with, and Out Run Europa ends with twenty-two seconds of
+        // silence that nothing is waiting for.
+        let flat_out = self.spec.bus.tape_flash && self.tape_ref().is_some_and(|tape| tape.playing);
+        // In a hurry the budget is a whole slice of work rather than whatever
+        // the speed setting asked for: at the end of a tape the boost above is
+        // off — Max speed comes back to normal for the last pause — and the
+        // budget it leaves is a fraction of a frame.
+        let budget = if flat_out {
+            self.spec.bus.frame_t() * FASTLOAD_FRAMES
+        } else {
+            budget.min(self.spec.bus.frame_t() * 24)
+        };
+        self.rewind.clear();
+        let started = std::time::Instant::now();
         let stop = self.spec.run(budget);
         self.last_stop = Some(stop);
+        if flat_out {
+            // However much is left of the budget, stop when the host frame is
+            // spent: the picture and the buttons still have to happen.
+            while started.elapsed() < FASTLOAD_SLICE
+                && matches!(self.last_stop, Some(Stop::Budget))
+                && self.tape_ref().is_some_and(|tape| tape.playing)
+            {
+                let stop = self.spec.run(self.spec.bus.frame_t() * 24);
+                self.last_stop = Some(stop);
+            }
+        }
+        let stop = self.last_stop.expect("just set");
         self.handle_stop(stop);
         self.spec.bus.audio_sync();
         self.spec.bus.audio.flush();
@@ -1465,6 +2574,49 @@ impl App {
         self.screen_tex.clone()
     }
 
+    /// How the picture is sampled when it is drawn.
+    ///
+    /// Nearest, so a pixel is a hard square, unless the set is on: a tube has
+    /// no pixel edges, and drawing one through a nearest sample beats against
+    /// the screen it is being shown on. That beat is where the moiré came
+    /// from — the line gaps and the herringbone are both about a pixel wide,
+    /// and a picture scaled by anything but a whole number samples some of
+    /// them twice and some not at all.
+    pub fn picture_filter(&self) -> TextureOptions {
+        if self.crt {
+            TextureOptions::LINEAR
+        } else {
+            TextureOptions::NEAREST
+        }
+    }
+
+    /// What the two switches ask of the picture.
+    ///
+    /// The tube gives every line a gap under it, which is what doubles the
+    /// height; the aerial lead gives the colour its smear and the picture its
+    /// herringbone. A monitor fed RGB had the first and none of the second, so
+    /// either can be had without the other.
+    pub fn crt_settings(&self) -> crate::crt::Crt {
+        let plain = crate::crt::Crt::default();
+        // The lead only with the set: the switch is disabled without it, and
+        // what it was left set to is kept for when the set comes back on.
+        let composite = self.crt && self.composite;
+        crate::crt::Crt {
+            interference: if composite { plain.interference } else { 0.0 },
+            bleed: if composite { plain.bleed } else { 0.0 },
+            // Only where there is room to draw them. A gap under every line
+            // needs two rows of screen for every row of picture, and asking
+            // for them at a zoom that has not got two is asking for a moiré:
+            // some gaps drawn, some not, in a pattern of their own.
+            scanlines: if self.crt && self.scale >= 2.0 {
+                plain.scanlines
+            } else {
+                0.0
+            },
+            line_gaps: self.crt && self.scale >= 2.0,
+        }
+    }
+
     fn draw_screen_texture(&mut self, ctx: &egui::Context) {
         if self.zx81.is_some() {
             let view = if self.overscan {
@@ -1491,24 +2643,86 @@ impl App {
         }
         let view = self.view();
         let flash = self.flash_on();
-        if self.screen_pixels.len() != view.buffer_len() {
+        let gaps = self.crt_settings().line_gaps;
+        if self.screen_pixels.len() != view.buffer_len() || gaps != self.crt_drawn {
             self.screen_pixels = vec![0; view.buffer_len()];
-            self.screen_tex = None; // the texture has to be remade at the new size
+            // The texture has to be remade at the new size, and switching the
+            // set on or off doubles the height or halves it again.
+            self.screen_tex = None;
+            self.crt_drawn = gaps;
         }
-        match self.beam_t.filter(|_| self.race_the_beam) {
+        // Bring the painted frame up to where the beam has got to. It is
+        // otherwise only caught up when the program writes to the screen, so a
+        // machine stopped between two writes would show the last of them as
+        // the beam's position rather than where the beam actually is.
+        self.spec.bus.catch_up_painting();
+        // Racing replays a frame rather than reading the machine, so the
+        // pixels are borrowed out of the way of the copy being run.
+        let mut pixels = std::mem::take(&mut self.screen_pixels);
+        match self.beam_t.filter(|_| self.cursor_beam && !self.running) {
             Some(beam) => {
-                screen::render_racing(&self.spec.bus, view, &mut self.screen_pixels, flash, beam)
+                let raced = self.raced_to(beam);
+                screen::render_racing(&raced.bus, view, &mut pixels, flash, beam);
             }
-            None => screen::render(&self.spec.bus, view, &mut self.screen_pixels, flash),
+            // While the machine is crawling, the picture is the one being
+            // painted, so that it builds under the beam rather than sitting
+            // still until the frame ends.
+            // Racing: the frame being painted, fading behind the beam, with
+            // the writes since marked by which side of the beam they landed.
+            None if self.racing => {
+                let fade = screen::Fade {
+                    now: self.spec.bus.tstates,
+                    floor: self.fade_floor,
+                };
+                // The user is given the blend in seconds of their own time;
+                // how much of the machine's time that is depends on how
+                // slowly it is being run.
+                let over = (TINT_SECONDS * self.speed * self.spec.bus.model.cpu_hz() as f32) as u64;
+                let tint = self.spec.bus.tints.as_ref().map(|tints| screen::Tinting {
+                    tints,
+                    now: self.spec.bus.total_t(),
+                    over,
+                });
+                screen::render_fading(&self.spec.bus, view, &mut pixels, flash, fade, tint);
+            }
+            None if self.crawling() => {
+                screen::render_painting(&self.spec.bus, view, &mut pixels, flash)
+            }
+            None => screen::render(&self.spec.bus, view, &mut pixels, flash),
         }
-        let img =
-            ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels);
+        self.screen_pixels = pixels;
+        let img = if self.crt {
+            // The tube gives every line a gap under it, which is what doubles
+            // the height; the aerial lead gives the colour its smear and the
+            // picture its herringbone. Either can be had without the other.
+            let set = self.crt_settings();
+            let frame = self.spec.bus.frame;
+            // The dot the view starts at keeps the interference still against
+            // the picture when the border is shown or hidden — the pattern
+            // belongs to the machine's clock, not to the window's edge.
+            let x0 = -((view.border_x * 2) as f64);
+            crate::crt::televise(
+                &self.screen_pixels,
+                view.width(),
+                view.height(),
+                &mut self.crt_pixels,
+                set,
+                frame,
+                x0,
+            );
+            let rows = if set.line_gaps { 2 } else { 1 };
+            ColorImage::from_rgba_unmultiplied(
+                [view.width(), view.height() * rows],
+                &self.crt_pixels,
+            )
+        } else {
+            ColorImage::from_rgba_unmultiplied([view.width(), view.height()], &self.screen_pixels)
+        };
+        self.record_video_frame();
+        let filter = self.picture_filter();
         match &mut self.screen_tex {
-            Some(t) => t.set(img, TextureOptions::NEAREST),
-            None => {
-                self.screen_tex =
-                    Some(ctx.load_texture("spectrum-screen", img, TextureOptions::NEAREST))
-            }
+            Some(t) => t.set(img, filter),
+            None => self.screen_tex = Some(ctx.load_texture("spectrum-screen", img, filter)),
         }
     }
 
@@ -1556,6 +2770,18 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
+                if ui
+                    .add_enabled(!self.on_zx81(), egui::Button::new("Save snapshot…"))
+                    .on_hover_text(
+                        "Write the machine as it stands to a .sna, to be loaded \
+                         back later or carried to another emulator.",
+                    )
+                    .clicked()
+                {
+                    self.save_snapshot();
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Reset").clicked() {
                     self.spec.reset();
                     self.status = "Reset".into();
@@ -1567,13 +2793,39 @@ impl App {
             if theme::run_pause_button(ui, self.running).clicked() {
                 self.running = !self.running;
             }
+
             theme::divider(ui);
             theme::group_label(ui, "Speed");
+            // Choosing a speed by hand is choosing not to race.
             speed_dropdown(&mut self.speed, ui);
+            if self.racing && self.speed != RACE_SPEED {
+                self.racing = false;
+            }
 
             theme::divider(ui);
             theme::group_label(ui, "Machine");
             self.machine_dropdown(ui);
+            if SHOW_CLOCK {
+                theme::group_label(ui, "CPU");
+                let base = self.machine_cpu_hz();
+                let before = self.clock_mult;
+                let held = self.turbo_held_because();
+                clock_dropdown(&mut self.clock_mult, base, ui);
+                if let Some(why) = held {
+                    ui.label(
+                        egui::RichText::new(format!("at {:.2}MHz — {why}", base / 1e6))
+                            .small()
+                            .color(theme::DIM),
+                    );
+                }
+                if self.clock_mult != before {
+                    // The mixer counts in T-states, so it has to be told: a
+                    // beeper note would otherwise come out at the pitch the
+                    // machine was built for rather than the one it is running
+                    // at.
+                    self.apply_clock();
+                }
+            }
             self.late_timing(ui);
             if ui.button("Reset").clicked() {
                 match &mut self.zx81 {
@@ -1590,22 +2842,415 @@ impl App {
             }
 
             theme::divider(ui);
+            theme::group_label(ui, "Record");
+            self.rzx_button(ui);
+            self.video_button(ui);
+        });
+    }
+
+    /// Recording what the machine reads, so a run of a game can be played back
+    /// and read instruction by instruction.
+    ///
+    /// Not offered while a recording is playing: what would be captured is the
+    /// recording.
+    fn rzx_button(&mut self, ui: &mut egui::Ui) {
+        match self.recorded_frames() {
+            None => {
+                if ui
+                    .add_enabled(self.rzx.is_none(), egui::Button::new("⏺ RZX"))
+                    .on_hover_text(
+                        "Record everything the machine reads from now on, so it \
+                         can be played back and read instruction by instruction. \
+                         It is kept in memory until you stop.",
+                    )
+                    .clicked()
+                {
+                    self.start_recording();
+                }
+            }
+            Some(frames) => {
+                if ui
+                    .button("⏹ Stop RZX")
+                    .on_hover_text("Stop recording and write it out")
+                    .clicked()
+                {
+                    self.save_recording();
+                }
+                ui.label(
+                    egui::RichText::new(format!("● {frames} frames"))
+                        .color(theme::RED)
+                        .monospace(),
+                );
+            }
+        }
+    }
+
+    /// Start writing the picture to a file, having asked where to put it.
+    ///
+    /// The size is whatever the picture is at the moment — the view, and
+    /// whether the set is on, decide it — and it cannot change while the file
+    /// is being written, so the frame that is refused is the one that says the
+    /// window was changed part way through.
+    pub fn start_video(&mut self) {
+        if !crate::video_out::available() {
+            self.set_status(
+                format!(
+                    "No {} on the path: it is what writes the file.",
+                    crate::video_out::FFMPEG
+                ),
+                true,
+            );
+            return;
+        }
+        let Some(path) = self.pick_video_path() else {
+            return;
+        };
+        let (w, h, pixel_aspect, fps, smooth) = self.video_settings();
+        let rate = self.spec.bus.audio.sample_rate;
+        match crate::video_out::Recording::start(path, w, h, pixel_aspect, fps, smooth, rate) {
+            Ok(recording) => {
+                // The sound is kept from now on, and thrown away again when
+                // the recording stops.
+                self.spec.bus.audio.tap = Some(Vec::new());
+                self.video_due = 0.0;
+                self.video_at = self.spec.bus.frame;
+                self.set_status(
+                    format!("Recording video to {}", recording.path.display()),
+                    false,
+                );
+                self.video = Some(recording);
+            }
+            Err(e) => self.set_status(e, true),
+        }
+    }
+
+    /// Whether the switches that change the picture's *size* are held while a
+    /// video is being written.
+    ///
+    /// The encoder is told the frame size once, when the pipe opens, and reads
+    /// a headerless stream of raw bytes: it slices frames out of it by that
+    /// number alone, so a frame of another size shears the picture from there
+    /// on. The refusal in `video_out` catches that and stops the recording,
+    /// which is better than a ruined file — but a switch that stops the
+    /// recording is a worse thing to offer than one that waits.
+    ///
+    /// The three that change the size are the tube, which gives every line a
+    /// gap under it; the overscan, which is a different amount of border; and
+    /// the zoom, since the gaps are only drawn from 2× up. Composite is not
+    /// one of them — it changes what the pixels are, not how many — so it
+    /// stays live and can be switched while the film is running.
+    pub fn video_switches_held(&self) -> bool {
+        self.video.is_some()
+    }
+
+    /// What the encoder is told about the picture: its size, how tall a row
+    /// stands for against how wide a column does, the machine's frame rate,
+    /// and whether to scale it smoothly.
+    ///
+    /// With the set on, every line of the picture is two rows of the buffer —
+    /// a line and the gap under it — so a row stands for half as much height
+    /// as a column does width. Written as though those rows were square, the
+    /// televised picture went into the file twice as tall as it should be.
+    pub fn video_settings(&self) -> (usize, usize, f64, f64, bool) {
+        let (w, h) = self.picture_size();
+        (
+            w,
+            h,
+            if self.crt_settings().line_gaps {
+                0.5
+            } else {
+                1.0
+            },
+            self.machine_cpu_hz() / self.spec.bus.frame_t() as f64,
+            self.picture_filter() == TextureOptions::LINEAR,
+        )
+    }
+
+    /// Where the video goes: beside the tape if there is one, under its name.
+    fn pick_video_path(&mut self) -> Option<std::path::PathBuf> {
+        let suggested = self
+            .tape_path
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("recording"))
+            .with_extension("mp4");
+        let dialog = rfd::FileDialog::new().set_file_name(
+            suggested
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "recording.mp4".to_string()),
+        );
+        let directory = suggested
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.prefs.dir_for(FileKind::Recording).cloned())
+            .filter(|dir| dir.is_dir());
+        let dialog = match directory {
+            Some(dir) => dialog.set_directory(dir),
+            None => dialog,
+        };
+        dialog.save_file()
+    }
+
+    /// How big the picture is at the moment, in pixels of the buffer that is
+    /// written: the set doubles the height, since every line has a gap.
+    pub fn picture_size(&self) -> (usize, usize) {
+        let (w, h) = match &self.zx81 {
+            Some(_) if self.overscan => (zx81::View::OVERSCAN.w, zx81::View::OVERSCAN.h),
+            Some(_) => (zx81::View::CROPPED.w, zx81::View::CROPPED.h),
+            None => {
+                let view = self.view();
+                (view.width(), view.height())
+            }
+        };
+        let rows = if self.crt_settings().line_gaps { 2 } else { 1 };
+        (w, h * rows)
+    }
+
+    /// Close the file and say what was written.
+    pub fn stop_video(&mut self) {
+        self.spec.bus.audio.tap = None;
+        let Some(mut recording) = self.video.take() else {
+            return;
+        };
+        match recording.finish() {
+            Ok((path, frames)) => {
+                self.prefs.remember_file(FileKind::Recording, &path);
+                self.set_status(format!("Wrote {} ({frames} frames)", path.display()), false);
+            }
+            Err(e) => self.set_status(format!("Video recording failed: {e}"), true),
+        }
+    }
+
+    /// Hand the frame just drawn to the encoder, if one is running.
+    ///
+    /// The buffer that becomes the texture, so what goes into the file is what
+    /// the window shows: the line structure, the composite colour and the dot
+    /// crawl are already in these pixels.
+    /// How many frames of video the picture just drawn is worth.
+    ///
+    /// The window repaints when the window system says so — sixty times a
+    /// second here, and not at all while it is behind another window — and the
+    /// machine draws fifty. A file written a frame per repaint has the wrong
+    /// number of frames in it and plays back at the wrong speed; this counts
+    /// the machine's frames instead, so a second of the file is a second of the
+    /// machine. Capped, because a machine being run flat out draws thousands
+    /// and the file is of what the window showed.
+    pub fn video_frames_owed(due: f64) -> u32 {
+        (due as u32).min(4)
+    }
+
+    fn record_video_frame(&mut self) {
+        if self.video.is_none() {
+            return;
+        }
+        // How many frames the machine has drawn since the last time the
+        // picture was written out. Not one per repaint: the window repaints
+        // when the window system says so and the machine draws fifty times a
+        // second, and a file with sixty frames for every fifty plays back a
+        // fifth too slow.
+        let now = self.spec.bus.frame;
+        self.video_due += now.saturating_sub(self.video_at) as f64;
+        self.video_at = now;
+        // A machine being run flat out draws thousands; the file is of what
+        // the window showed, so it gets what the window showed.
+        let write = Self::video_frames_owed(self.video_due);
+        if write == 0 {
+            return;
+        }
+        self.video_due -= write as f64;
+
+        let televised = self.crt || self.composite;
+        let (w, h) = self.picture_size();
+        let sound: Vec<f32> = self
+            .spec
+            .bus
+            .audio
+            .tap
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default();
+        let failed = {
+            let pixels = if televised {
+                &self.crt_pixels
+            } else {
+                &self.screen_pixels
+            };
+            let recording = self.video.as_mut().expect("checked above");
+            for _ in 0..write {
+                recording.frame(pixels, w, h);
+            }
+            recording.sound(&sound);
+            recording.failed.clone()
+        };
+        if let Some(why) = failed {
+            self.set_status(format!("Video recording stopped: {why}"), true);
+            self.stop_video();
+        }
+    }
+
+    /// Recording the picture itself, as a video file.
+    fn video_button(&mut self, ui: &mut egui::Ui) {
+        match &self.video {
+            None => {
+                if ui
+                    .button("⏺ Video")
+                    .on_hover_text(
+                        "Write the picture to an H.264 file, as the window shows \
+                         it: the line structure, the composite colour and the dot \
+                         crawl go into the file with it. Needs ffmpeg on the \
+                         path. The curve of the glass does not: that is the shape \
+                         the picture is drawn on rather than something done to \
+                         the pixels.",
+                    )
+                    .clicked()
+                {
+                    self.start_video();
+                }
+            }
+            Some(recording) => {
+                let frames = recording.frames;
+                if ui
+                    .button("⏹ Stop video")
+                    .on_hover_text("Stop recording and close the file")
+                    .clicked()
+                {
+                    self.stop_video();
+                }
+                ui.label(
+                    egui::RichText::new(format!("● {frames} frames"))
+                        .color(theme::RED)
+                        .monospace(),
+                );
+            }
+        }
+    }
+
+    /// Zoom and the ways of watching the picture, on a line of their own: the
+    /// machine row is long enough without them, and these belong together.
+    fn video_row(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            // Claim the height of the tallest thing in the row before
+            // anything is placed. egui centres each control in the row as it
+            // stands when the control is added, so a slider half way along an
+            // otherwise short row leaves everything before it sitting three
+            // pixels higher than everything after it.
+            ui.set_min_height(theme::ROW_H);
             theme::group_label(ui, "Zoom");
-            zoom_dropdown(&mut self.scale, ui);
+            let held = self.video_switches_held();
+            ui.add_enabled_ui(!held, |ui| {
+                zoom_dropdown(&mut self.scale, ui);
+            })
+            .response
+            .on_disabled_hover_text(HELD_WHILE_RECORDING);
 
             theme::divider(ui);
             theme::group_label(ui, "Video");
-            ui.toggle_value(&mut self.race_the_beam, "Race the beam")
+
+            // Five seconds a frame, with the picture fading behind the beam:
+            // one frame's drawing, slowed down until it can be read.
+            if theme::toggle(ui, &mut self.racing, "Race the Beam")
                 .on_hover_text(
-                    "Hover the picture to see the frame half-drawn: everything up to \
-                     the cursor is what the ULA has put out so far, the rest is the \
-                     previous frame, dimmed. Works while paused too.",
-                );
-            ui.toggle_value(&mut self.overscan, "Overscan")
+                    "Run at five seconds a frame and watch the beam go down the \
+                     screen. The picture fades behind it, so how long ago each \
+                     part was drawn is visible at a glance.",
+                )
+                .changed()
+            {
+                self.set_racing(self.racing);
+            }
+            ui.add_enabled_ui(self.racing, |ui| {
+                theme::slider(
+                    ui,
+                    egui::Slider::new(&mut self.fade_floor, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .text("fades to"),
+                )
                 .on_hover_text(
-                    "Show the whole border the ULA draws, not just a television's worth.",
+                    "How much of its brightness a pixel is left with by the \
+                     time the beam comes round to draw it again.",
                 );
+            });
+
+            theme::divider(ui);
+            ui.add_enabled_ui(!held, |ui| {
+                theme::toggle(ui, &mut self.crt, "CRT").on_hover_text(
+                    "Show the picture on a tube: the curve of the glass, and a \
+                     gap under every line.",
+                );
+            })
+            .response
+            .on_disabled_hover_text(HELD_WHILE_RECORDING);
+            // Only with the tube: composite video is how the picture reached a
+            // television, and a television is what the other switch is. There
+            // is no picture that arrives down an aerial lead and is then shown
+            // on something that is not a set.
+            ui.add_enabled_ui(self.crt, |ui| {
+                theme::toggle(ui, &mut self.composite, "Composite").on_hover_text(
+                    "Take the picture down an aerial lead: colour smeared sideways \
+                 by the subcarrier it rides on, and the herringbone that \
+                 subcarrier beats against the machine's dot clock. A monitor \
+                 fed RGB had neither.",
+                );
+            });
+
+            theme::divider(ui);
+            // Only while stopped: the frame is replayed from its interrupt,
+            // which means being able to hold the machine still and run a copy
+            // of it instead.
+            ui.add_enabled_ui(!self.running, |ui| {
+                theme::toggle(ui, &mut self.cursor_beam, "Cursor Beam").on_hover_text(
+                    "Replay the next frame from its interrupt. Hover the picture and \
+                     everything above the cursor is the screen as the machine had it \
+                     by the time the beam reached that point — every instruction up to \
+                     there executed, and no more. Below it is what the display file \
+                     holds at that moment, dimmed, since the ULA has not put it out \
+                     yet. Stopped machines only.",
+                );
+            });
+            ui.add_enabled_ui(!held, |ui| {
+                theme::toggle(ui, &mut self.overscan, "Overscan").on_hover_text(
+                    "Show the whole border the ULA draws, not just a \
+                     television's worth.",
+                );
+            })
+            .response
+            .on_disabled_hover_text(HELD_WHILE_RECORDING);
+
+            // One whole picture at a time, for watching a game draw itself.
+            // Only while it is stopped: a running machine is already doing
+            // this fifty times a second.
+            if ui
+                .add_enabled(!self.running, egui::Button::new("Next frame"))
+                .on_hover_text(
+                    "Run to the end of the frame the machine is in the middle \
+                     of, so the picture on screen is one the ULA has finished \
+                     painting. Only while it is paused.",
+                )
+                .clicked()
+            {
+                self.next_frame();
+            }
         });
+    }
+
+    /// Switch the slowed-down, fading picture on or off.
+    ///
+    /// Switching it on takes the speed down to five seconds a frame and starts
+    /// the machine — there is nothing to watch otherwise — and switching it
+    /// off puts the speed back where it was.
+    pub fn set_racing(&mut self, on: bool) {
+        // Marking every write costs a branch on the busiest path in the
+        // emulator, so it is only done while somebody is looking at the marks.
+        self.spec.bus.tints = on.then(machine::Tints::default);
+        if on {
+            self.speed_before_race = self.speed;
+            self.speed = RACE_SPEED;
+            self.running = true;
+        } else {
+            self.speed = self.speed_before_race;
+        }
+        self.racing = on;
     }
 
     /// The 48K's two timings, which only it has.
@@ -1614,8 +3259,7 @@ impl App {
             return;
         }
         let mut late = self.spec.bus.late_timing;
-        if ui
-            .checkbox(&mut late, "Late timing")
+        if theme::toggle(ui, &mut late, "Late timing")
             .on_hover_text(
                 "Later 48K machines run the display one T-state later \
                  relative to the interrupt. HALT2INT tells them apart.",
@@ -1628,11 +3272,31 @@ impl App {
                 false,
             );
         }
+
+        // Which bits of a write to $FE the EAR input hears back. A tape
+        // protection that listens for the line to be alive hears the MIC bit
+        // on an issue 2 board and nothing on an issue 3 one.
+        let mut issue2 = self.spec.bus.issue2;
+        if theme::toggle(ui, &mut issue2, "Issue 2")
+            .on_hover_text(
+                "The EAR input hears the machine's own loudspeaker. An issue 2 \
+                 board hears the MIC bit as well as the speaker's, which is what \
+                 a tape protection listening for a live line expects — Head over \
+                 Heels needs it. Switch it off for a strict issue 3.",
+            )
+            .changed()
+        {
+            self.spec.bus.issue2 = issue2;
+            self.set_status(
+                format!("48K issue {}", if issue2 { "2" } else { "3" }),
+                false,
+            );
+        }
     }
 
     fn controls_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.toggle_value(&mut self.spec.bus.slow.enabled, "Slow draw")
+            theme::toggle(ui, &mut self.spec.bus.slow.enabled, "Slow draw")
                 .on_hover_text(
                     "Park the CPU after a set number of writes to watched video memory \
                      so the picture visibly builds up over several host frames.",
@@ -1644,8 +3308,8 @@ impl App {
                         .logarithmic(true)
                         .text("writes/frame"),
                 );
-                ui.toggle_value(&mut self.spec.bus.slow.watch_screen, "video RAM");
-                ui.toggle_value(&mut self.spec.bus.slow.watch_back_buffer, "back buffer");
+                theme::toggle(ui, &mut self.spec.bus.slow.watch_screen, "video RAM");
+                theme::toggle(ui, &mut self.spec.bus.slow.watch_back_buffer, "back buffer");
             });
             ui.separator();
             if let Some(rzx) = &self.rzx {
@@ -1700,7 +3364,7 @@ impl App {
                         );
                 }
                 if ui.button("Stop").clicked() {
-                    self.stop_recording();
+                    self.stop_playback();
                     self.set_status("Stopped the recording".into(), false);
                 }
                 theme::divider(ui);
@@ -1736,7 +3400,7 @@ impl App {
                 (None, None) => "no audio device".to_string(),
             };
             let failed = self.audio_out.is_none();
-            ui.toggle_value(&mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
+            theme::toggle(ui, &mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
                 .on_hover_text(&sound);
             theme::slider(
                 ui,
@@ -1744,7 +3408,7 @@ impl App {
                     .show_value(false)
                     .text("vol"),
             );
-            ui.toggle_value(&mut self.spec.bus.audio.mute_off_speed, "auto-mute")
+            theme::toggle(ui, &mut self.spec.bus.audio.mute_off_speed, "auto-mute")
                 .on_hover_text("Silence the sound unless the machine is running at about normal speed, so fast-forwarding does not shriek.");
             theme::slider(
                 ui,
@@ -1827,6 +3491,17 @@ impl App {
         // doing that after a menu popup has been opened discards the popup.
         self.debug_viewports(&ctx);
 
+        // Watching runs while somebody is looking for something, and is
+        // switched on from the window doing the looking rather than from a
+        // toggle somewhere else. Set here because the window need not be open
+        // for the machine to be running.
+        // Two windows can want it: the call flow looking for something, and
+        // the debugger working out where the routines are. Either is enough,
+        // and neither switches the other off — this used to be a plain
+        // assignment from the call flow, which quietly undid the debugger's
+        // request on the next frame.
+        self.spec.bus.observer.enabled = self.callflow.looking || self.dbg.watching_blocks;
+
         self.save_window_state_if_settled();
         self.save_notes_if_due();
         ctx.request_repaint();
@@ -1837,6 +3512,7 @@ impl App {
         egui::Panel::top("menu").show(ui, |ui| {
             self.menu(ui);
             self.machine_row(ui);
+            self.video_row(ui);
         });
         egui::Panel::bottom("status").show(ui, |ui| {
             self.controls_row(ui);
@@ -1867,7 +3543,7 @@ impl App {
                 // Take the whole panel and put the picture in the middle of it,
                 // so the space around the display is equal on all four sides.
                 let (area, response) =
-                    ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+                    ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
                 let painter = ui.painter_at(area);
                 // The picture sits in a bevelled surround rather than on bare
                 // black, as a set does in its case.
@@ -1887,12 +3563,47 @@ impl App {
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3a, 0x35, 0x2d)),
                     egui::StrokeKind::Outside,
                 );
-                painter.image(
-                    tex.id(),
-                    picture,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
+                if self.crt {
+                    // Onto the glass, which is part of a sphere: the corners
+                    // sit further out than the edges.
+                    painter.add(egui::Shape::mesh(crt::curved(
+                        tex.id(),
+                        picture,
+                        crt::CURVE,
+                    )));
+                } else {
+                    painter.image(
+                        tex.id(),
+                        picture,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                }
+
+                // Clicking a pixel picks out the byte behind it in the
+                // debugger's dump: "what draws this?" starts with knowing
+                // which byte it is, and counting rows and thirds by hand to
+                // work out a display address is a job nobody should be doing.
+                if response.clicked() {
+                    if let Some(at) = response.interact_pointer_pos() {
+                        if picture.contains(at) {
+                            let px = ((at.x - picture.left()) / self.scale) as usize;
+                            let py = ((at.y - picture.top()) / self.scale) as usize;
+                            self.show_pixel_in_memory(px, py);
+                        }
+                    }
+                }
+
+                // The ULA's own beam, drawn where it has actually reached.
+                //
+                // Only worth showing while the machine is going slowly enough
+                // to see it: at full speed a frame of work is done between one
+                // repaint and the next, so the beam would sit at the top of
+                // the frame looking broken. The ZX81 has no ULA drawing a
+                // picture — the CPU does it — so there is no beam to show.
+                if self.crawling() && self.zx81.is_none() {
+                    draw_beam(&painter, &self.spec.bus, self.view(), picture, self.scale);
+                }
 
                 // Where is the beam? Wherever the cursor is over the picture.
                 // The ZX81 draws with the CPU, so there is no beam to race.
@@ -1926,6 +3637,7 @@ impl App {
             ("tape", self.show_tape),
             ("back_buffer", self.show_back_buffer),
             ("sprites", self.show_sprites),
+            ("callflow", self.show_callflow),
         ] {
             if !shown {
                 self.placed.remove(name);
@@ -1940,14 +3652,20 @@ impl App {
                     "ram_map",
                     ViewportBuilder::default().with_title("RAM access map"),
                     [1120.0, 40.0],
-                    [560.0, 700.0],
+                    [cassette::WINDOW_W, 700.0],
                 ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
-                    if self.place_window("ram_map", &ctx, [1120.0, 40.0], [560.0, 700.0]) {
+                    self.fix_width(&ctx, cassette::WINDOW_W);
+                    if self.place_window(
+                        "ram_map",
+                        &ctx,
+                        [1120.0, 40.0],
+                        [cassette::WINDOW_W, 700.0],
+                    ) {
                         self.remember_window("ram_map", &ctx);
                     }
                     egui::CentralPanel::default().show(ui, |ui| ram_map::ui(self, ui));
@@ -2022,7 +3740,11 @@ impl App {
                     "tape",
                     ViewportBuilder::default().with_title("Tape"),
                     [300.0, 120.0],
-                    [720.0, 780.0],
+                    // Tall enough that the block list still has rows in it
+                    // under everything above it: the cassette, the two rows of
+                    // controls — five with the deck's failings on show — and
+                    // the scope.
+                    [720.0, 900.0],
                 ),
                 |ui, _class| {
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -2030,7 +3752,7 @@ impl App {
                     }
                     let ctx = ui.ctx().clone();
                     self.fix_width(&ctx, cassette::WINDOW_W);
-                    if self.place_window("tape", &ctx, [260.0, 120.0], [cassette::WINDOW_W, 760.0])
+                    if self.place_window("tape", &ctx, [260.0, 120.0], [cassette::WINDOW_W, 880.0])
                     {
                         // Built around the cassette: the height is the user's
                         // to drag, the width is not.
@@ -2042,13 +3764,37 @@ impl App {
             self.show_tape = open;
         }
 
+        if self.show_callflow {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("callflow"),
+                self.restore_window(
+                    "callflow",
+                    ViewportBuilder::default().with_title("Call flow"),
+                    [360.0, 180.0],
+                    [520.0, 700.0],
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("callflow", &ctx, [360.0, 180.0], [520.0, 700.0]) {
+                        self.remember_window("callflow", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| callflow::ui(self, ui));
+                },
+            );
+            self.show_callflow = open;
+        }
+
         if self.show_sprites {
             let mut open = true;
             ctx.show_viewport_immediate(
                 ViewportId::from_hash_of("sprites"),
                 self.restore_window(
                     "sprites",
-                    ViewportBuilder::default().with_title("Sprites"),
+                    ViewportBuilder::default().with_title("Graphics"),
                     [340.0, 200.0],
                     [720.0, 640.0],
                 ),
@@ -2057,6 +3803,10 @@ impl App {
                         open = false;
                     }
                     let ctx = ui.ctx().clone();
+                    if self.sprites.raise {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        self.sprites.raise = false;
+                    }
                     if self.place_window("sprites", &ctx, [340.0, 200.0], [720.0, 640.0]) {
                         self.remember_window("sprites", &ctx);
                     }

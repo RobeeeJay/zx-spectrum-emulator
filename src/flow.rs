@@ -21,6 +21,47 @@ pub enum Flow {
     Straight,
 }
 
+/// Whether an opcode is a jump that always jumps.
+///
+/// `JP nn`, and the indirect `JP (HL)`, `JP (IX)` and `JP (IY)` a dispatch
+/// table goes through. A conditional `JP cc,nn` is not one of these: it is an
+/// early way out of a routine taken when a flag says so, and the routine
+/// carries on underneath it. Treating those as endings would cut every guarded
+/// routine into pieces at its first test.
+///
+/// `JR` is left out on purpose. Its reach is a hundred and twenty-odd bytes
+/// either way, which is inside the routine it is in almost every time, and
+/// calling each one an ending would divide loops rather than routines.
+pub fn always_jumps(opcode: [u8; 2]) -> bool {
+    match opcode[0] {
+        // JP nn, JP (HL)
+        0xC3 | 0xE9 => true,
+        // JP (IX), JP (IY)
+        0xDD | 0xFD => opcode[1] == 0xE9,
+        _ => false,
+    }
+}
+
+/// Whether an opcode is a return that always returns.
+///
+/// `RET`, `RETI` and `RETN`. A conditional `RET cc` is not one: it is an early
+/// way out taken when a flag says so, and the routine carries on underneath
+/// it. The distinction matters where a routine's *extent* is being worked out
+/// rather than where one call ended — a taken `RET Z` ends that call, and the
+/// next call through the same routine may fall straight past it. Treating it
+/// as the end drew the routine as far as its first test and no further.
+pub fn always_returns(opcode: [u8; 2]) -> bool {
+    match opcode[0] {
+        0xC9 => true,
+        // RETI and RETN, which are ED-prefixed.
+        0xED => matches!(
+            opcode[1],
+            0x4D | 0x45 | 0x55 | 0x5D | 0x65 | 0x6D | 0x75 | 0x7D
+        ),
+        _ => false,
+    }
+}
+
 /// Classify one executed instruction. `peek` reads the word at an address.
 pub fn classify(
     pc_before: u16,

@@ -75,9 +75,9 @@ pub fn spin_rate(pack: f32, boosted: bool) -> f32 {
     const TAPE_MM_S: f32 = 47.6;
     /// Radius of a full pack, in millimetres.
     const FULL_MM: f32 = 25.7;
-    /// Hurrying the tape along turns the hubs half again as fast, which reads
-    /// as urgency without becoming a blur.
-    const BOOST: f32 = 1.5;
+    /// Hurrying the tape along — Max CPU or Fastload — turns the hubs at
+    /// double speed, the way a deck's do when the fast-forward is held down.
+    const BOOST: f32 = 2.0;
     TAPE_MM_S / (pack.max(EMPTY) * FULL_MM) * if boosted { BOOST } else { 1.0 }
 }
 
@@ -124,7 +124,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) -> Rect {
     app.tape.spun_at = now;
     let (left_pack, right_pack) = reel_scales(progress);
     let boosted = app.tape_boost();
-    if playing {
+    // Only while the tape is actually moving. A paused machine passes no
+    // T-states, so the deck stands still — and hubs that keep turning over a
+    // stopped tape say the opposite of what has happened.
+    if playing && app.running {
         app.tape.left_spin += dt * spin_rate(left_pack, boosted);
         app.tape.right_spin += dt * spin_rate(right_pack, boosted);
     }

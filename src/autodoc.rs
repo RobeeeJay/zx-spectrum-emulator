@@ -338,6 +338,17 @@ pub struct Features {
     /// The routine reads the refresh register, or the ROM's own bytes.
     pub reads_r: bool,
     pub reads_rom: bool,
+    /// Which of port $FE's four jobs the code appears to be doing. The port
+    /// is the border, the beeper, the MIC socket and the keyboard at once, so
+    /// the port number says nothing on its own — what the code does with the
+    /// byte is the whole of the evidence.
+    ///
+    /// Bit 6 is the EAR line, which only the tape uses; bit 4 is the speaker
+    /// and bit 3 the MIC; the bottom five bits are the keyboard, read with a
+    /// half-row mask in the high byte of the address.
+    pub ear_bit: bool,
+    pub speaker_bit: bool,
+    pub key_rows: bool,
     /// Works out where on the screen to write, in one of the two ways the
     /// display file's layout forces on anybody who tries.
     pub next_scanline: bool,
@@ -447,7 +458,7 @@ fn walk<F: Fn(u16) -> u8>(peek: &F, entries: &[u16]) -> BTreeSet<u16> {
                 }
             }
             // The end of a routine: a return, or a jump that never comes back.
-            if text.starts_with("RET") && !text.contains(',') {
+            if ends_routine(text) {
                 break;
             }
             if text.starts_with("JP $") || text.starts_with("JR $") {
@@ -511,6 +522,26 @@ pub fn read_routine<F: Fn(u16) -> u8>(peek: &F, entry: u16) -> Features {
             f.masked_writes += 1;
         }
 
+        // Which of port $FE's jobs this is. Testing bit 6 is the tape and
+        // nothing else: the border, the beeper and the keyboard have no use
+        // for the EAR line.
+        if text.contains("$40") && (text.starts_with("AND") || text.starts_with("XOR"))
+            || text.starts_with("BIT 6,")
+        {
+            f.ear_bit = true;
+        }
+        if text.contains("$10") && (text.starts_with("XOR") || text.starts_with("OR ")) {
+            f.speaker_bit = true;
+        }
+        // A keyboard read puts a half-row mask in the high byte of the port
+        // address: one bit low out of the top eight.
+        if let Some(value) = loaded_constant(&text) {
+            let (high, low) = ((value >> 8) as u8, value as u8);
+            if low == 0xFE && matches!(high.count_zeros(), 1) {
+                f.key_rows = true;
+            }
+        }
+
         // The display file's layout is peculiar enough that the arithmetic for
         // getting about it is unmistakable, and is the firmest evidence there
         // is that a routine draws.
@@ -536,7 +567,7 @@ pub fn read_routine<F: Fn(u16) -> u8>(peek: &F, entry: u16) -> Features {
 
         f.text.push(text.clone());
 
-        if (text.starts_with("RET") && !text.contains(',')) || text.starts_with("JP $") {
+        if ends_routine(&text) || text.starts_with("JP $") {
             break;
         }
         addr = addr.wrapping_add(insn.len.max(1) as u16);
@@ -560,6 +591,28 @@ pub fn describe(f: &Features) -> (String, String) {
     if f.calls_rom(0x04C2) {
         return ("save_to_tape".into(), "Saves to tape".into());
     }
+    // Port $FE, four ways. Bit 6 is the tape and only the tape.
+    if f.ear_bit && (f.ports_in.contains(&0xFE) || f.ports_out.contains(&0xFE)) {
+        return (
+            "load_from_tape".into(),
+            "Reads the EAR line on port $FE: listening to the tape".into(),
+        );
+    }
+    if f.key_rows && f.ports_in.contains(&0xFE) {
+        return (
+            "read_keys".into(),
+            "Reads port $FE with a half-row mask: the keyboard, or a joystick \
+             wired to one of its rows"
+                .into(),
+        );
+    }
+    if f.speaker_bit && f.ports_out.contains(&0xFE) {
+        return (
+            "play_sound".into(),
+            "Toggles bit 4 of port $FE: the beeper".into(),
+        );
+    }
+
     if f.ports_in.contains(&0x1F) {
         return (
             "read_joystick".into(),
@@ -569,21 +622,24 @@ pub fn describe(f: &Features) -> (String, String) {
     if f.ports_out.iter().any(|p| *p == 0xFFFD || *p == 0xBFFD) {
         return ("play_sound".into(), "Writes to the AY sound chip".into());
     }
-    if f.ports_out.contains(&0xFE) && f.text.iter().any(|t| t.contains("DJNZ")) {
-        return (
-            "play_sound".into(),
-            "Toggles the beeper in a timed loop".into(),
-        );
-    }
+
     if f.calls_rom(0x03B5) || f.calls_rom(0x03F8) {
         return ("play_sound".into(), "Sounds a note through the ROM".into());
     }
-    if f.ports_in.contains(&0xFE) || f.calls_rom(0x028E) || f.calls_rom(0x02BF) {
-        // A joystick wired to the keyboard reads the same port; the rows tell
-        // them apart, and only sometimes, so both are offered.
+    if f.calls_rom(0x028E) || f.calls_rom(0x02BF) {
         return (
             "read_keys".into(),
-            "Reads the keyboard (or a joystick wired to it) on port $FE".into(),
+            "Reads the keyboard through the ROM".into(),
+        );
+    }
+    if f.ports_in.contains(&0xFE) {
+        // Nothing about what was done with the byte, so nothing about which of
+        // the port's four jobs this was.
+        return (
+            "reads_port_fe".into(),
+            "Reads port $FE — the keyboard, the tape or a joystick wired to \
+             one of them; there is nothing here to say which"
+                .into(),
         );
     }
 
@@ -738,10 +794,10 @@ pub fn beam_phase(
     first_pixel_t: u32,
     frame_t: u32,
 ) -> &'static str {
-    if seen.calls == 0 || seen.entered_at.high == 0 {
+    if seen.calls == 0 || seen.entered_at.is_empty() {
         return "";
     }
-    let (low, high) = (seen.entered_at.low as u32, seen.entered_at.high as u32);
+    let (low, high) = (seen.entered_at.low, seen.entered_at.high);
     // 192 lines of 224 T-states is the picture on a 48K; near enough on the
     // others for the purpose of saying which third of the frame this is.
     let picture_ends = first_pixel_t + 192 * 224;
@@ -794,15 +850,22 @@ pub fn describe_measured(seen: &crate::observe::Observed, frames: u32) -> Option
         ", once"
     };
 
+    // What it mostly does comes first. A routine that touched a port and also
+    // wrote a hundred thousand bytes into the display file is drawing; the
+    // port rules below are for routines whose work *is* the port. Manic
+    // Miner's main loop reads the keys and draws the whole screen, and was
+    // being called a keyboard routine on the strength of two IN instructions.
+    let mostly_draws = per_call(seen.writes.screen + seen.writes.attrs) > 64;
+
     // Input and sound are named by the ports they touched, which is not a
     // guess at all.
-    if seen.ports_in.contains(&0x1F) {
+    if !mostly_draws && seen.ports_in.contains(&0x1F) {
         return Some((
             "read_joystick".into(),
             format!("Reads the Kempston joystick on port $1F{rhythm}"),
         ));
     }
-    if seen.ports_in.iter().any(|p| p & 0x00FF == 0xFE) {
+    if !mostly_draws && seen.ports_in.iter().any(|p| p & 0x00FF == 0xFE) {
         return Some((
             "read_keys".into(),
             format!("Reads the keyboard on port $FE{rhythm}"),
@@ -941,11 +1004,22 @@ fn annotate_lines<F: Fn(u16) -> u8>(peek: &F, entry: u16, doc: &mut Doc) {
             doc.comments.entry(addr).or_insert(note);
         }
 
-        if (text.starts_with("RET") && !text.contains(',')) || text.starts_with("JP $") {
+        if ends_routine(text) || text.starts_with("JP $") {
             break;
         }
         addr = addr.wrapping_add(insn.len.max(1) as u16);
     }
+}
+
+/// Whether this instruction is the end of a routine.
+///
+/// Only an unconditional return is. `RET Z` is a guard clause — the routine
+/// carries on underneath it — and treating it as the end meant reading four
+/// instructions of anything that begins by checking something and giving up.
+/// The test used to be "starts with RET and has no comma in it", which is true
+/// of every conditional return there is.
+pub fn ends_routine(text: &str) -> bool {
+    matches!(text, "RET" | "RETI" | "RETN")
 }
 
 /// The address a CALL or RST goes to, if it is a fixed one.

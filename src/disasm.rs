@@ -384,6 +384,36 @@ impl<F: Fn(u16) -> u8> Cursor<'_, F> {
 /// Find an address at most `back` bytes before `pc` from which disassembling
 /// forward lands exactly on `pc`, so the listing above the current
 /// instruction is aligned with real opcode boundaries.
+/// The instruction immediately above `addr`: the one that ends where it
+/// begins.
+///
+/// Aligned from as far back as it can be, and the *last* boundary in that walk
+/// is the answer. Taking the nearest address that disassembles to the right
+/// length instead reads the operand of the instruction above as an instruction
+/// of its own — the $05 of `LD A,$05` is a perfectly good `DEC B` — and
+/// [`sync_start`] hands back the start of the walk rather than its end, which
+/// is four or five bytes and several instructions too far. Between them, that
+/// is why scrolling a disassembly upwards skidded.
+///
+/// Two instructions' worth of run-up is enough to trust the alignment; nothing
+/// on this machine is longer than four bytes.
+pub fn previous<F: Fn(u16) -> u8>(peek: &F, addr: u16) -> u16 {
+    const LOOK: u16 = 8;
+    for back in (1..=LOOK).rev() {
+        let start = addr.wrapping_sub(back);
+        let mut at = start;
+        let mut off: u32 = 0;
+        while off < back as u32 {
+            at = start.wrapping_add(off as u16);
+            off += disasm(peek, at).len.max(1) as u32;
+        }
+        if off == back as u32 {
+            return at;
+        }
+    }
+    addr.wrapping_sub(1)
+}
+
 pub fn sync_start<F: Fn(u16) -> u8>(peek: &F, pc: u16, back: u16) -> u16 {
     for delta in (1..=back).rev() {
         let start = pc.wrapping_sub(delta);

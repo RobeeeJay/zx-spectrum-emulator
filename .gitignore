@@ -12,3 +12,10 @@
 .DS_Store
 *.afdesign~lock~
 recordings/
+
+# Snapshots are of somebody's game, taken from a copyrighted tape, for the same
+# reason the tapes themselves are not here.
+snapshots/
+
+# Model answers, listings and traces: generated, and often large.
+out/

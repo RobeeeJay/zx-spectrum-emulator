@@ -47,6 +47,7 @@ impl Region {
     }
 }
 
+#[derive(Clone)]
 pub struct Tracker {
     /// 0..=255 intensity, refreshed to 255 on access and faded every frame,
     /// indexed by physical location (see [`ram_phys`] and [`rom_phys`]).

@@ -24,6 +24,42 @@ pub const LCD_FG: Color32 = Color32::from_rgb(0x5d, 0xff, 0x9e);
 /// The dim grid drawn inside an LCD panel.
 pub const LCD_GRID: Color32 = Color32::from_rgb(0x18, 0x30, 0x20);
 
+/// The band behind the row you asked to be taken to. Dark enough that the
+/// green text still reads, and nothing like the amber bar under the current
+/// instruction, which is a different question being answered.
+pub const MARK: Color32 = Color32::from_rgb(0x16, 0x3c, 0x52);
+
+/// The bands behind the listing, one per block, so a routine and the table
+/// next to it are told apart at a glance. Two shades per kind and taken in
+/// turn, so neighbours differ; dark enough that the text over them is still
+/// the text and not a colour scheme.
+/// How tall every control is, and so how tall a row of the listing is.
+pub const CONTROL_H: f32 = 22.0;
+
+/// How tall a row of controls is: enough for a slider, which carries a sunken
+/// frame around it and so stands taller than a button.
+pub const ROW_H: f32 = CONTROL_H + 6.0;
+
+pub const CODE_BANDS: [Color32; 2] = [
+    Color32::from_rgb(0x16, 0x33, 0x26),
+    Color32::from_rgb(0x14, 0x2c, 0x40),
+];
+pub const DATA_BANDS: [Color32; 2] = [
+    Color32::from_rgb(0x42, 0x2d, 0x16),
+    Color32::from_rgb(0x38, 0x1e, 0x36),
+];
+
+/// The band behind a row of the listing: which block it is in, and what that
+/// block holds. Taken in turn so that neighbours differ, and from a different
+/// pair for code and for data so the two are told apart as well.
+pub fn band(index: usize, kind: crate::blocks::Kind) -> Color32 {
+    let bands = match kind {
+        crate::blocks::Kind::Code => CODE_BANDS,
+        crate::blocks::Kind::Data => DATA_BANDS,
+    };
+    bands[index % bands.len()]
+}
+
 pub const AMBER: Color32 = Color32::from_rgb(0xff, 0xb2, 0x38);
 pub const RED: Color32 = Color32::from_rgb(0xe0, 0x43, 0x3c);
 pub const BLUE: Color32 = Color32::from_rgb(0x20, 0x62, 0xff);
@@ -88,18 +124,24 @@ pub fn apply(ctx: &egui::Context) {
     w.hovered.bg_stroke = Stroke::new(1.0, EDGE);
     w.hovered.fg_stroke = Stroke::new(1.0, WHITE);
     w.hovered.corner_radius = radius;
+    // egui expands the rect it paints by a point on each side under the
+    // pointer. That is only the painting, not the layout, but the outline
+    // still swells as the pointer crosses it. It does not here.
+    w.hovered.expansion = 0.0;
 
     w.active.bg_fill = CASE_LIGHT;
     w.active.weak_bg_fill = CASE_LIGHT;
     w.active.bg_stroke = Stroke::new(1.0, EDGE);
     w.active.fg_stroke = Stroke::new(1.0, WHITE);
     w.active.corner_radius = radius;
+    w.active.expansion = 0.0;
 
     w.open.bg_fill = CONTROL;
     w.open.weak_bg_fill = CONTROL;
     w.open.bg_stroke = Stroke::new(1.0, EDGE);
     w.open.fg_stroke = Stroke::new(1.0, INK);
     w.open.corner_radius = radius;
+    w.open.expansion = 0.0;
 
     // The app is dark whatever the desktop is set to: it is a picture of a
     // machine, not a document.
@@ -112,6 +154,13 @@ pub fn apply(ctx: &egui::Context) {
         style.override_font_id = Some(FontId::monospace(12.0));
         style.spacing.item_spacing = egui::vec2(7.0, 5.0);
         style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        // Every control the same height. egui sizes a button to at least
+        // `interact_size` and a toggle to its text plus padding, so a row of
+        // them came out at 18, 20 and 22 points, each sitting at a different
+        // height in the row. Nothing moved when the pointer arrived, but the
+        // outline appeared two points off from its neighbours', which is what
+        // "the buttons jump on hover" actually was.
+        style.spacing.interact_size.y = CONTROL_H;
         style.spacing.menu_margin = Margin::same(6);
         // No banded rows: the mockup's panels are flat, and stripes across an
         // LCD readout look like a fault rather than a decoration.
@@ -268,6 +317,48 @@ pub fn run_pause_button(ui: &mut egui::Ui, running: bool) -> egui::Response {
     );
     let label = if running { PAUSE_LABEL } else { RUN_LABEL };
     ui.add(egui::Button::new(label).min_size(size))
+}
+
+/// A toggle the same height as a button.
+///
+/// egui sizes a button to at least `interact_size`, and a selectable label to
+/// its text plus padding, so a row of the two comes out at 22, 20 and 18
+/// points and every one of them sits at a different height. Nothing moves when
+/// the pointer arrives, but the outline that appears is a couple of points off
+/// from its neighbours', which reads exactly like the button jumping.
+pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
+    let mut response = selectable(ui, *on, text);
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response
+}
+
+/// A button that shows whether it is the one in force, without flipping a flag
+/// of its own: one of a set where pressing one chooses it.
+pub fn selectable(ui: &mut egui::Ui, on: bool, text: &str) -> egui::Response {
+    let height = button_height(ui);
+    ui.add(
+        egui::Button::selectable(on, text)
+            // Framed whether it is on or off. egui leaves the frame off a
+            // selectable button while it is unselected and the pointer is
+            // elsewhere, and puts it back the moment the pointer arrives: the
+            // stroke is a point on each side, so the button grew by two and
+            // shoved every control after it along the row. That is what "the
+            // buttons move on hover" was.
+            .frame_when_inactive(true)
+            .min_size(egui::vec2(0.0, height)),
+    )
+}
+
+/// How tall a button comes out, so anything sitting beside one can match it.
+pub fn button_height(ui: &egui::Ui) -> f32 {
+    // What a plain button comes out at: egui gives one a minimum size of
+    // `interact_size`, and that is the height everything in a row of controls
+    // has to match. Working it out from the text and the padding instead
+    // overshoots by a point, which is just as visible as being short by two.
+    ui.spacing().interact_size.y
 }
 
 /// A divider between groups of controls.

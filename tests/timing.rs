@@ -274,3 +274,58 @@ fn a_full_frame_is_69888_tstates() {
         "the ULA raises /INT at the frame boundary"
     );
 }
+
+/// The floating bus gives back what the ULA has on it, not $FF.
+///
+/// Reading an unattached port on a 48K reads whatever the ULA last put on the
+/// bus, which is how a game finds the beam with no hardware to ask: Sidewize
+/// sits in `LD A,R / IN A,(C) / CP E / JP NZ` on port $40FF until the byte it
+/// wants comes back, and does not enable interrupts until it does.
+///
+/// An IO read is stalled to a free contention slot before it samples, and a
+/// free slot is one of the four in eight when the ULA is not fetching. Reading
+/// those back as $FF meant every such read gave $FF, and a game waiting for a
+/// particular byte waited for ever. The bus is not driven then: what is on it
+/// is the last byte the ULA put there.
+#[test]
+fn the_floating_bus_reads_what_the_ula_is_fetching() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    for cell in 0..32u16 {
+        spec.bus.poke(0x4000 + cell, 0xAA);
+        spec.bus.poke(0x5800 + cell, 0x40);
+    }
+
+    // Across a display line, every read gives back something the screen holds.
+    let first = spec.bus.first_pixel_t();
+    for t in first..first + 128 {
+        spec.bus.tstates = t;
+        let read = spec.bus.io_read(0x40FF);
+        assert!(
+            read == 0xAA || read == 0x40,
+            "at T {t} the bus gave back ${read:02X}, which is neither the \
+             pixels nor the colours the ULA is fetching there"
+        );
+    }
+
+    // And it follows the screen: change what is there and the reads change.
+    for cell in 0..32u16 {
+        spec.bus.poke(0x5800 + cell, 0x07);
+    }
+    spec.bus.tstates = first + 64;
+    let read = spec.bus.io_read(0x40FF);
+    assert!(
+        read == 0xAA || read == 0x07,
+        "after changing the colours the bus gave back ${read:02X}"
+    );
+
+    // Above the picture the ULA is fetching nothing and the bus reads $FF.
+    spec.bus.tstates = 0;
+    assert_eq!(
+        spec.bus.io_read(0x40FF),
+        0xFF,
+        "in the border above the picture there is nothing on the bus"
+    );
+}

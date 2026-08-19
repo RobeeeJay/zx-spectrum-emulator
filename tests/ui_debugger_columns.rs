@@ -78,9 +78,13 @@ fn the_memory_dump_is_on_the_same_pitch_as_the_listing() {
     let addresses = rows_of(&h, |value| {
         value.len() == 4 && value.chars().all(|c| c.is_ascii_hexdigit())
     });
+    // A dump row starts with its address and two spaces. The rest of the row
+    // is a cell per byte now that each one can be clicked and typed over, so
+    // there is no whole-line label to look for.
     let dump = rows_of(&h, |value| {
-        // A dump line is an address, eight bytes and eight characters.
-        value.len() > 30 && value.split_whitespace().count() >= 9
+        value.len() == 6
+            && value.ends_with("  ")
+            && value[..4].chars().all(|c| c.is_ascii_hexdigit())
     });
 
     let listing_pitch = pitch(&addresses);

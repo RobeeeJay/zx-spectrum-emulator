@@ -566,10 +566,14 @@ pub fn parse_tzx(data: &[u8]) -> Result<Vec<Block>, String> {
                 blocks.push(Block::Info("hardware type".into()));
             }
             0x35 => {
-                let id = r.text(10)?;
+                // Sixteen bytes of name, then the length. Reading ten of them
+                // took the length from the last four characters of the name,
+                // which are spaces: a block claiming 0x20202020 bytes, and a
+                // tape that would not load.
+                let id = r.text(16)?;
                 let len = r.u32()? as usize;
                 r.bytes(len)?;
-                blocks.push(Block::Info(format!("custom info: {id}")));
+                blocks.push(Block::Info(format!("custom info: {}", id.trim())));
             }
             0x5a => {
                 r.bytes(9)?;
@@ -672,6 +676,11 @@ enum Phase {
         pulse: u8,
         second: bool,
     },
+    /// The millisecond that finishes the block's last pulse, before the
+    /// silence proper.
+    PauseEdge {
+        ms: u16,
+    },
     /// Silence at the end of a block.
     BlockPause {
         ms: u16,
@@ -685,8 +694,212 @@ struct Pulse {
     len: u32,
     /// `None` toggles the level, `Some(l)` forces it.
     level: Option<bool>,
+    /// Whether this is the deck running tape past the head with nothing on it.
+    /// A silence is no signal, which is nothing volts rather than a signal
+    /// held all the way down, so the line sits in the middle of the scope and
+    /// the hiss sits on top of it.
+    silent: bool,
 }
 
+/// How well the tape and the deck are behaving.
+///
+/// A cassette is not a perfect medium and a deck is not a perfect reader. The
+/// motor runs a little fast and a little slow — wow over a turn of the
+/// capstan, flutter above it — and a head that is not square to the tape reads
+/// the top of the track a moment before the bottom, so the two cancel each
+/// other the shorter the wavelength gets. That is a low-pass filter whose
+/// corner comes down as the head goes further out of square, and it is why a
+/// misaligned deck loses the quick loaders first and ordinary ROM blocks last.
+///
+/// Nothing here is random. Both wobbles are sine waves read off the clock, so
+/// a given moment always gets the same treatment and a load can be repeated.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Quality {
+    /// Whether the motor wavers at all.
+    pub wobble: bool,
+    /// Wow: the slow one, a couple of turns of the reel, as a fraction of the
+    /// right speed.
+    pub wow: f32,
+    /// Flutter: the quick one, over the top of the wow and by the same
+    /// measure.
+    pub flutter: f32,
+    /// Whether the head is out of square with the tape.
+    pub alignment: bool,
+    /// How far out, from square at 0 to hopeless at 1. What it sets is where
+    /// the filter's corner sits: see [`Quality::cutoff`].
+    pub alignment_offset: f32,
+    /// How much that corner wanders up and down as the tape runs, as a
+    /// fraction of itself.
+    pub alignment_wobble: f32,
+    /// Whether the tape hisses.
+    pub noise: bool,
+    /// How loudly, against a full-strength signal. Past the reader's
+    /// threshold it stops being a hiss behind the music and starts being
+    /// edges the machine can hear.
+    pub noise_level: f32,
+}
+
+/// Where the corner sits at each end of the slider.
+///
+/// The top end is only just above the quickest loaders — around 4.5 kHz — so
+/// that the whole of the slider does something: at 30 kHz the first half of it
+/// was a dead run, since nothing on any tape is anywhere near that. The bottom
+/// end is below the pilot tone, where even a ROM block has had it.
+const CUTOFF_SQUARE: f32 = 10_000.0;
+const CUTOFF_WORST: f32 = 250.0;
+
+/// How much of the signal the reader wants before it believes the line has
+/// changed. A comparator has to have some of this or it would chatter on the
+/// noise, and it is what decides that a rolled-off signal has become too
+/// small to read: the filtered wave swings less and less as the corner comes
+/// down, and when it stops reaching this the edges stop arriving.
+const THRESHOLD: f32 = 0.45;
+
+/// How much the signal's own strength varies from pulse to pulse.
+///
+/// A tape is oxide on plastic and its output is never quite the same twice. It
+/// matters where the head has rolled the signal down to about what the reader
+/// needs, which is where a real tape becomes unreliable rather than failing
+/// outright: some pulses clear the threshold and some do not, and which is
+/// which changes as the corner comes down. Without it every pulse of a given
+/// length crosses or none of them does, and the slider has notches in it
+/// rather than a range.
+const GRAIN: f32 = 0.08;
+
+/// The tape's grain at a given moment: the same every time, since a load has
+/// to be repeatable, but with no pattern for a pulse rate to beat against.
+fn grain(at: u64) -> f32 {
+    let mut x = at.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 29;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 32;
+    ((x >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+}
+
+impl Default for Quality {
+    fn default() -> Self {
+        Self {
+            wobble: false,
+            wow: 0.0,
+            flutter: 0.0,
+            alignment: false,
+            alignment_offset: 0.0,
+            alignment_wobble: 0.0,
+            noise: false,
+            // A hiss well under the reader's threshold, so switching it on
+            // shows something on the scope without stopping a load. Turning it
+            // up past THRESHOLD is what makes the machine hear it.
+            noise_level: 0.2,
+        }
+    }
+}
+
+impl Quality {
+    /// The filter's corner, in Hz, at absolute T-state `at`.
+    pub fn cutoff(&self, at: u64) -> f32 {
+        let base = CUTOFF_SQUARE * (CUTOFF_WORST / CUTOFF_SQUARE).powf(self.alignment_offset);
+        if self.alignment_wobble == 0.0 {
+            return base;
+        }
+        let seconds = at as f32 / crate::machine::CPU_HZ as f32;
+        // Slower again than the motor's wander: a head creeps.
+        let wander = (seconds * std::f32::consts::TAU * 0.027).sin();
+        base * (1.0 + self.alignment_wobble * wander)
+    }
+
+    /// What the motor does to a pulse of `len` T-states.
+    ///
+    /// Wow first — a couple of turns of the reel, which is a period of
+    /// seconds rather than milliseconds — with a little flutter over it. Both
+    /// are slow enough to hear as a waver rather than as a buzz, which is what
+    /// a tape does.
+    fn wavered(&self, len: u32, at: u64) -> u32 {
+        if !self.wobble || (self.wow <= 0.0 && self.flutter <= 0.0) {
+            return len;
+        }
+        let seconds = at as f32 / crate::machine::CPU_HZ as f32;
+        // Wow is the reel turning out of true: a period of seconds, with a
+        // slower drift under it.
+        let turn = (seconds * std::f32::consts::TAU * 0.037).sin();
+        let drift = (seconds * std::f32::consts::TAU * 0.012).sin() * 0.6;
+        let wow = self.wow * (turn + drift) / 1.6;
+        // Flutter is the capstan and the tape's own stiffness, which is quick
+        // enough to hear as a warble rather than as a waver.
+        let quick = (seconds * std::f32::consts::TAU * 1.4).sin();
+        let quicker = (seconds * std::f32::consts::TAU * 6.3).sin() * 0.4;
+        let flutter = self.flutter * (quick + quicker) / 1.4;
+        (len as f32 * (1.0 + wow + flutter)).max(1.0) as u32
+    }
+
+    /// The hiss at a given moment, between -1 and 1 before it is scaled.
+    ///
+    /// Tape hiss is there whenever the head is on the tape — through the
+    /// silence between blocks as much as under the signal — and gone the
+    /// moment the head lifts. It is the same every time, as everything else
+    /// here is, so a load can be repeated.
+    pub fn hiss(&self, at: u64) -> f32 {
+        if !self.noise {
+            return 0.0;
+        }
+        // Two grains at different rates, so it is not a single tone.
+        let quick = grain(at);
+        let slower = grain(at / 37);
+        self.noise_level * (quick * 0.75 + slower * 0.25)
+    }
+
+    /// The filter's time constant at `at`, in T-states.
+    fn tau(&self, at: u64) -> f32 {
+        crate::machine::CPU_HZ as f32 / (std::f32::consts::TAU * self.cutoff(at).max(20.0))
+    }
+
+    /// Put one pulse through the head and hand back what the reader makes of
+    /// it: when it decides the line has changed, if it decides that within the
+    /// pulse at all, and where the filter is left afterwards.
+    ///
+    /// This is the filter itself rather than a rule about it. A one-pole
+    /// corner charges towards the level the tape is holding —
+    /// `y = u + (y₀ - u)e^(-t/τ)` — and the reader flips when that gets past
+    /// its threshold. So a signal only a little rolled off flips late; one
+    /// rolled off further flips later still; one whose swing no longer reaches
+    /// the threshold does not flip at all, and leaves the next pulse starting
+    /// from wherever this one left it. Nothing steps off a cliff: the edges
+    /// creep, then some of them go missing, then most of them do.
+    ///
+    /// `reader` is which way the reader currently has the line, since that is
+    /// what decides which threshold it is watching for.
+    fn through_the_head(
+        &self,
+        len: u32,
+        at: u64,
+        from: f32,
+        to: f32,
+        reader: bool,
+    ) -> (Option<u32>, f32) {
+        if !self.alignment {
+            return (Some(0), to);
+        }
+        let tau = self.tau(at);
+        let span = len as f32;
+        // What this pulse is worth, which is not quite what the last one was,
+        // and the hiss it arrives on top of.
+        let to = to * (1.0 + GRAIN * grain(at)) + self.hiss(at);
+        let settled = to + (from - to) * (-span / tau).exp();
+        // The reader is watching for the threshold on the other side of where
+        // it has the line now; a pulse heading the way it already thinks the
+        // line is going cannot change its mind.
+        let want = if reader { -THRESHOLD } else { THRESHOLD };
+        let crossing =
+            if (to - want).abs() > f32::EPSILON && (from - want).signum() != (to - want).signum() {
+                let t = tau * ((to - from) / (to - want)).ln();
+                (t >= 0.0 && t < span).then_some(t as u32)
+            } else {
+                None
+            };
+        (crossing, settled)
+    }
+}
+
+#[derive(Clone)]
 pub struct Tape {
     pub name: String,
     pub blocks: Vec<Block>,
@@ -703,9 +916,36 @@ pub struct Tape {
     pub stopped_by_block: bool,
     /// Where the tape has been played up to, so progress can be worked out
     /// during the silence at the end of a block as well as during the sound.
-    clock: u64,
+    /// The T-state the deck has been advanced to, which is the moment the
+    /// level it is reporting belongs to.
+    pub clock: u64,
     /// The pause a block ends with: when it starts and when it ends.
     pause_span: Option<(u64, u64)>,
+    /// How well the deck is behaving.
+    pub quality: Quality,
+    /// The tape's own level, which is not what the reader sees once the head
+    /// is out of square.
+    raw_level: bool,
+    /// Where the filter has charged to, between -1 and 1.
+    filter_y: f32,
+    /// When the current pulse ends, whatever the reader made of it.
+    raw_next: u64,
+    /// The level change the reader is about to make, and when.
+    pending: Option<(u64, bool)>,
+    /// Whether what is going past the head at the moment is a silence of the
+    /// deck's own making rather than something read off the tape.
+    silent: bool,
+    /// Whether the head is on the tape. Pause leaves it there — the hiss
+    /// carries on — and Stop lifts it, which is silence.
+    pub head_down: bool,
+    /// When the tape last stopped moving. Everything the scope holds from
+    /// before then is a block that has already gone past, not something the
+    /// head can hear now.
+    pub quiet_from: u64,
+    /// The signal itself, as it reaches the reader: samples between -1 and 1,
+    /// so the scope can draw the shape the head made of it rather than the
+    /// squares the reader made of that. Oldest are dropped.
+    pub trace: VecDeque<(u64, f32)>,
     /// Total pulses emitted, for the UI.
     pub pulses: u64,
     /// Recent level changes as (absolute T-state, new level), for the
@@ -720,9 +960,26 @@ pub struct Tape {
 /// How many edges the oscilloscope can look back through.
 pub const EDGE_HISTORY: usize = 16384;
 
+/// And how many samples of the signal's own shape, for drawing what the head
+/// made of it rather than what the reader made of that.
+const TRACE_SAMPLES: usize = 4096;
+
 impl Tape {
     pub fn load(path: &Path) -> Result<Tape, String> {
         let data = std::fs::read(path).map_err(|e| e.to_string())?;
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        Tape::from_bytes(&name, &data)
+    }
+
+    /// A tape from bytes rather than from a file, so one that arrived inside
+    /// an archive can be read without being written out first. The name is
+    /// what the file was called, which decides how it is read and what the
+    /// tape is called afterwards.
+    pub fn from_bytes(file_name: &str, data: &[u8]) -> Result<Tape, String> {
+        let path = Path::new(file_name);
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -733,26 +990,55 @@ impl Tape {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         let blocks = match ext.as_str() {
-            "tzx" => parse_tzx(&data)?,
-            "tap" => parse_tap(&data)?,
+            "tzx" => parse_tzx(data)?,
+            "tap" => parse_tap(data)?,
             // ZX81 program dumps. A .p has no name on the front, so one is
             // made up from the file name; a .p81 carries its own.
-            "p" | "81" => vec![zx81_block(&zx81_name(&stem), &data)],
-            "p81" => parse_p81(&data)?,
+            "p" | "81" => vec![zx81_block(&zx81_name(&stem), data)],
+            "p81" => parse_p81(data)?,
             // Sniff the signature if the extension is unhelpful.
             _ => {
                 if data.starts_with(b"ZXTape!\x1a") {
-                    parse_tzx(&data)?
+                    parse_tzx(data)?
                 } else {
-                    parse_tap(&data)?
+                    parse_tap(data)?
                 }
             }
         };
-        let name = path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        Ok(Tape::from_blocks(name, blocks))
+        Ok(Tape::from_blocks(file_name.to_string(), blocks))
+    }
+
+    /// Whether the tape is sitting in the silence at the end of a block.
+    ///
+    /// Nothing is being loaded here: the pulses have stopped and the program
+    /// is doing whatever it does between blocks, which is usually drawing the
+    /// screen it has just loaded.
+    ///
+    /// Asked of the span rather than the phase. The pause is played as one
+    /// long silent pulse and the phase moves on the moment it is handed over,
+    /// so `Phase::BlockPause` is true for no time at all while the silence
+    /// itself lasts a second.
+    pub fn in_block_pause(&self) -> bool {
+        self.pause_span
+            .is_some_and(|(from, to)| self.clock >= from && self.clock < to)
+    }
+
+    /// Whether the tape stops at the end of the pause it is in.
+    ///
+    /// The silence between two blocks of a multi-load is the loader getting
+    /// ready for the next one and nobody is watching it; the silence at the
+    /// end of the tape, or before a block that stops it, is where the program
+    /// takes over and where somebody has asked to be. Only the second is worth
+    /// coming back to normal speed for.
+    pub fn pause_ends_the_tape(&self) -> bool {
+        if !self.in_block_pause() {
+            return false;
+        }
+        match self.blocks.get(self.block + 1) {
+            None => true,
+            Some(Block::Pause(0)) | Some(Block::StopIf48k) => true,
+            Some(_) => false,
+        }
     }
 
     pub fn from_blocks(name: String, blocks: Vec<Block>) -> Tape {
@@ -769,6 +1055,15 @@ impl Tape {
             stopped_by_block: false,
             clock: 0,
             pause_span: None,
+            quality: Quality::default(),
+            raw_level: false,
+            filter_y: 0.0,
+            raw_next: 0,
+            pending: None,
+            silent: false,
+            head_down: false,
+            quiet_from: 0,
+            trace: VecDeque::with_capacity(TRACE_SAMPLES),
             pulses: 0,
             edges: VecDeque::with_capacity(EDGE_HISTORY),
             pending_edges: Vec::new(),
@@ -781,15 +1076,168 @@ impl Tape {
             self.rewind();
         }
         self.playing = true;
+        self.head_down = true;
         self.stopped_by_block = false;
         // No edge is recorded here: the first generated pulse starts at `now`
         // and records its own leading edge.
         self.next_edge = now;
+        self.raw_next = now;
+        self.pending = None;
+        self.raw_level = false;
+        self.filter_y = 0.0;
+        self.trace.clear();
     }
 
+    /// Take the head off the tape: no signal and no hiss either.
     pub fn stop(&mut self) {
         self.playing = false;
+        self.head_down = false;
+        self.quiet_from = self.clock;
         self.level = false;
+        self.trace.clear();
+    }
+
+    /// Hold the tape still with the head on it, which is what a pause button
+    /// does: nothing is read, and the hiss carries on.
+    pub fn pause(&mut self) {
+        self.playing = false;
+        self.quiet_from = self.clock;
+    }
+
+    /// What the reader makes of a tape that is not moving.
+    ///
+    /// With the head off the tape there is nothing at all — the line sits at
+    /// the middle and the scope draws it flat. With the head down and the tape
+    /// hissing, the line is the hiss, which crosses the reader's threshold
+    /// only when it is turned up far enough to be heard as more than a hiss.
+    fn idle_hiss(&mut self, now: u64) -> bool {
+        if !self.head_down || !self.quality.noise {
+            self.level = false;
+            self.filter_y = 0.0;
+            return false;
+        }
+        self.hiss_reaches_the_reader(now, 0.0)
+    }
+
+    /// What the reader makes of the hiss on top of the level the line is
+    /// holding.
+    ///
+    /// Noise is on the tape rather than in the signal, so it is there in the
+    /// silence between blocks and on a tape held still as much as it is under
+    /// a block. Turned up past the threshold it is edges, and a loader waiting
+    /// through a gap hears them.
+    fn hiss_reaches_the_reader(&mut self, now: u64, under: f32) -> bool {
+        let signal = under + self.quality.hiss(now);
+        self.filter_y = signal;
+        let was = self.level;
+        self.level = if signal > THRESHOLD {
+            true
+        } else if signal < -THRESHOLD {
+            false
+        } else {
+            was
+        };
+        if self.level != was {
+            self.push_edge(now);
+        }
+        self.level
+    }
+
+    /// Keep the shape of the signal across one pulse, for the scope.
+    ///
+    /// A pulse the head has not touched is a step and needs no more than its
+    /// corner; one it has rolled off is a curve, so it is sampled along its
+    /// length. What the scope then draws is the signal as it arrives rather
+    /// than the squares the reader makes of it.
+    fn record_trace(&mut self, start: u64, len: u32, from: f32, to: f32, settled: f32) {
+        while self.trace.len() + 6 > TRACE_SAMPLES {
+            self.trace.pop_front();
+        }
+        let end = start + len as u64;
+        if !self.quality.alignment || (settled - to).abs() < 0.01 {
+            // A step and then a hold. Both ends are needed: a single sample a
+            // pulse is a corner with nothing joining it to the next, and a
+            // line drawn through those is a triangle wave rather than a
+            // square one.
+            self.trace.push_back((start, to));
+            self.trace.push_back((end, to));
+            return;
+        }
+        let tau = self.quality.tau(start);
+        for step in 0..5 {
+            let along = len as f32 * step as f32 / 5.0;
+            let y = to + (from - to) * (-along / tau).exp();
+            self.trace.push_back((start + along as u64, y));
+        }
+        self.trace.push_back((end, settled));
+    }
+
+    /// How loud the hiss is to the loudspeaker, rather than to the reader.
+    ///
+    /// The reader only hears the hiss when it crosses its threshold, so a
+    /// quiet one is inaudible where the tape is silent — which is not what a
+    /// tape sounds like. The mixer is given the hiss itself instead, so it is
+    /// there through the gaps between blocks and under the signal, as it is on
+    /// a real deck with the volume up.
+    pub fn audible_hiss(&self) -> f32 {
+        if !self.head_down || !self.quality.noise {
+            return 0.0;
+        }
+        // Against the 0.08 the EAR line is worth in the mix: a hiss you can
+        // hear under a loading tone without it being the loudest thing there.
+        self.quality.noise_level * 0.06
+    }
+
+    /// The signal on the line across a window of time, at whatever resolution
+    /// the scope asks for.
+    ///
+    /// The deck keeps the signal's corners — a step, or the curve the head
+    /// rolls it into — and nothing more, because that is all the shape there
+    /// is. The hiss is put on here instead of being stored: it is white noise
+    /// and it has a value at every instant, so sampling it at the resolution
+    /// of the screen is both cheaper and truer than keeping a recording of it
+    /// that a scope would then have to draw between.
+    pub fn scope_samples(&self, from: u64, to: u64, count: usize) -> Vec<(u64, f32)> {
+        let count = count.max(2);
+        let span = to.saturating_sub(from).max(1);
+        // Nothing from before the tape stopped: that block has gone past the
+        // head and is not what is on the line now.
+        let floor = if self.playing { 0 } else { self.quiet_from };
+        let kept: Vec<(u64, f32)> = self
+            .trace
+            .iter()
+            .copied()
+            .filter(|(t, _)| *t >= floor)
+            .collect();
+
+        let mut at = 0usize;
+        (0..count)
+            .map(|step| {
+                let t = from + span * step as u64 / (count - 1) as u64;
+                while at + 1 < kept.len() && kept[at + 1].0 <= t {
+                    at += 1;
+                }
+                let level = match (kept.get(at), kept.get(at + 1)) {
+                    // Between two corners: the line is on its way from one to
+                    // the other.
+                    (Some(&(t0, y0)), Some(&(t1, y1))) if t >= t0 && t1 > t0 => {
+                        let along = (t - t0) as f32 / (t1 - t0) as f32;
+                        y0 + (y1 - y0) * along.clamp(0.0, 1.0)
+                    }
+                    // Past the last corner, or before the first: a tape that
+                    // is running is holding the level it last reached, and one
+                    // that is not is sitting at the middle of the screen.
+                    (Some(&(_, y)), _) if self.playing => y,
+                    _ => 0.0,
+                };
+                let hiss = if self.head_down {
+                    self.quality.hiss(t)
+                } else {
+                    0.0
+                };
+                (t, level + hiss)
+            })
+            .collect()
     }
 
     /// Record a level change for the oscilloscope and the mixer.
@@ -923,7 +1371,7 @@ impl Tape {
                     seg.data * byte.min(len) as u64 / len as u64
                 }
             }
-            Phase::BlockPause { .. } => seg.pilot + seg.sync + seg.data,
+            Phase::PauseEdge { .. } | Phase::BlockPause { .. } => seg.pilot + seg.sync + seg.data,
             Phase::Next | Phase::Finished => match self.pause_span {
                 // Still in the silence this block ends with.
                 Some((from, to)) if self.clock < to && to > from => {
@@ -966,16 +1414,86 @@ impl Tape {
         self.pulses = 0;
     }
 
+    /// Position the deck at the silence that ends a block, as though it had
+    /// just been played.
+    ///
+    /// What a block hands the machine is not only its bytes: the pause behind
+    /// them is what gives the program time to get going before the next block
+    /// starts. Handing the bytes over and jumping straight to the next block's
+    /// pilot takes that time away, and a loader that needs it — Cobra's has
+    /// under two seconds of pilot to catch — never gets started.
+    pub fn seek_to_pause_after(&mut self, block: usize) {
+        self.pause_span = None;
+        self.level = false;
+        if block >= self.blocks.len() {
+            self.block = self.blocks.len();
+            self.phase = Phase::Finished;
+            return;
+        }
+        self.block = block;
+        let ms = match &self.blocks[block] {
+            Block::Standard { pause_ms, .. } => *pause_ms,
+            Block::Turbo { pause_ms, .. } => *pause_ms,
+            Block::PureData { pause_ms, .. } => *pause_ms,
+            _ => 0,
+        };
+        self.phase = if ms == 0 {
+            Phase::Next
+        } else {
+            Phase::PauseEdge { ms }
+        };
+    }
+
     /// Jump straight to a block, e.g. from the tape window.
+    /// Put a stop-the-tape block in front of a block.
+    ///
+    /// A tape image is a list of blocks and the deck plays through it; a stop
+    /// block is how a tape says "the loader is waiting for something", and
+    /// putting one in is how somebody working on a game gets the deck to stop
+    /// where the tape's author did not. The block being played keeps being the
+    /// block being played, whichever side of it the new one goes.
+    pub fn insert_stop_before(&mut self, index: usize) {
+        let index = index.min(self.blocks.len());
+        self.blocks.insert(index, Block::Pause(0));
+        if index <= self.block {
+            self.block += 1;
+        }
+    }
+
+    /// Take a block out of the tape, which is only offered for the stop
+    /// blocks put in from the block list.
+    pub fn remove_block(&mut self, index: usize) {
+        if index >= self.blocks.len() {
+            return;
+        }
+        self.blocks.remove(index);
+        if index < self.block {
+            self.block -= 1;
+        }
+    }
+
     pub fn seek(&mut self, block: usize) {
         self.pause_span = None;
         self.block = block.min(self.blocks.len());
         self.phase = Phase::Enter;
         self.level = false;
+        self.raw_level = false;
+        self.filter_y = 0.0;
+        self.pending = None;
+        self.trace.clear();
     }
 
     pub fn finished(&self) -> bool {
         matches!(self.phase, Phase::Finished) || self.block >= self.blocks.len()
+    }
+
+    /// When the level next changes, in absolute T-states.
+    ///
+    /// A loader waiting for an edge is going to sit in its sampling loop until
+    /// this moment, and there is nothing to be learned by watching it do so.
+    /// See [`crate::flashload`].
+    pub fn next_edge(&self) -> u64 {
+        self.next_edge
     }
 
     /// EAR level at absolute T-state `now`, advancing the pulse generator to
@@ -983,22 +1501,63 @@ impl Tape {
     pub fn level_at(&mut self, now: u64) -> bool {
         self.clock = now;
         if !self.playing {
-            return false;
+            // A tape held still under the head is not silence: it hisses, and
+            // a hiss loud enough is edges as far as the machine is concerned.
+            return self.idle_hiss(now);
         }
         // Guard against a huge jump (e.g. after a long pause) taking forever.
         let mut guard = 0u32;
         while now >= self.next_edge && self.playing {
+            // A change the reader is due to make part way through the pulse
+            // it is in the middle of.
+            if let Some((at, level)) = self.pending {
+                if now >= at {
+                    self.pending = None;
+                    self.next_edge = self.raw_next;
+                    if level != self.level {
+                        self.level = level;
+                        self.push_edge(at);
+                    }
+                    continue;
+                }
+            }
             match self.next_pulse() {
                 Some(p) => {
-                    let edge_at = self.next_edge;
-                    let new_level = p.level.unwrap_or(!self.level);
-                    let changed = new_level != self.level;
-                    self.level = new_level;
-                    self.next_edge = self.next_edge.saturating_add(p.len.max(1) as u64);
+                    let start = self.raw_next.max(self.next_edge);
+                    let len = self.quality.wavered(p.len.max(1), start);
+                    let forced = p.level;
+                    let raw = forced.unwrap_or(!self.raw_level);
+                    self.raw_level = raw;
+                    // What the line is worth: a pulse is the signal one way
+                    // or the other, and a silence is nothing at all. Playing a
+                    // silence as the level held low put the gap between blocks
+                    // on the floor of the scope, and the hiss with it.
+                    let to = if p.silent {
+                        0.0
+                    } else if raw {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    let (crossing, settled) = if forced.is_some() {
+                        // The deck's own doing — the silence behind a block —
+                        // rather than something read off the tape, so the head
+                        // has nothing to say about it and the line settles.
+                        (Some(0), to)
+                    } else {
+                        self.quality
+                            .through_the_head(len, start, self.filter_y, to, self.level)
+                    };
+                    self.record_trace(start, len, self.filter_y, to, settled);
+                    self.filter_y = settled;
+                    self.raw_next = start.saturating_add(len as u64);
+                    self.pending = crossing.map(|at| (start.saturating_add(at as u64), raw));
+                    self.next_edge = match self.pending {
+                        Some((at, _)) => at.min(self.raw_next),
+                        None => self.raw_next,
+                    };
                     self.pulses += 1;
-                    if changed {
-                        self.push_edge(edge_at);
-                    }
+                    self.silent = p.silent;
                 }
                 None => {
                     self.playing = false;
@@ -1011,6 +1570,14 @@ impl Tape {
             if guard > 2_000_000 {
                 break;
             }
+        }
+        // Through a gap the tape is still going past the head, so the hiss is
+        // still arriving. Under a block it is folded into the pulses instead,
+        // where it either carries them over the threshold or does not.
+        if self.silent && self.quality.noise && self.pending.is_none() {
+            // Nothing under it: a silence is no signal, so the hiss is all
+            // there is on the line.
+            return self.hiss_reaches_the_reader(now, 0.0);
         }
         self.level
     }
@@ -1047,6 +1614,7 @@ impl Tape {
                         return Some(Pulse {
                             len: pilot as u32,
                             level: None,
+                            silent: false,
                         });
                     }
                 }
@@ -1059,6 +1627,7 @@ impl Tape {
                     return Some(Pulse {
                         len: sync as u32,
                         level: None,
+                        silent: false,
                     });
                 }
                 Phase::Sync2 => {
@@ -1074,6 +1643,7 @@ impl Tape {
                     return Some(Pulse {
                         len: sync as u32,
                         level: None,
+                        silent: false,
                     });
                 }
                 Phase::Data { byte, bit, second } => {
@@ -1111,7 +1681,11 @@ impl Tape {
                     };
                     if byte >= data.len() || bit >= bits_here {
                         if byte >= data.len() {
-                            self.phase = Phase::BlockPause { ms: pause_ms };
+                            self.phase = if pause_ms > 0 {
+                                Phase::PauseEdge { ms: pause_ms }
+                            } else {
+                                Phase::Next
+                            };
                             continue;
                         }
                         self.phase = Phase::Data {
@@ -1137,7 +1711,11 @@ impl Tape {
                             second: true,
                         }
                     };
-                    return Some(Pulse { len, level: None });
+                    return Some(Pulse {
+                        len,
+                        level: None,
+                        silent: false,
+                    });
                 }
                 Phase::Tone { left } => {
                     let len = match &self.blocks[self.block] {
@@ -1151,6 +1729,7 @@ impl Tape {
                         return Some(Pulse {
                             len: len as u32,
                             level: None,
+                            silent: false,
                         });
                     }
                 }
@@ -1165,6 +1744,7 @@ impl Tape {
                             return Some(Pulse {
                                 len: len as u32,
                                 level: None,
+                                silent: false,
                             });
                         }
                         None => self.phase = Phase::Next,
@@ -1184,7 +1764,11 @@ impl Tape {
                         }
                     };
                     if byte >= data.len() {
-                        self.phase = Phase::BlockPause { ms: pause_ms };
+                        self.phase = if pause_ms > 0 {
+                            Phase::PauseEdge { ms: pause_ms }
+                        } else {
+                            Phase::Next
+                        };
                         continue;
                     }
                     // Bits go out most significant first, each as a burst of
@@ -1223,7 +1807,11 @@ impl Tape {
                         pulse: if second { pulse + 1 } else { pulse },
                         second: !second,
                     };
-                    return Some(Pulse { len, level: None });
+                    return Some(Pulse {
+                        len,
+                        level: None,
+                        silent: false,
+                    });
                 }
                 Phase::Direct { byte, bit } => {
                     let (data, t, used_bits, pause_ms) = match &self.blocks[self.block] {
@@ -1245,7 +1833,11 @@ impl Tape {
                         8
                     };
                     if byte >= data.len() {
-                        self.phase = Phase::BlockPause { ms: pause_ms };
+                        self.phase = if pause_ms > 0 {
+                            Phase::PauseEdge { ms: pause_ms }
+                        } else {
+                            Phase::Next
+                        };
                         continue;
                     }
                     if bit >= bits_here {
@@ -1262,12 +1854,33 @@ impl Tape {
                     return Some(Pulse {
                         len: t as u32,
                         level: Some(level),
+                        silent: false,
+                    });
+                }
+                // The edge that finishes the last pulse of the block. Every
+                // pulse ends with the line changing, and the last one is no
+                // different — but the silence behind it is at the low level,
+                // so a block whose last pulse was already low used to end with
+                // no change at all. A loader waiting for that edge waits for
+                // ever: Cobra's reads all eight bits of its last byte and then
+                // hangs on the closing edge of the last one, and its
+                // protection takes the silence for a snapped tape.
+                //
+                // The reference calls it a millisecond of the current level
+                // before the pause proper, which is the same thing said the
+                // other way round.
+                Phase::PauseEdge { ms } => {
+                    self.phase = Phase::BlockPause { ms };
+                    return Some(Pulse {
+                        len: T_PER_MS,
+                        level: None,
+                        silent: false,
                     });
                 }
                 Phase::BlockPause { ms } => {
                     self.phase = Phase::Next;
-                    if ms > 0 {
-                        let len = ms as u32 * T_PER_MS;
+                    let len = (ms as u32).saturating_sub(1) * T_PER_MS;
+                    if len > 0 {
                         // The pause is played as one long silent pulse. Noting
                         // when it runs is what lets the block's progress keep
                         // moving through it rather than sticking at the end of
@@ -1276,6 +1889,7 @@ impl Tape {
                         return Some(Pulse {
                             len,
                             level: Some(false),
+                            silent: true,
                         });
                     }
                 }
@@ -1347,6 +1961,7 @@ impl Tape {
                     Some(Pulse {
                         len: ms as u32 * T_PER_MS,
                         level: Some(false),
+                        silent: true,
                     })
                 }
             }

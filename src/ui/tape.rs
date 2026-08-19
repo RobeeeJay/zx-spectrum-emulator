@@ -4,9 +4,9 @@
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Sense, Stroke, Vec2};
 
-use crate::ui::{theme, App};
+use crate::ui::{theme, App, Hurry};
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Trigger {
     Rising,
     Falling,
@@ -30,6 +30,23 @@ pub struct TapeWindowState {
     /// The block the list last asked to scroll into view, for tests and for
     /// anyone wondering why the list jumped.
     pub scroll_requested_for: Option<usize>,
+    /// Whether the list is following the block being played.
+    ///
+    /// It stops following the moment somebody scrolls the list themselves —
+    /// they are reading something, and having it dragged away every time the
+    /// tape moves on is the window arguing with them — and starts again when
+    /// the block being played comes back into view of its own accord.
+    pub following: bool,
+    /// Where the list was left, so a scroll nobody asked for can be told from
+    /// one the list did itself.
+    pub scrolled_to: f32,
+    /// Whether the scope is on show. It is, by default: what the deck is
+    /// putting out is the point of watching a tape load.
+    pub show_scope: bool,
+    /// Whether the deck's failings are on show. They are three rows of a
+    /// window whose height the block list is what is left of, and most of the
+    /// time a deck that behaves is what is wanted.
+    pub show_quality: bool,
 }
 
 impl Default for TapeWindowState {
@@ -43,6 +60,10 @@ impl Default for TapeWindowState {
             right_spin: 0.0,
             spun_at: 0.0,
             scroll_requested_for: None,
+            following: true,
+            scrolled_to: 0.0,
+            show_scope: true,
+            show_quality: false,
         }
     }
 }
@@ -65,11 +86,160 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             ui.vertical_centered(|ui| {
                 crate::ui::cassette::ui(app, ui);
             });
-            ui.separator();
-            scope(app, ui);
+            if app.tape.show_scope {
+                ui.separator();
+                scope(app, ui);
+            }
             ui.separator();
             block_list(app, ui);
         });
+}
+
+/// How fast the tape is got through, on a row of its own: three switches, one
+/// at a time, and no way of asking for two of them.
+fn speeds(app: &mut App, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Speed");
+        // One of three rather than a pair of toggles: they were never
+        // independent, since handing blocks over means running the machine
+        // flat out for the ones that cannot be handed over, and a pair left
+        // "Fastload without Max CPU" to be explained away.
+        let (boost, flash) = (app.tape_boost(), app.tape_flash());
+        let now = if flash {
+            Hurry::Fastload
+        } else if boost {
+            Hurry::Max
+        } else {
+            Hurry::Normal
+        };
+        if theme::selectable(ui, now == Hurry::Normal, "Normal")
+            .on_hover_text("Play the tape at the speed it was recorded at.")
+            .clicked()
+        {
+            app.set_hurry(Hurry::Normal);
+        }
+        if theme::selectable(ui, now == Hurry::Max, "Max CPU")
+            .on_hover_text("Run the machine as fast as it will go while the tape moves.")
+            .clicked()
+        {
+            app.set_hurry(Hurry::Max);
+        }
+        ui.add_enabled_ui(!app.on_zx81(), |ui| {
+            if theme::selectable(ui, now == Hurry::Fastload, "Fastload")
+                .on_hover_text(
+                    "Hand each block straight to the ROM's loader instead of playing \
+                     it, so a tape loads in the time it takes to copy it, and run the \
+                     machine flat out for the blocks that cannot be handed over. Games \
+                     with a loader of their own read the tape themselves: those load at \
+                     whatever speed the machine is running at.",
+                )
+                .clicked()
+            {
+                app.set_hurry(Hurry::Fastload);
+            }
+        });
+        ui.separator();
+        theme::toggle(ui, &mut app.tape.show_scope, "Oscilloscope")
+            .on_hover_text("Show the signal on its way to the reader.");
+        theme::toggle(ui, &mut app.tape.show_quality, "Quality").on_hover_text(
+            "Show what the deck does wrong: the motor's wobble, the head's \
+             alignment and the tape's hiss. They are three rows of a window \
+             the block list is at the bottom of, so they are put away when \
+             nobody is using them.",
+        );
+        // Nothing is said here about who is reading the tape. The name of the
+        // loop the machine is in was on this row for a while, and it flashed:
+        // a loader is in its sampler for part of every byte and somewhere else
+        // for the rest, so the line came and went several times a second. What
+        // the loop is called is still worth knowing — `flashload::sampler`
+        // knows it — but not at that rate and not there.
+    });
+}
+
+/// How well the deck is behaving: the motor's steadiness, the head's alignment
+/// and the tape's own hiss, none of which a real one ever had all of.
+///
+/// A row each. The window is a fixed width, and a row that wraps puts a slider
+/// under the switch it has nothing to do with.
+fn quality(app: &mut App, ui: &mut egui::Ui) {
+    if !app.tape.show_quality {
+        return;
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 110.0;
+        theme::toggle(ui, &mut app.quality.wobble, "Wobble").on_hover_text(
+            "Let the motor waver, as a real one does. Loaders measure the tape \
+             against their own clock, so enough of it and they lose it.",
+        );
+        ui.add_enabled_ui(app.quality.wobble, |ui| {
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.wow, 0.0..=0.05)
+                    .custom_formatter(|v, _| format!("wow {:.1}%", v * 100.0)),
+            )
+            .on_hover_text("Wow: the reel turning out of true, over seconds");
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.flutter, 0.0..=0.05)
+                    .custom_formatter(|v, _| format!("flutter {:.1}%", v * 100.0)),
+            )
+            .on_hover_text(
+                "Flutter: the capstan and the tape's own stiffness, over a fraction of a second",
+            );
+        });
+    });
+
+    ui.horizontal_wrapped(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 110.0;
+        theme::toggle(ui, &mut app.quality.alignment, "Alignment").on_hover_text(
+            "Put the head out of square with the tape. It then reads the top \
+             of the track a moment before the bottom, and the two cancel each \
+             other the shorter the wavelength gets — a low-pass whose corner \
+             comes down the further out it is. The edges creep late first and \
+             then start going missing, so the quick loaders go before the \
+             slow ones.",
+        );
+        ui.add_enabled_ui(app.quality.alignment, |ui| {
+            // The slider is how far out of square the head is; what that is
+            // worth knowing as is where the corner lands, so it says that.
+            let at = app.machine_t();
+            let corner = app.quality.cutoff(at);
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.alignment_offset, 0.0..=1.0)
+                    .custom_formatter(move |_, _| format!("{:.1}kHz", corner / 1000.0)),
+            )
+            .on_hover_text("Where the corner sits");
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.alignment_wobble, 0.0..=0.5)
+                    .custom_formatter(|v, _| format!("±{:.0}%", v * 100.0)),
+            )
+            .on_hover_text("How far the corner wanders as the tape runs");
+        });
+    });
+
+    ui.horizontal_wrapped(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        ui.spacing_mut().slider_width = 110.0;
+        theme::toggle(ui, &mut app.quality.noise, "Noise").on_hover_text(
+            "Tape hiss, there from the moment the head goes down: under the \
+             signal, through the silence between blocks, and on a tape held \
+             at pause. Stop lifts the head and it goes. Turned up past what \
+             the reader calls an edge, the machine starts hearing it.",
+        );
+        ui.add_enabled_ui(app.quality.noise, |ui| {
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut app.quality.noise_level, 0.0..=1.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            )
+            .on_hover_text("How loud the hiss is");
+        });
+    });
 }
 
 fn transport(app: &mut App, ui: &mut egui::Ui) {
@@ -78,6 +248,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
     let playing = app.tape_ref().is_some_and(|t| t.playing);
 
     ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Playback");
         if ui
             .button("|◀ Start")
             .on_hover_text("Back to the start of the tape")
@@ -101,7 +272,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         {
             let t = app.tape_mut().unwrap();
             if playing {
-                t.stop();
+                t.pause();
             } else {
                 t.play(now);
             }
@@ -117,16 +288,10 @@ fn transport(app: &mut App, ui: &mut egui::Ui) {
         {
             action = Some(1);
         }
-        ui.separator();
-        let boost = app.tape_boost();
-        if ui
-            .selectable_label(boost, "Max speed")
-            .on_hover_text("Runs the CPU at 8x while the tape moves, so loading is quick.")
-            .clicked()
-        {
-            *app.tape_boost_mut() = !boost;
-        }
     });
+
+    speeds(app, ui);
+    quality(app, ui);
 
     if let Some(dir) = action {
         let t = app.tape_mut().unwrap();
@@ -150,9 +315,17 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         sweep_slider(&mut app.tape.window_us, ui);
         ui.separator();
         theme::group_label(ui, "Trigger");
-        ui.selectable_value(&mut app.tape.trigger, Trigger::Rising, "Rising");
-        ui.selectable_value(&mut app.tape.trigger, Trigger::Falling, "Falling");
-        ui.selectable_value(&mut app.tape.trigger, Trigger::Off, "Free run");
+        // The theme's selectable rather than egui's, which grows by its frame
+        // when the pointer arrives and shoves the row along.
+        for (kind, name) in [
+            (Trigger::Rising, "Rising"),
+            (Trigger::Falling, "Falling"),
+            (Trigger::Off, "Free run"),
+        ] {
+            if theme::selectable(ui, app.tape.trigger == kind, name).clicked() {
+                app.tape.trigger = kind;
+            }
+        }
     });
 
     let now = app.machine_t();
@@ -227,10 +400,15 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         .map(|(_, l)| *l)
         .unwrap_or(false);
 
-    let trace = Stroke::new(1.5, theme::LCD_FG);
+    // The reader's own idea of the signal, faintly: it is what the machine
+    // acts on, and with the head out of square it is not the same shape as
+    // what arrived. Only while the tape is moving — a deck standing still is
+    // not reading anything, and holding the last block's level across the
+    // screen drew a line at the top or the bottom that meant nothing.
+    let squares = Stroke::new(1.0, theme::LCD_GRID);
     let mut x = rect.left();
     let mut drew = false;
-    for &(t, l) in tape.edges.iter() {
+    for &(t, l) in tape.edges.iter().filter(|_| tape.playing) {
         if t <= t0 {
             continue;
         }
@@ -240,20 +418,45 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
         let ex = x_of(t);
         painter.line_segment(
             [Pos2::new(x, y_of(level)), Pos2::new(ex, y_of(level))],
-            trace,
+            squares,
         );
-        painter.line_segment([Pos2::new(ex, y_of(level)), Pos2::new(ex, y_of(l))], trace);
+        painter.line_segment(
+            [Pos2::new(ex, y_of(level)), Pos2::new(ex, y_of(l))],
+            squares,
+        );
         level = l;
         x = ex;
         drew = true;
     }
-    painter.line_segment(
-        [
-            Pos2::new(x, y_of(level)),
-            Pos2::new(rect.right(), y_of(level)),
-        ],
-        trace,
-    );
+    if tape.playing {
+        painter.line_segment(
+            [
+                Pos2::new(x, y_of(level)),
+                Pos2::new(rect.right(), y_of(level)),
+            ],
+            squares,
+        );
+    }
+
+    // And the signal itself over the top, which is where the head's doing
+    // shows: a corner brought down rounds the squares off, and when the
+    // rounding no longer reaches the reader's threshold an edge goes missing.
+    let trace = Stroke::new(1.5, theme::LCD_FG);
+    let y_of_signal = |y: f32| y_mid - y.clamp(-1.0, 1.0) * (y_low - y_high) * 0.5;
+    // A sample for every pixel across the screen, since the hiss has a value
+    // at every instant and drawing between two of them would smooth it away.
+    // A deck with nothing on it draws a flat line down the middle rather than
+    // leaving the last thing it saw on the screen.
+    let columns = (rect.width().round() as usize).clamp(2, 2048);
+    let shape: Vec<Pos2> = tape
+        .scope_samples(t0, t1, columns)
+        .into_iter()
+        .map(|(t, y)| Pos2::new(x_of(t), y_of_signal(y)))
+        .collect();
+    painter.add(egui::Shape::line(shape, trace));
+    if tape.playing {
+        drew = true;
+    }
 
     // Trigger marker.
     if triggered.is_some() {
@@ -281,8 +484,8 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
     );
     if !drew && !tape.playing {
         painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
+            Pos2::new(rect.center().x, y_mid - 10.0),
+            egui::Align2::CENTER_BOTTOM,
             "no signal",
             egui::FontId::monospace(12.0),
             Color32::from_rgb(0x2a, 0x5a, 0x3c),
@@ -291,11 +494,14 @@ fn scope(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// Whether the current row should be scrolled into view: either because
-/// something asked for it, or because it has gone off screen. The list always
-/// follows the tape — a block list that does not show what is playing is not
-/// worth having.
-pub fn needs_scroll(forced: bool, row_visible: bool) -> bool {
-    forced || !row_visible
+/// something asked for it, or because it has gone off screen — and only while
+/// the list is following the tape at all.
+///
+/// A list that does not show what is playing is not worth having, but neither
+/// is one that drags the reader back every time the tape moves on. See
+/// [`TapeWindowState::following`].
+pub fn needs_scroll(forced: bool, row_visible: bool, following: bool) -> bool {
+    following && (forced || !row_visible)
 }
 
 fn block_list(app: &mut App, ui: &mut egui::Ui) {
@@ -321,13 +527,20 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
         app.tape.last_block = Some(current);
         app.tape.scroll_to_current = true;
     }
-    let rows: Vec<(usize, String, bool)> = app
+    let rows: Vec<(usize, String, bool, bool)> = app
         .tape_ref()
         .unwrap()
         .blocks
         .iter()
         .enumerate()
-        .map(|(i, b)| (i, b.describe(), b.is_data()))
+        .map(|(i, b)| {
+            (
+                i,
+                b.describe(),
+                b.is_data(),
+                matches!(b, crate::tape::Block::Pause(0)),
+            )
+        })
         .collect();
 
     // How far through the block being played, to shade its row.
@@ -344,12 +557,15 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
     };
 
     let mut clicked = None;
+    let mut current_visible = false;
+    let mut insert_before: Option<usize> = None;
+    let mut remove: Option<usize> = None;
     app.tape.scroll_requested_for = None;
-    egui::ScrollArea::vertical()
+    let out = egui::ScrollArea::vertical()
         .id_salt("tape-blocks")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (i, text, is_data) in rows {
+            for (i, text, is_data, is_stop) in rows {
                 let is_current = i == current;
                 let mut rich = RichText::new(format!("{:3}  {text}", i + 1)).monospace();
                 if !is_data && !is_current {
@@ -369,7 +585,14 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                         ));
                     }
                     let visible = ui.clip_rect().contains_rect(resp.rect);
-                    if needs_scroll(app.tape.scroll_to_current, visible) {
+                    current_visible = visible;
+                    // Back in view on its own: the tape has caught up with
+                    // wherever the reader scrolled to, so the list takes over
+                    // again.
+                    if visible {
+                        app.tape.following = true;
+                    }
+                    if needs_scroll(app.tape.scroll_to_current, visible, app.tape.following) {
                         resp.scroll_to_me(Some(egui::Align::Center));
                         app.tape.scroll_requested_for = Some(i);
                     }
@@ -377,9 +600,87 @@ fn block_list(app: &mut App, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     clicked = Some(i);
                 }
+
+                // A way of stopping the deck where the tape's author did not.
+                // It is on the row rather than in a menu because the row is
+                // where the block is, and it appears on hover so the list
+                // stays a list. Drawn into a child ui rather than allocated,
+                // or every row would grow a button's worth of height.
+                let row = resp.rect;
+                let strip = egui::Rect::from_min_max(
+                    egui::pos2(ui.max_rect().left(), row.top()),
+                    egui::pos2(ui.max_rect().right(), row.bottom()),
+                );
+                // Where the pointer is, rather than what egui thinks is under
+                // it: the list is inside a scroll area whose layer is not the
+                // one the pointer is reckoned against, so `rect_contains_
+                // pointer` says no over every row.
+                let pointer = ui.input(|i| i.pointer.latest_pos());
+                let over_row =
+                    pointer.is_some_and(|at| strip.contains(at) && ui.clip_rect().contains(at));
+                if over_row {
+                    let mut over = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(strip.shrink2(egui::vec2(2.0, 0.0)))
+                            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    );
+                    // A stop offers to go again: the ones put in from here are
+                    // the only blocks the list makes, so they are the only
+                    // ones it takes away.
+                    if is_stop {
+                        if over
+                            .button(RichText::new("✖ Delete").size(11.0))
+                            .on_hover_text("Take this stop-the-tape block out again")
+                            .clicked()
+                        {
+                            remove = Some(i);
+                        }
+                    } else if over
+                        .button(RichText::new("⏸ Pause before").size(11.0))
+                        .on_hover_text(
+                            "Put a stop-the-tape block in front of this one, \
+                             so the deck stops here and waits to be started \
+                             again",
+                        )
+                        .clicked()
+                    {
+                        insert_before = Some(i);
+                    }
+                }
             }
         });
+    // A scroll the list did not ask for is the reader's own, and the list
+    // stops following until the tape catches them up. The list's own scrolls
+    // are known: it only ever moves the view on the frame it asked to.
+    // A scroll with the pointer over the list, that leaves the block being
+    // played off the screen, is the reader's own: the list stops following
+    // until the tape catches them up.
+    //
+    // The list's own scrolling moves the view as well, and egui animates it
+    // over several frames, so there is no telling the two apart by watching
+    // the position settle. Where they differ is where they end: the list only
+    // ever scrolls to put the block being played in view, so a movement that
+    // leaves it out of view was not the list's doing.
+    let offset = out.state.offset.y;
+    let moved = (offset - app.tape.scrolled_to).abs() > 0.5;
+    let over = ui
+        .input(|i| i.pointer.latest_pos())
+        .is_some_and(|at| out.inner_rect.contains(at));
+    if over && moved && !current_visible {
+        app.tape.following = false;
+    }
+    app.tape.scrolled_to = offset;
     app.tape.scroll_to_current = false;
+
+    if let Some(i) = insert_before {
+        app.tape_mut().unwrap().insert_stop_before(i);
+        return;
+    }
+
+    if let Some(i) = remove {
+        app.tape_mut().unwrap().remove_block(i);
+        return;
+    }
 
     if let Some(i) = clicked {
         let now = app.machine_t();

@@ -215,6 +215,7 @@ impl Ay {
 }
 
 /// Mixes the beeper and the AY into a stream of samples.
+#[derive(Clone)]
 pub struct Audio {
     pub enabled: bool,
     pub volume: f32,
@@ -224,6 +225,11 @@ pub struct Audio {
     pub speed_ok: bool,
 
     pub sample_rate: f64,
+    /// Somewhere to keep a copy of every sample, while a video is being
+    /// recorded. `None` the rest of the time: a recording of the sound is
+    /// only wanted while something is recording it, and keeping one otherwise
+    /// would be a growing buffer nobody reads.
+    pub tap: Option<Vec<f32>>,
     pub cpu_hz: f64,
     t_per_sample: f64,
 
@@ -233,6 +239,12 @@ pub struct Audio {
 
     /// Current beeper amplitude, from the last OUT to port $FE.
     pub beeper: f32,
+    /// How loud the tape hisses, which is a level rather than a signal: the
+    /// noise itself is made here, a sample at a time.
+    pub tape_hiss: f32,
+    /// The noise generator's state. It need not repeat the way the deck's own
+    /// hiss does — nothing reads this but an ear.
+    hiss_state: u32,
     pub ay: Ay,
     pub ay_present: bool,
 
@@ -261,12 +273,15 @@ impl Audio {
             mute_off_speed: true,
             speed_ok: true,
             sample_rate: 48_000.0,
+            tap: None,
             cpu_hz,
             t_per_sample: cpu_hz / 48_000.0,
             acc: 0.0,
             acc_t: 0.0,
             last_t: 0,
             beeper: 0.0,
+            tape_hiss: 0.0,
+            hiss_state: 0x1234_5678,
             ay: Ay::new(),
             ay_present: false,
             dc_x1: 0.0,
@@ -286,6 +301,20 @@ impl Audio {
         self.t_per_sample = self.cpu_hz / sample_rate;
         self.queue_cap = (sample_rate * 0.25) as usize;
         self.queue = Some(queue);
+    }
+
+    /// Stop sending samples anywhere.
+    ///
+    /// The queue is shared with the sound device, so a copy of a machine holds
+    /// the same one and would play its own sound over the real machine's.
+    pub fn detach(&mut self) {
+        self.queue = None;
+    }
+
+    /// How many T-states go into one sample, which is the clock the mixer
+    /// believes it is counting.
+    pub fn t_per_sample(&self) -> f64 {
+        self.t_per_sample
     }
 
     pub fn set_cpu_hz(&mut self, hz: f64) {
@@ -326,7 +355,7 @@ impl Audio {
             } else {
                 0.0
             };
-            self.acc += (self.beeper + ay_out) * chunk as f32;
+            self.acc += (self.beeper + ay_out + self.hiss()) * chunk as f32;
             self.acc_t += chunk;
             dt -= chunk;
             if self.acc_t >= self.t_per_sample - 1e-9 {
@@ -336,6 +365,19 @@ impl Audio {
                 self.acc_t = 0.0;
             }
         }
+    }
+
+    /// A sample of hiss: white noise at whatever the deck says it is worth.
+    fn hiss(&mut self) -> f32 {
+        if self.tape_hiss <= 0.0 {
+            return 0.0;
+        }
+        // xorshift, which is white enough for a hiss and costs nothing.
+        self.hiss_state ^= self.hiss_state << 13;
+        self.hiss_state ^= self.hiss_state >> 17;
+        self.hiss_state ^= self.hiss_state << 5;
+        let unit = (self.hiss_state >> 8) as f32 / (1 << 24) as f32 * 2.0 - 1.0;
+        unit * self.tape_hiss
     }
 
     fn push(&mut self, sample: f32) {
@@ -351,6 +393,9 @@ impl Audio {
 
         let out = blocked * self.gain;
         self.peak = self.peak.max(out.abs());
+        if let Some(tap) = &mut self.tap {
+            tap.push(out.clamp(-1.0, 1.0));
+        }
         self.pending.push(out.clamp(-1.0, 1.0));
         self.produced += 1;
         if self.pending.len() >= 128 {

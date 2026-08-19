@@ -70,6 +70,69 @@ fn write_bank(spec: &mut Spectrum, bank: usize, data: &[u8]) {
     spec.bus.ram[base..base + n].copy_from_slice(&data[..n]);
 }
 
+/// The machine as a 48K `.sna`, for carrying inside a recording.
+///
+/// A 48K snapshot has no field for the program counter: it resumes by
+/// executing a `RET`, so PC is pushed on the machine's own stack and SP left
+/// pointing at it. That writes two bytes of the machine's memory into the
+/// snapshot, which is why this is built from a copy of the RAM rather than by
+/// pushing on to the running machine.
+///
+/// A paged machine gets the 128K form: the same header, the three banks that
+/// are addressable, then PC, the paging port, and the other five banks.
+pub fn save_sna(spec: &Spectrum) -> Vec<u8> {
+    let c = &spec.cpu;
+    let mut out = Vec::with_capacity(49179);
+    // The order the format keeps them in: I, then the shadow set low byte
+    // first, then the main set, IY, IX, the interrupt flip-flop, R, and AF.
+    out.push(c.i);
+    out.extend_from_slice(&[c.l_, c.h_, c.e_, c.d_, c.c_, c.b_, c.f_, c.a_]);
+    out.extend_from_slice(&[c.l, c.h, c.e, c.d, c.c, c.b]);
+    out.extend_from_slice(&c.iy.to_le_bytes());
+    out.extend_from_slice(&c.ix.to_le_bytes());
+    out.push(if c.iff2 { 0x04 } else { 0 });
+    out.push(c.r | c.r7);
+    out.extend_from_slice(&[c.f, c.a]);
+
+    let paged = spec.bus.model.has_paging();
+    let mut sp = c.sp;
+    let mut ram: Vec<u8> = (0x4000..=0xFFFFu32)
+        .map(|addr| spec.bus.peek_raw(addr as u16))
+        .collect();
+    if !paged {
+        // Push PC where the machine's own RET will find it. Written into the
+        // copy, so the running machine is left alone.
+        sp = sp.wrapping_sub(2);
+        for (offset, byte) in c.pc.to_le_bytes().iter().enumerate() {
+            let at = sp.wrapping_add(offset as u16);
+            if at >= 0x4000 {
+                ram[at as usize - 0x4000] = *byte;
+            }
+        }
+    }
+    out.extend_from_slice(&sp.to_le_bytes());
+    out.push(c.im);
+    out.push(spec.bus.border & 7);
+    out.extend_from_slice(&ram);
+
+    if paged {
+        // The 128K form: where to resume, which bank was at $C000, and then
+        // the banks that were not addressable.
+        out.extend_from_slice(&c.pc.to_le_bytes());
+        out.push(spec.bus.page_reg);
+        out.push(0); // TR-DOS not paged in
+        let at_c000 = (spec.bus.page_reg & 0x07) as usize;
+        for bank in 0..8usize {
+            if bank == 5 || bank == 2 || bank == at_c000 {
+                continue;
+            }
+            let base = bank * 0x4000;
+            out.extend_from_slice(&spec.bus.ram[base..base + 0x4000]);
+        }
+    }
+    out
+}
+
 pub fn load(spec: &mut Spectrum, path: &std::path::Path) -> Result<(), String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     match path

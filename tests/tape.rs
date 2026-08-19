@@ -430,3 +430,107 @@ fn a_blocks_progress_runs_through_the_pause_it_ends_with() {
         "and reach the end of the block: {readings:?}"
     );
 }
+
+/// A TZX custom info block names itself in sixteen bytes, not ten.
+///
+/// Reading ten took the block's length from the last four characters of its
+/// name — spaces, which is a block claiming 0x20202020 bytes — and the rest of
+/// the tape was unreadable behind it. Sidewize carries one, holding its POKEs,
+/// and would not load at all.
+#[test]
+fn a_custom_info_block_is_stepped_over_whole() {
+    use zx_rustrum::tape::{parse_tzx, Block};
+
+    let mut tzx: Vec<u8> = Vec::new();
+    tzx.extend_from_slice(b"ZXTape!\x1a");
+    tzx.extend_from_slice(&[1, 20]);
+
+    // A custom info block: sixteen bytes of name, a length, then the info.
+    let info = b"POKE 40000,0";
+    tzx.push(0x35);
+    tzx.extend_from_slice(b"POKEs           ");
+    tzx.extend_from_slice(&(info.len() as u32).to_le_bytes());
+    tzx.extend_from_slice(info);
+
+    // And a standard block after it, which is what goes missing when the
+    // block before is not stepped over properly.
+    let data = vec![0xFFu8, 0x01, 0x02, 0xFC];
+    tzx.push(0x10);
+    tzx.extend_from_slice(&1000u16.to_le_bytes());
+    tzx.extend_from_slice(&(data.len() as u16).to_le_bytes());
+    tzx.extend_from_slice(&data);
+
+    let blocks = parse_tzx(&tzx).expect("it should read");
+    assert_eq!(blocks.len(), 2, "the custom info and the block after it");
+    match &blocks[0] {
+        Block::Info(text) => assert!(
+            text.contains("POKEs"),
+            "the block should be named by all sixteen bytes: {text:?}"
+        ),
+        other => panic!("expected the custom info, got {other:?}"),
+    }
+    match &blocks[1] {
+        Block::Standard { data: found, .. } => assert_eq!(found, &data),
+        other => panic!("expected the standard block, got {other:?}"),
+    }
+}
+
+/// Every pulse ends with the line changing, including the last one of a block.
+///
+/// The silence behind a block is at the low level, so a block whose last pulse
+/// was already low used to end with no change at all — and a loader waiting
+/// for that closing edge waited for ever. Cobra's Alkatraz loader reads all
+/// eight bits of its last byte and then hangs on it, and its protection takes
+/// the silence for a snapped tape: it wipes itself, beeps, and resets the
+/// machine.
+#[test]
+fn the_last_pulse_of_a_block_is_finished_before_the_silence() {
+    use zx_rustrum::tape::{Block, Tape};
+
+    // One byte of zeros: an even number of pulses, so the line is back where
+    // it started — low — when the data runs out.
+    let mut tape = Tape::from_blocks(
+        "t".into(),
+        vec![Block::PureData {
+            data: vec![0x00],
+            zero: 500,
+            one: 1000,
+            used_bits: 8,
+            pause_ms: 100,
+        }],
+    );
+    tape.play(0);
+
+    // Every level change the deck makes, and when.
+    let mut edges = Vec::new();
+    let mut level = tape.level_at(0);
+    for t in (0..500_000u64).step_by(10) {
+        let now = tape.level_at(t);
+        if now != level {
+            edges.push(t);
+            level = now;
+        }
+    }
+
+    // Eight bits, two pulses each, is sixteen edges. The seventeenth finishes
+    // the sixteenth pulse at its own length; the eighteenth is the line
+    // dropping into the silence a millisecond later.
+    assert_eq!(
+        edges.len(),
+        17,
+        "expected fifteen changes within the sixteen pulses, the edge that \
+         closes the last of them, and the drop into silence, not {edges:?}"
+    );
+    let closing = edges[15] - edges[14];
+    assert!(
+        (490..=510).contains(&closing),
+        "the last pulse should be finished off after its own 500 T-states, \
+         not {closing}"
+    );
+    let silence = edges[16] - edges[15];
+    assert!(
+        (3490..=3510).contains(&silence),
+        "and the line drops into the silence a millisecond later, not after \
+         {silence} T-states"
+    );
+}

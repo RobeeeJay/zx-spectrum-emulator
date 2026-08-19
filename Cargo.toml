@@ -16,6 +16,8 @@ eframe = { version = "0.35", default-features = false, features = [
 ] }
 egui = "0.35"
 rfd = "0.15"
+# Already in the lock file by way of eframe; used to read the window icon.
+png = "0.18"
 cpal = "0.18"
 # Already in the lock file by way of the image crates; RZX blocks are
 # deflated and there is no network to fetch anything else with.

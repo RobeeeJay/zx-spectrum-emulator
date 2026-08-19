@@ -347,112 +347,6 @@ fn the_flags_are_below_the_registers() {
     );
 }
 
-/// AutoDoc is off until it is switched on, and switching it on names the
-/// routines being called.
-#[test]
-fn the_autodoc_toggle_names_routines() {
-    let mut app = app();
-    // A screen clear at $8000, called from $9000, where the listing is put.
-    for (offset, byte) in [
-        (0u16, 0x21u8),
-        (1, 0x00),
-        (2, 0x40),
-        (3, 0x11),
-        (4, 0x01),
-        (5, 0x40),
-        (6, 0x01),
-        (7, 0x00),
-        (8, 0x18),
-        (9, 0x36),
-        (10, 0x00),
-        (11, 0xED),
-        (12, 0xB0),
-        (13, 0xC9),
-    ] {
-        app.spec.bus.poke(0x8000 + offset, byte);
-    }
-    for (offset, byte) in [(0u16, 0xCDu8), (1, 0x00), (2, 0x80), (3, 0xC9)] {
-        app.spec.bus.poke(0x9000 + offset, byte);
-    }
-    app.dbg.follow_pc = false;
-    app.dbg.view_addr = 0x9000;
-
-    let mut h = harness(app);
-    assert!(
-        h.state().dbg.doc.is_empty(),
-        "nothing should be guessed at until it is asked for"
-    );
-
-    h.get_by_label("AutoDoc").click();
-    h.run_steps(3);
-
-    let doc = &h.state().dbg.doc;
-    assert_eq!(
-        doc.label(0x8000),
-        "clear_screen_8000",
-        "the routine called from the listing was not named: {doc:?}"
-    );
-}
-
-/// Guesses are kept with the rest of the notes, marked so they can be told
-/// from anything the user wrote.
-#[test]
-fn guesses_go_into_the_notes_marked_as_guesses() {
-    let mut app = app();
-    app.dbg.autodoc = true;
-    // A call, so there is a routine to name: the address being looked at is
-    // not one, only what it calls.
-    for (offset, byte) in [(0u16, 0xCDu8), (1, 0x00), (2, 0xA0), (3, 0xC9)] {
-        app.spec.bus.poke(0x9000 + offset, byte);
-    }
-    app.spec.bus.poke(0xA000, 0xC9);
-    app.dbg.follow_pc = false;
-    app.dbg.view_addr = 0x9000;
-
-    let mut h = harness(app);
-    h.run_steps(3);
-
-    let notes = &h.state().notes;
-    assert!(!notes.is_empty(), "nothing was written down at all");
-    assert!(
-        notes.label_is_auto(0xA000),
-        "the guess at $A000 is not marked as one: {:?}",
-        notes.label(0xA000)
-    );
-    assert!(
-        notes.to_text().contains("@"),
-        "the file should mark guesses:\n{}",
-        notes.to_text()
-    );
-}
-
-/// A guess never replaces a line somebody wrote themselves, however good the
-/// guess is.
-#[test]
-fn a_guess_never_replaces_what_the_user_wrote() {
-    let mut app = app();
-    for (offset, byte) in [(0u16, 0xCDu8), (1, 0x00), (2, 0xA0), (3, 0xC9)] {
-        app.spec.bus.poke(0x9000 + offset, byte);
-    }
-    app.spec.bus.poke(0xA000, 0xC9);
-    app.notes.set_label(0xA000, "my_own_name");
-    app.notes.set_comment(0xA000, "my own words");
-    app.dbg.autodoc = true;
-    app.dbg.follow_pc = false;
-    app.dbg.view_addr = 0x9000;
-
-    let mut h = harness(app);
-    h.run_steps(3);
-
-    let notes = &h.state().notes;
-    assert_eq!(notes.label(0xA000), "my_own_name");
-    assert_eq!(notes.comment(0xA000), "my own words");
-    assert!(
-        !notes.label_is_auto(0xA000) && !notes.comment_is_auto(0xA000),
-        "the user's own line was marked as a guess"
-    );
-}
-
 /// The list of names is there to be clicked, and clicking one takes the
 /// listing to it.
 #[test]
@@ -566,5 +460,143 @@ fn the_rom_watch_does_nothing_until_it_is_switched_on() {
     assert!(
         !matches!(spec.run(FRAME_T), Stop::Watched(..)),
         "it stopped without being asked to"
+    );
+}
+
+/// A routine that touches a port and also draws most of the screen is drawing.
+/// Manic Miner's main loop reads the keys and paints the picture, and was
+/// described as a keyboard routine on the strength of two IN instructions.
+#[test]
+fn a_routine_that_mostly_draws_is_not_called_a_keyboard_routine() {
+    use zx_rustrum::observe::Observed;
+
+    let mut seen = Observed::default();
+    seen.calls = 10;
+    seen.frames = 10;
+    seen.writes.screen = 60_000;
+    seen.ports_in.push(0x00FE);
+    seen.port_reads = 20;
+
+    let (label, comment) = zx_rustrum::autodoc::describe_measured(&seen, 10)
+        .expect("it writes most of the screen, so there is plenty to say");
+    assert!(
+        label.contains("screen") || label.contains("draw") || label.contains("blit"),
+        "called it {label}: {comment}"
+    );
+
+    // A routine whose work really is the port is still named for it.
+    let mut reader = Observed::default();
+    reader.calls = 10;
+    reader.frames = 10;
+    reader.writes.other = 20;
+    reader.ports_in.push(0x7FFE);
+    let (label, _) = zx_rustrum::autodoc::describe_measured(&reader, 10)
+        .expect("reading a port is worth saying");
+    assert_eq!(label, "read_keys");
+}
+
+/// Any IN or any OUT stops the machine. A program that talks to hardware
+/// nobody has thought to watch — a printer interface, a mouse, a disk
+/// controller — is found by stopping on the port access itself rather than by
+/// guessing which port to look for.
+#[test]
+fn any_port_access_can_stop_the_machine() {
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    spec.bus.breaks.port_out = true;
+    spec.bus.io_write(0x7FFD, 0x10);
+    assert_eq!(
+        spec.bus.break_hit,
+        Some(Event::Out(0x7FFD, 0x10)),
+        "the write to $7FFD went unnoticed"
+    );
+
+    let mut spec = Spectrum::new();
+    spec.bus.breaks.port_in = true;
+    spec.bus.io_read(0x00FE);
+    assert_eq!(
+        spec.bus.break_hit,
+        Some(Event::In(0x00FE)),
+        "the read of $FE went unnoticed"
+    );
+
+    // And each says which port, since "it used a port" is not an answer.
+    assert_eq!(Event::Out(0x1F, 0xFF).describe(), "Wrote $FF to port $001F");
+    assert!(Event::In(0x7FFE).describe().contains("$7FFE"));
+}
+
+/// The two new watches are off by default like the rest: a watch that is off
+/// costs the machine nothing.
+#[test]
+fn the_port_watches_are_off_until_they_are_asked_for() {
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::new();
+    assert!(!spec.bus.breaks.port_in && !spec.bus.breaks.port_out);
+    spec.bus.io_write(0x00FE, 0x07);
+    spec.bus.io_read(0x00FE);
+    assert_eq!(spec.bus.break_hit, None, "it stopped without being asked");
+    assert!(!spec.bus.breaks.any());
+}
+
+/// Working out the shape of the program takes two presses: nothing can be said
+/// about a program that has not been watched, so the first press starts the
+/// watching and says so rather than reporting that it found nothing.
+#[test]
+fn finding_blocks_watches_first_and_reads_off_second() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut spec = Spectrum::new();
+    // A caller and a routine it calls, so there is something with a beginning
+    // and an end to find.
+    for (at, bytes) in [
+        (0x8000u16, &[0xCD, 0x00, 0x90, 0x18, 0xFB][..]),
+        (0x9000, &[0x00, 0x00, 0x00, 0x00, 0xC9][..]),
+    ] {
+        for (offset, byte) in bytes.iter().enumerate() {
+            spec.bus.poke(at + offset as u16, *byte);
+        }
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+
+    let mut app = App::with_roms(spec, String::new(), Roms::default(), None);
+    app.show_debugger = true;
+    app.show_ram_map = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = false;
+    let mut h = harness(app);
+
+    assert!(
+        !h.state().spec.bus.observer.enabled,
+        "nothing is watched until it is asked for"
+    );
+    h.get_by_label("Watch for blocks").click();
+    h.run_steps(2);
+    assert!(
+        h.state().spec.bus.observer.enabled,
+        "the first press should start watching"
+    );
+    assert!(
+        h.state().notes.blocks().is_empty(),
+        "and write nothing, having seen nothing"
+    );
+
+    for _ in 0..400 {
+        h.state_mut().spec.step_instruction();
+    }
+    h.run_steps(2);
+
+    h.get_by_label("Find blocks").click();
+    h.run_steps(2);
+
+    let blocks = h.state().notes.blocks().to_vec();
+    assert!(
+        blocks
+            .iter()
+            .any(|block| block.contains(0x9000) && block.kind == zx_rustrum::blocks::Kind::Code),
+        "the routine that was called should be a code block: {blocks:?}"
     );
 }

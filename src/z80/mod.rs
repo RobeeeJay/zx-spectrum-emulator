@@ -26,6 +26,15 @@ pub trait Bus {
     fn fetch_op(&mut self, addr: u16) -> u8;
     /// Normal memory read: 3 T-states, contended at `addr`.
     fn read(&mut self, addr: u16) -> u8;
+    /// A byte of the instruction itself rather than of the data it works on:
+    /// the `nn` of `LD HL,nn`, the displacement of `LD A,(IX+d)`. The Z80
+    /// reads these without an M1 cycle, so they are timed exactly like a
+    /// normal read and by default are one — but anything watching what is code
+    /// and what is data needs telling them apart, or every immediate operand
+    /// in the program reads back as a two-byte table.
+    fn read_operand(&mut self, addr: u16) -> u8 {
+        self.read(addr)
+    }
     /// Normal memory write: 3 T-states, contended at `addr`.
     fn write(&mut self, addr: u16, value: u8);
     /// Internal CPU cycles that still put `addr` on the address bus.
@@ -35,6 +44,11 @@ pub trait Bus {
     fn io_read(&mut self, port: u16) -> u8;
     /// OUT to a port: 4 T-states with the same pattern.
     fn io_write(&mut self, port: u16, value: u8);
+    /// The refresh half of an M1 cycle: the CPU puts I:R on the address bus
+    /// while the opcode is decoded. Nothing is read, and on most machines
+    /// nothing watches — but the Spectrum's ULA does, and an address pointing
+    /// into the screen's own RAM is what makes it snow.
+    fn refresh(&mut self, _addr: u16) {}
     /// Peek without timing or access tracking; used by the debugger.
     fn peek(&self, addr: u16) -> u8;
 }
@@ -81,6 +95,9 @@ pub struct Z80 {
     pub iff2: bool,
     pub im: u8,
     pub halted: bool,
+    /// M1 cycles spent halted, for measuring how much of a frame a program
+    /// spends waiting for the interrupt.
+    pub halted_fetches: u64,
 
     /// MEMPTR / WZ, observable through `BIT n,(HL)` and block I/O.
     pub wz: u16,
@@ -133,6 +150,7 @@ impl Z80 {
             iff2: false,
             im: 0,
             halted: false,
+            halted_fetches: 0,
             wz: 0,
             q: 0,
             prev_q: 0,
@@ -234,13 +252,31 @@ impl Z80 {
     pub fn fetch(&mut self, bus: &mut impl Bus) -> u8 {
         let op = bus.fetch_op(self.pc);
         self.pc = self.pc.wrapping_add(1);
+        self.refresh(bus);
         self.inc_r();
         op
     }
 
+    /// Tell the bus what is on the address bus while the opcode is decoded:
+    /// the I register as the high byte and R as the low one, before R is
+    /// stepped on.
+    ///
+    /// Only when I points at one of the two places a Spectrum keeps RAM the
+    /// ULA might be reading — $4000-$7FFF, or $C000-$FFFF where a 128K can
+    /// bank a contended page. The bus decides whether it is really contended;
+    /// this is a register compare that keeps a call and a division off every
+    /// instruction the machine executes, which a screenful of NOPs feels as a
+    /// fifth of its speed.
+    #[inline]
+    fn refresh(&self, bus: &mut impl Bus) {
+        if matches!(self.i & 0xc0, 0x40 | 0xc0) {
+            bus.refresh(((self.i as u16) << 8) | self.r as u16);
+        }
+    }
+
     #[inline]
     pub fn imm8(&mut self, bus: &mut impl Bus) -> u8 {
-        let v = bus.read(self.pc);
+        let v = bus.read_operand(self.pc);
         self.pc = self.pc.wrapping_add(1);
         v
     }
@@ -295,12 +331,14 @@ impl Z80 {
         self.defer_int = false;
 
         if self.halted {
+            self.halted_fetches += 1;
             // The halt state is not a re-run of the HALT opcode: the CPU keeps
             // performing M1 cycles so refresh continues, with PC — the address
             // *after* the HALT — on the bus. That matters on a Spectrum, where
             // a HALT at $7FFF refreshes from the uncontended $8000 while one at
             // $4000 is contended on every cycle.
             bus.fetch_op(self.pc);
+            self.refresh(bus);
             self.inc_r();
             self.instructions = self.instructions.wrapping_add(1);
             return;

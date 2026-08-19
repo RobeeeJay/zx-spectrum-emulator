@@ -4372,5 +4372,6 @@ dependencies = [
  "egui",
  "egui_kittest",
  "flate2",
+ "png",
  "rfd",
 ]

@@ -103,14 +103,28 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.separator();
         ui.label("Rank by:");
-        ui.selectable_value(&mut app.spec.profiler.metric, Metric::SelfTime, "Self time")
-            .on_hover_text("Time in the function itself, excluding what it called");
-        ui.selectable_value(
-            &mut app.spec.profiler.metric,
-            Metric::Inclusive,
+        // The theme's selectable rather than egui's, which grows by its frame
+        // when the pointer arrives and shoves the row along.
+        if theme::selectable(
+            ui,
+            app.spec.profiler.metric == Metric::SelfTime,
+            "Self time",
+        )
+        .on_hover_text("Time in the function itself, excluding what it called")
+        .clicked()
+        {
+            app.spec.profiler.metric = Metric::SelfTime;
+        }
+        if theme::selectable(
+            ui,
+            app.spec.profiler.metric == Metric::Inclusive,
             "Inclusive",
         )
-        .on_hover_text("Time between entry and return, callees included");
+        .on_hover_text("Time between entry and return, callees included")
+        .clicked()
+        {
+            app.spec.profiler.metric = Metric::Inclusive;
+        }
     });
 
     if running {

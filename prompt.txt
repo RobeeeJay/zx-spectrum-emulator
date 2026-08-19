@@ -1,0 +1,725 @@
+A ZX Spectrum game written in z80 assembler, recorded while somebody played it. Nobody has annotated this game; everything below was measured by the emulator.
+
+The program goes round this loop every 4.36 frames. Note that is not once per frame — it takes four frames and a bit over each turn. Writes to $4000-$57FF are the screen, but this game writes mostly elsewhere, which on this machine usually means it is drawing into a buffer and copying it over later.
+
+One complete turn, in the order the calls happened, indented by call depth:
+
+8DAA
+  8FF4
+9105
+8F63
+  92D5  x5
+8FC5
+92BA
+  92CB  x6
+92BA
+  92CB  x6
+8A3C
+8FF4  x2
+8D0F
+8ABB
+923A
+  925F  x6
+
+The code of each routine in that turn, with its loops marked and how many times each was measured going round:
+
+--- $8DAA: 4664 bytes a call including what it calls, writes $4000..$9CFD, longest loop 36
+8DAA  LD IY,$80BE
+8DAE  loop, 3 times round
+  8DAE  LD A,(IY+$00)
+  8DB1  CP $FF
+  8DB3  RET Z   way out
+  8DB4  OR A
+  8DB5  JR Z,$8DF1
+  8DB7  LD DE,$001F
+  8DBA  LD L,(IY+$01)
+  8DBD  LD H,(IY+$02)
+  8DC0  AND $7F
+  8DC2  LD (HL),A
+  8DC3  INC HL
+  8DC4  LD (HL),A
+  8DC5  ADD HL,DE
+  8DC6  LD (HL),A
+  8DC7  INC HL
+  8DC8  LD (HL),A
+  8DC9  LD C,$01
+  8DCB  LD A,(IY+$04)
+  8DCE  RRCA
+  8DCF  RRCA
+  8DD0  RRCA
+  8DD1  LD E,A
+  8DD2  LD A,($8407)
+  8DD5  CP $07
+  8DD7  JR C,$8DE3
+  8DD9  CP $09
+  8DDB  JR Z,$8DE3
+  8DDD  CP $0F
+  8DDF  JR Z,$8DE3
+  8DE1  SET 7,E
+  8DE3  LD D,$81
+  8DE5  LD L,(IY+$01)
+  8DE8  LD H,(IY+$03)
+  8DEB  CALL $8FF4
+  8DEE  JP NZ,$8D06
+  8DF1  LD DE,$0007
+  8DF4  ADD IY,DE
+  8DF6  JR $8DAE   back to the loop at $8DAE
+8DF8  LD A,($8074)
+8DFB  OR A
+8DFC  JR Z,$8E0F
+8DFE  LD A,($80DB)
+8E01  OR A
+8E02  JR Z,$8E0F
+8E04  LD A,($80DC)
+8E07  DEC A
+8E08  JR Z,$8E1C
+8E0A  LD ($80DC),A
+8E0D  JR $8E24
+8E0F  LD A,($80DC)
+8E12  INC A
+8E13  CP $58
+8E15  JR Z,$8E1C
+8E17  LD ($80DC),A
+8E1A  JR $8E24
+8E1C  LD A,($80DB)
+8E1F  XOR $01
+8E21  LD ($80DB),A
+8E24  LD A,($80DC)
+8E27  AND $7F
+8E29  RLCA
+8E2A  LD E,A
+8E2B  LD D,$83
+8E2D  LD A,(DE)
+8E2E  OR $0F
+8E30  LD L,A
+8E31  INC DE
+8E32  LD A,(DE)
+8E33  LD H,A
+8E34  LD DE,$80E0
+8E37  LD C,$01
+8E39  CALL $8FF4
+8E3C  JP NZ,$8D06
+8E3F  LD A,($80DC)
+8E42  AND $78
+8E44  RLCA
+8E45  OR $07
+8E47  SCF
+8E48  RL A
+8E4A  LD L,A
+8E4B  LD A,$00
+8E4D  ADC A,$5C
+8E4F  LD H,A
+8E50  LD A,($8074)
+8E53  OR A
+8E54  LD A,$07
+8E56  JR NZ,$8E5F
+8E58  LD A,($80BD)
+8E5B  RRCA
+8E5C  RRCA
+8E5D  AND $07
+8E5F  LD (HL),A
+8E60  LD A,($8020)
+8E63  AND $F8
+8E65  OR (HL)
+8E66  LD (HL),A
+8E67  LD DE,$001F
+8E6A  INC HL
+8E6B  LD (HL),A
+8E6C  ADD HL,DE
+8E6D  LD (HL),A
+8E6E  INC HL
+8E6F  LD (HL),A
+8E70  ADD HL,DE
+8E71  LD (HL),A
+8E72  INC HL
+8E73  LD (HL),A
+8E74  RET
+
+--- $8FF4: 31 bytes a call including what it calls, writes $4053..$6FDE, longest loop 14
+8FF4  LD B,$10
+8FF6  loop, 14 times round
+  8FF6  BIT 0,C
+  8FF8  LD A,(DE)
+  8FF9  JR Z,$8FFF
+  8FFB  AND (HL)
+  8FFC  RET NZ   way out
+  8FFD  LD A,(DE)
+  8FFE  OR (HL)
+  8FFF  LD (HL),A
+  9000  INC L
+  9001  INC DE
+  9002  BIT 0,C
+  9004  LD A,(DE)
+  9005  JR Z,$900B
+  9007  AND (HL)
+  9008  RET NZ   way out
+  9009  LD A,(DE)
+  900A  OR (HL)
+  900B  LD (HL),A
+  900C  DEC L
+  900D  INC H   ; down one pixel row of the display file
+  900E  INC DE
+  900F  LD A,H
+  9010  AND $07
+  9012  JR NZ,$9024
+  9014  LD A,H
+  9015  SUB $08
+  9017  LD H,A
+  9018  LD A,L
+  9019  ADD A,$20
+  901B  LD L,A
+  901C  AND $E0
+  901E  JR NZ,$9024
+  9020  LD A,H
+  9021  ADD A,$08
+  9023  LD H,A
+  9024  DJNZ $8FF6   back to the loop at $8FF6
+9026  XOR A
+9027  RET
+  how its callers set it up:
+  in $8DAA:
+    8DE1  SET 7,E
+    8DE3  LD D,$81
+    8DE5  LD L,(IY+$01)
+    8DE8  LD H,(IY+$03)
+    8DEB  CALL $8FF4
+
+--- $9105: 18 bytes a call including what it calls, writes $7013..$7AFC, longest loop 8
+9105  LD HL,($8070)
+9108  LD E,L
+9109  LD D,H
+910A  LD A,($8072)
+910D  LD B,A
+910E  LD A,($806F)
+9111  OR A
+9112  JR NZ,$9127
+9114  LD A,(HL)
+9115  RLC A
+9117  RLC A
+9119  INC H   ; down one pixel row of the display file
+911A  INC H   ; down one pixel row of the display file
+911B  LD C,(HL)
+911C  RRC C
+911E  RRC C
+9120  loop, 8 times round
+  9120  LD (DE),A
+  9121  LD (HL),C
+  9122  INC L
+  9123  INC E
+  9124  DJNZ $9120   back to the loop at $9120
+9126  RET
+
+--- $8F63: 29 bytes a call including what it calls, writes $5C01..$9CFB, longest loop 4
+8F63  XOR A
+8F64  LD ($8074),A
+8F67  LD IY,$8075
+8F6B  loop, 4 times round
+  8F6B  LD A,(IY+$00)
+  8F6E  CP $FF
+  8F70  JR Z,$8FBA
+  8F72  OR A
+  8F73  JR Z,$8FAE
+  8F75  LD E,(IY+$01)
+  8F78  LD D,(IY+$02)
+  8F7B  LD A,(DE)
+  8F7C  AND $07
+  8F7E  CP $07
+  8F80  JR NZ,$8F8E
+  8F82  LD HL,$842C
+  8F85  CALL $90FE
+  8F88  LD (IY+$00),$00
+  8F8C  JR $8FAE
+  8F8E  LD A,(IY+$00)
+  8F91  AND $F8
+  8F93  OR $03
+  8F95  LD B,A
+  8F96  LD A,(IY+$00)
+  8F99  AND $03
+  8F9B  ADD A,B
+  8F9C  LD (IY+$00),A
+  8F9F  LD (DE),A
+  8FA0  LD ($8074),A
+  8FA3  LD D,(IY+$03)
+  8FA6  LD HL,$80B4
+  8FA9  LD B,$08
+  8FAB  CALL $92D5
+  8FAE  INC IY
+  8FB0  INC IY
+  8FB2  INC IY
+  8FB4  INC IY
+  8FB6  INC IY
+  8FB8  JR $8F6B   back to the loop at $8F6B
+8FBA  LD A,($8074)
+8FBD  OR A
+8FBE  RET NZ   way out
+8FBF  LD HL,$808F
+8FC2  SET 7,(HL)
+8FC4  RET
+
+--- $92D5: 8 bytes a call including what it calls, writes $6001..$6FDA, longest loop 7
+92D5  loop, 7 times round
+  92D5  LD A,(HL)
+  92D6  LD (DE),A
+  92D7  INC HL
+  92D8  INC D
+  92D9  DJNZ $92D5   back to the loop at $92D5
+92DB  RET
+  how its callers set it up:
+  in $8F63:
+    8FA0  LD ($8074),A
+    8FA3  LD D,(IY+$03)
+    8FA6  LD HL,$80B4
+    8FA9  LD B,$08
+    8FAB  CALL $92D5
+
+--- $8FC5: 103186 bytes a call including what it calls, writes $4000..$9CFD, longest loop 665
+8FC5  LD HL,($80B0)
+8FC8  LD A,($806C)
+8FCB  CP L
+8FCC  JR NZ,$8FDF
+8FCE  LD A,($806D)
+8FD1  CP H
+8FD2  JR NZ,$8FDF
+8FD4  LD A,($808F)
+8FD7  BIT 7,A
+8FD9  JR Z,$8FDF
+8FDB  POP HL
+8FDC  JP $9028
+
+--- $92BA: 60 bytes a call including what it calls, writes $9CFA..$9CFB, longest loop 5
+92BA  loop, 5 times round
+  92BA  LD A,(IX+$00)
+  92BD  CALL $92CB   -> into this routine
+  92C0  INC IX
+  92C2  INC E
+  92C3  LD A,D
+  92C4  SUB $08
+  92C6  LD D,A
+  92C7  DEC C
+  92C8  JR NZ,$92BA   back to the loop at $92BA
+92CA  RET
+
+--- $92CB: 8 bytes a call including what it calls, writes $5000..$577F, longest loop 7
+92CB  LD H,$07
+92CD  LD L,A
+92CE  SET 7,L
+92D0  ADD HL,HL
+92D1  ADD HL,HL
+92D2  ADD HL,HL
+92D3  LD B,$08
+92D5  loop, 7 times round
+  92D5  LD A,(HL)
+  92D6  LD (DE),A
+  92D7  INC HL
+  92D8  INC D
+  92D9  DJNZ $92D5   back to the loop at $92D5
+92DB  RET
+  how its callers set it up:
+  in $92BA:
+    92BA  loop
+    92BA  LD A,(IX+$00)
+    92BD  CALL $92CB   -> into this routine
+
+--- $8A3C: 5 bytes a call including what it calls, writes $5224..$80BD, longest loop 2
+8A3C  LD A,($80BD)
+8A3F  SUB $04
+8A41  LD ($80BD),A
+8A44  CP $FC
+8A46  JR NZ,$8A55
+8A48  LD A,($80BC)
+8A4B  CP $24
+8A4D  RET Z   way out
+8A4E  DEC A
+8A4F  LD ($80BC),A
+8A52  LD A,($80BD)
+8A55  AND $E0
+8A57  RLCA
+8A58  RLCA
+8A59  RLCA
+8A5A  LD E,$00
+8A5C  OR A
+8A5D  JR Z,$8A66
+8A5F  LD B,A
+8A60  loop, 2 times round
+  8A60  RRC E
+  8A62  SET 7,E
+  8A64  DJNZ $8A60   back to the loop at $8A60
+8A66  LD A,($80BC)
+8A69  LD L,A
+8A6A  LD H,$52
+8A6C  LD B,$04
+8A6E  loop, 2 times round
+  8A6E  LD (HL),E
+  8A6F  INC H   ; down one pixel row of the display file
+  8A70  DJNZ $8A6E   back to the loop at $8A6E
+8A72  XOR A
+8A73  INC A
+8A74  RET
+  how its callers set it up:
+  in $8D73:
+    8D83  LD A,$27
+    8D85  CP (HL)
+    8D86  JR NZ,$8D98
+    8D88  EXX
+    8D89  CALL $8A3C
+
+--- $8D0F: 2 bytes a call including what it calls, writes $80BF..$80D7, longest loop 3
+8D0F  LD IY,$80BE
+8D13  LD DE,$0007
+8D16  loop, 3 times round
+  8D16  LD A,(IY+$00)
+  8D19  CP $FF
+  8D1B  RET Z   way out
+  8D1C  OR A
+  8D1D  JR Z,$8D6F
+  8D1F  LD A,($80BD)
+  8D22  AND $04
+  8D24  RRCA
+  8D25  RRCA
+  8D26  RRCA
+  8D27  AND (IY+$00)
+  8D2A  JR NZ,$8D6F
+  8D2C  LD A,(IY+$04)
+  8D2F  CP $03
+  8D31  JR Z,$8D43
+  8D33  CP $04
+  8D35  JR Z,$8D5A
+  8D37  JR NC,$8D3E
+  8D39  INC (IY+$04)
+  8D3C  JR $8D6F
+  8D3E  DEC (IY+$04)
+  8D41  JR $8D6F
+  8D43  LD A,(IY+$01)
+  8D46  CP (IY+$06)
+  8D49  JR NZ,$8D51
+  8D4B  LD (IY+$04),$07
+  8D4F  JR $8D6F
+  8D51  LD (IY+$04),$00
+  8D55  INC (IY+$01)
+  8D58  JR $8D6F
+  8D5A  LD A,(IY+$01)
+  8D5D  CP (IY+$05)
+  8D60  JR NZ,$8D68
+  8D62  LD (IY+$04),$00
+  8D66  JR $8D6F
+  8D68  LD (IY+$04),$07
+  8D6C  DEC (IY+$01)
+  8D6F  ADD IY,DE
+  8D71  JR $8D16   back to the loop at $8D16
+8D73  LD HL,$5C17
+8D76  LD DE,$0020
+8D79  loop
+  8D79  LD A,($8029)
+  8D7C  CP (HL)
+  8D7D  RET Z   way out
+  8D7E  LD A,($803B)
+  8D81  CP (HL)
+  8D82  RET Z   way out
+  8D83  LD A,$27
+  8D85  CP (HL)
+  8D86  JR NZ,$8D98
+  8D88  EXX
+  8D89  CALL $8A3C
+  8D8C  CALL $8A3C
+  8D8F  CALL $8A3C
+  8D92  CALL $8A3C
+  8D95  EXX
+  8D96  JR $8DA5
+  8D98  LD A,($8020)
+  8D9B  CP (HL)
+  8D9C  JR Z,$8DA5
+  8D9E  LD A,E
+  8D9F  XOR $DF
+  8DA1  LD E,A
+  8DA2  LD A,D
+  8DA3  CPL
+  8DA4  LD D,A
+  8DA5  LD (HL),$77
+  8DA7  ADD HL,DE
+  8DA8  JR $8D79   back to the loop at $8D79
+8DAA  LD IY,$80BE
+8DAE  loop
+  8DAE  LD A,(IY+$00)
+  8DB1  CP $FF
+  8DB3  RET Z   way out
+  8DB4  OR A
+  8DB5  JR Z,$8DF1
+  8DB7  LD DE,$001F
+  8DBA  LD L,(IY+$01)
+  8DBD  LD H,(IY+$02)
+  8DC0  AND $7F
+  8DC2  LD (HL),A
+  8DC3  INC HL
+  8DC4  LD (HL),A
+  8DC5  ADD HL,DE
+  8DC6  LD (HL),A
+  8DC7  INC HL
+  8DC8  LD (HL),A
+  8DC9  LD C,$01
+  8DCB  LD A,(IY+$04)
+  8DCE  RRCA
+  8DCF  RRCA
+  8DD0  RRCA
+  8DD1  LD E,A
+  8DD2  LD A,($8407)
+  8DD5  CP $07
+  8DD7  JR C,$8DE3
+  8DD9  CP $09
+  8DDB  JR Z,$8DE3
+  8DDD  CP $0F
+  8DDF  JR Z,$8DE3
+  8DE1  SET 7,E
+  8DE3  LD D,$81
+  8DE5  LD L,(IY+$01)
+  8DE8  LD H,(IY+$03)
+  8DEB  CALL $8FF4
+  8DEE  JP NZ,$8D06
+  8DF1  LD DE,$0007
+  8DF4  ADD IY,DE
+  8DF6  JR $8DAE   back to the loop at $8DAE
+8DF8  LD A,($8074)
+8DFB  OR A
+8DFC  JR Z,$8E0F
+8DFE  LD A,($80DB)
+8E01  OR A
+8E02  JR Z,$8E0F
+8E04  LD A,($80DC)
+8E07  DEC A
+8E08  JR Z,$8E1C
+8E0A  LD ($80DC),A
+8E0D  JR $8E24
+8E0F  LD A,($80DC)
+8E12  INC A
+8E13  CP $58
+8E15  JR Z,$8E1C
+8E17  LD ($80DC),A
+8E1A  JR $8E24
+8E1C  LD A,($80DB)
+8E1F  XOR $01
+8E21  LD ($80DB),A
+8E24  LD A,($80DC)
+8E27  AND $7F
+8E29  RLCA
+8E2A  LD E,A
+8E2B  LD D,$83
+8E2D  LD A,(DE)
+8E2E  OR $0F
+8E30  LD L,A
+8E31  INC DE
+8E32  LD A,(DE)
+8E33  LD H,A
+8E34  LD DE,$80E0
+8E37  LD C,$01
+8E39  CALL $8FF4
+8E3C  JP NZ,$8D06
+8E3F  LD A,($80DC)
+8E42  AND $78
+8E44  RLCA
+8E45  OR $07
+8E47  SCF
+8E48  RL A
+8E4A  LD L,A
+8E4B  LD A,$00
+8E4D  ADC A,$5C
+8E4F  LD H,A
+8E50  LD A,($8074)
+8E53  OR A
+8E54  LD A,$07
+8E56  JR NZ,$8E5F
+8E58  LD A,($80BD)
+8E5B  RRCA
+8E5C  RRCA
+8E5D  AND $07
+8E5F  LD (HL),A
+8E60  LD A,($8020)
+8E63  AND $F8
+8E65  OR (HL)
+8E66  LD (HL),A
+8E67  LD DE,$001F
+8E6A  INC HL
+8E6B  LD (HL),A
+8E6C  ADD HL,DE
+8E6D  LD (HL),A
+8E6E  INC HL
+8E6F  LD (HL),A
+8E70  ADD HL,DE
+8E71  LD (HL),A
+8E72  INC HL
+8E73  LD (HL),A
+8E74  RET
+
+--- $8ABB: 5 bytes a call including what it calls, writes $8068..$9CFB, longest loop 12
+8ABB  LD A,($806B)
+8ABE  CP $01
+8AC0  JR NZ,$8B10
+8AC2  LD A,($806E)
+8AC5  RES 0,A
+8AC7  SUB $08
+8AC9  LD HL,$8068
+8ACC  ADD A,(HL)
+8ACD  LD (HL),A
+8ACE  CALL $8B82   -> into this routine
+8AD1  LD A,($803B)
+8AD4  CP (HL)
+8AD5  JP Z,$8BA2
+8AD8  INC HL
+8AD9  CP (HL)
+8ADA  JP Z,$8BA2
+8ADD  LD A,($806E)
+8AE0  INC A
+8AE1  LD ($806E),A
+8AE4  SUB $08
+8AE6  JP P,$8AEB
+8AE9  NEG
+8AEB  INC A
+8AEC  RLCA
+8AED  RLCA
+8AEE  RLCA
+8AEF  LD D,A
+8AF0  LD C,$20
+8AF2  LD A,($8073)
+8AF5  loop, 12 times round
+  8AF5  OUT ($FE),A
+  8AF7  XOR $18
+  8AF9  LD B,D
+  8AFA  DJNZ $8AFA
+  8AFC  DEC C
+  8AFD  JR NZ,$8AF5   back to the loop at $8AF5
+8AFF  LD A,($806E)
+8B02  CP $12
+8B04  JP Z,$8B96
+8B07  CP $10
+8B09  JR Z,$8B10
+8B0B  CP $0D
+8B0D  JP NZ,$8C83
+8B10  LD A,($8068)
+8B13  AND $0F
+8B15  JR NZ,$8B51
+8B17  LD HL,($806C)
+8B1A  LD DE,$0040
+8B1D  ADD HL,DE
+8B1E  LD A,($8032)
+8B21  CP (HL)
+8B22  CALL Z,$8BBA
+8B25  LD A,($804D)
+8B28  CP (HL)
+8B29  JR Z,$8B51
+8B2B  LD A,($8056)
+8B2E  CP (HL)
+8B2F  JR Z,$8B51
+8B31  INC HL
+8B32  LD A,($8032)
+8B35  CP (HL)
+8B36  CALL Z,$8BBA
+8B39  LD A,($804D)
+8B3C  CP (HL)
+8B3D  JR Z,$8B51
+8B3F  LD A,($8056)
+8B42  CP (HL)
+8B43  JR Z,$8B51
+8B45  LD A,($8020)
+8B48  CP (HL)
+8B49  DEC HL
+8B4A  JP NZ,$8BDD
+8B4D  CP (HL)
+8B4E  JP NZ,$8BDD
+8B51  LD A,($806B)
+8B54  CP $01
+8B56  JP Z,$8C83
+8B59  LD HL,$806A
+8B5C  RES 1,(HL)
+8B5E  OR A
+8B5F  JP Z,$8B9C
+8B62  INC A
+8B63  LD ($806B),A
+8B66  RLCA
+8B67  RLCA
+8B68  RLCA
+8B69  RLCA
+8B6A  LD D,A
+8B6B  LD C,$20
+8B6D  LD A,($8073)
+8B70  loop, 1 times round
+  8B70  OUT ($FE),A
+  8B72  XOR $18
+  8B74  LD B,D
+  8B75  DJNZ $8B75
+  8B77  DEC C
+  8B78  JR NZ,$8B70   back to the loop at $8B70
+8B7A  LD A,($8068)
+8B7D  ADD A,$08
+8B7F  LD ($8068),A
+8B82  AND $F0
+8B84  LD L,A
+8B85  XOR A
+8B86  RL L
+8B88  ADC A,$5C
+8B8A  LD H,A
+8B8B  LD A,($806C)
+8B8E  AND $1F
+8B90  OR L
+8B91  LD L,A
+8B92  LD ($806C),HL
+8B95  RET
+
+--- $923A: 5017 bytes a call including what it calls, writes $6021..$9CFB, longest loop 14
+923A  LD HL,($806C)
+923D  LD DE,$001F
+9240  LD C,$0F
+9242  CALL $925F   -> into this routine
+9245  INC HL
+9246  CALL $925F   -> into this routine
+9249  ADD HL,DE
+924A  CALL $925F   -> into this routine
+924D  INC HL
+924E  CALL $925F   -> into this routine
+9251  LD A,($8068)
+9254  LD C,A
+9255  ADD HL,DE
+9256  CALL $925F   -> into this routine
+9259  INC HL
+925A  CALL $925F   -> into this routine
+925D  JR $927F
+925F  LD A,($8020)
+9262  CP (HL)
+9263  JR NZ,$9270
+9265  LD A,C
+9266  AND $0F
+9268  JR Z,$9270
+926A  LD A,($8020)
+926D  OR $07
+926F  LD (HL),A
+9270  LD A,($804D)
+9273  CP (HL)
+9274  JP Z,$8D05
+9277  LD A,($8056)
+927A  CP (HL)
+927B  JP Z,$8D05
+927E  RET
+
+--- $925F: 828 bytes a call including what it calls, writes $4000..$9CFD, longest loop 5
+925F  LD A,($8020)
+9262  CP (HL)
+9263  JR NZ,$9270
+9265  LD A,C
+9266  AND $0F
+9268  JR Z,$9270
+926A  LD A,($8020)
+926D  OR $07
+926F  LD (HL),A
+9270  LD A,($804D)
+9273  CP (HL)
+9274  JP Z,$8D05
+9277  LD A,($8056)
+927A  CP (HL)
+927B  JP Z,$8D05
+927E  RET
+  how its callers set it up:
+  in $923A:
+    923A  LD HL,($806C)
+    923D  LD DE,$001F
+    9240  LD C,$0F
+    9242  CALL $925F   -> into this routine
+
+
+Explain what this code looks like it is doing: what the program appears to be doing each time round, in what order, and which routines look like they belong together. Where the evidence does not say, say so. Expect there to be code that reads input from the keyboard or a joystick, writes sprites and backgrounds to the screen display, makes sounds with the built in beeper, increases a score value, descreases an air value, moves enemies and the player, and checks for collisions.

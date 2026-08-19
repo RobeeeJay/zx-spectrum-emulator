@@ -368,19 +368,19 @@ fn the_zoom_presets_set_the_display_scale() {
 }
 
 #[test]
-fn race_the_beam_is_off_until_switched_on() {
+fn the_cursor_beam_is_off_until_switched_on() {
     let mut h = harness();
     h.run_steps(3);
-    assert!(!h.state().race_the_beam);
+    assert!(!h.state().cursor_beam);
     assert!(h.state().beam_t.is_none(), "no beam without the cursor");
 
-    h.get_by_label("Race the beam").click();
+    h.get_by_label("Cursor Beam").click();
     h.run_steps(3);
-    assert!(h.state().race_the_beam);
+    assert!(h.state().cursor_beam);
 
-    h.get_by_label("Race the beam").click();
+    h.get_by_label("Cursor Beam").click();
     h.run_steps(3);
-    assert!(!h.state().race_the_beam);
+    assert!(!h.state().cursor_beam);
 }
 
 #[test]
@@ -463,5 +463,76 @@ fn closing_a_window_lets_it_be_placed_again_when_it_comes_back() {
     assert!(
         h.state().window_is_placed("tape"),
         "and reopening should position it once more"
+    );
+}
+
+/// Save snapshot is in the File menu, and not offered on a ZX81 — there is no
+/// snapshot format for it here.
+#[test]
+fn the_file_menu_offers_to_save_a_snapshot() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let mut h = harness();
+    h.get_by_label("File").click();
+    h.run_steps(3);
+
+    let save = h
+        .get_all_by_label_contains("Save snapshot")
+        .next()
+        .expect("the File menu should offer to save one");
+    assert!(
+        !save.accesskit_node().is_disabled(),
+        "and it should be live on a Spectrum"
+    );
+}
+
+/// The two recorders live together in a Record section after the Machine one,
+/// and say what each of them records.
+#[test]
+fn the_record_section_holds_both_recorders() {
+    // Wide enough that the machine row does not wrap: in a narrow window it
+    // does, and where the sections sit relative to each other is what is being
+    // asked here.
+    let mut h: Harness<'_, App> = Harness::builder()
+        .with_size([1800.0, 900.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), test_app());
+    h.run_steps(3);
+
+    let row = |label: &str| -> Option<(f32, f32)> {
+        h.query_all_by_label_contains(label)
+            .next()
+            .and_then(|node| node.accesskit_node().bounding_box())
+            .map(|b| (b.x0 as f32, b.y0 as f32))
+    };
+    let rzx = row("RZX").expect("the RZX button");
+    let video = row("Video").expect("the video button");
+    let machine = row("48K").expect("the machine dropdown");
+
+    assert!(
+        (rzx.1 - machine.1).abs() < 6.0 && (video.1 - machine.1).abs() < 6.0,
+        "both recorders belong on the machine row: {rzx:?} {video:?} against \
+         {machine:?}"
+    );
+    assert!(
+        rzx.0 > machine.0 && video.0 > rzx.0,
+        "after the Machine section, RZX first: {rzx:?} {video:?}"
+    );
+
+    // And the section is labelled, like the others on the row.
+    let labels: Vec<String> = h
+        .root()
+        .children_recursive()
+        .filter_map(|node| node.accesskit_node().value().map(|v| v.to_string()))
+        .collect();
+    assert!(
+        labels.iter().any(|v| v == "RECORD"),
+        "the section should be named: {labels:?}"
+    );
+
+    // Nothing is recording to start with.
+    assert!(h.state().video.is_none(), "no video file open");
+    assert!(
+        h.query_all_by_label_contains("Stop video").next().is_none(),
+        "and nothing to stop"
     );
 }

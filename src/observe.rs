@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::flow::{classify, Flow};
+use crate::flow::{always_jumps, always_returns, classify, Flow};
 
 /// Where a write landed. The Spectrum's memory map makes these worth counting
 /// separately: they are the difference between drawing, colouring and thinking.
@@ -47,6 +47,38 @@ pub struct Seen {
     pub high: u16,
 }
 
+/// The range of T-states within a frame a routine was seen to start at.
+///
+/// Its own type rather than [`Seen`], which holds registers and cannot hold a
+/// T-state: a 48K frame is 69,888 of them and a `u16` stops at 65,535, so
+/// anything entered in the last four and a half thousand — the bottom two
+/// character rows and the border below them — was recorded as having happened
+/// at 65,535. Every routine that ran down there looked as though it also ran
+/// at the very end of the frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Span {
+    pub low: u32,
+    pub high: u32,
+    seen: bool,
+}
+
+impl Span {
+    fn note(&mut self, at: u32) {
+        if self.seen {
+            self.low = self.low.min(at);
+            self.high = self.high.max(at);
+        } else {
+            self.low = at;
+            self.high = at;
+            self.seen = true;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.seen
+    }
+}
+
 impl Seen {
     fn note(&mut self, value: u16) {
         self.low = self.low.min(value);
@@ -77,20 +109,74 @@ pub struct Observed {
     /// Instructions run inside it, its callees excluded.
     pub instructions: u64,
     pub writes: Writes,
+    /// Bytes of memory it read, split the same way. What a routine reads says
+    /// as much about it as what it writes: a routine that reads a screenful
+    /// and writes a screenful is copying one, and one that reads a table and
+    /// writes the display file is drawing from data.
+    pub reads: Writes,
+    /// The same, counting what the routines it calls read as well.
+    pub inclusive_reads: Writes,
+    /// The same, counting what the routines it calls wrote as well.
+    ///
+    /// A routine whose whole job is to call the drawing routine writes nothing
+    /// itself, and looked in the measurements like a routine that thinks
+    /// rather than draws — which is exactly the wrong thing to tell anybody
+    /// about DRAWHG.
+    pub inclusive: Writes,
     /// The lowest and highest address it wrote to.
     pub wrote_between: Option<(u16, u16)>,
+    /// The one value it has written everywhere, while there is one. A routine
+    /// that fills memory with a single byte is clearing it; one that writes
+    /// different bytes is drawing something. Nothing else tells those apart:
+    /// both write a lot into the display file, quickly, every frame.
+    pub filled_with: Option<u8>,
+    /// Whether it has written more than one distinct value, which is what
+    /// makes `filled_with` empty rather than nothing having been written yet.
+    pub mixed_values: bool,
+    /// The lowest and highest address executed while it was the innermost
+    /// routine: where the routine actually is, as against where it starts.
+    /// What is between them is not necessarily all its own — a routine that
+    /// jumps over a table of data reaches past the table — but it is where to
+    /// start looking.
+    pub spans: Option<(u16, u16)>,
+    /// The addresses it returned or jumped away from, which is where a
+    /// routine ends. A few of them: a routine with several exits has several,
+    /// and one with dozens is not telling us anything more by the twentieth.
+    pub exits: Vec<u16>,
+    /// Where the byte after each of those instructions is — which is not one
+    /// past the exit, since `RET` is one byte and `JP nn` is three. It is
+    /// where the next routine begins when one falls straight after another,
+    /// so it has to be the end of the instruction rather than the start.
+    ///
+    /// Only the exits that always end the routine are here. A taken `RET Z`
+    /// ends the call it is in and nothing more: the next call through may fall
+    /// straight past it, so it is not where the routine stops. Counting those
+    /// drew every guarded routine as far as its first test.
+    pub after: Vec<u16>,
     pub ports_in: Vec<u16>,
     pub ports_out: Vec<u16>,
     /// How many times, which is what tells a beeper routine hammering port
     /// $FE from a routine setting the border once.
     pub port_reads: u32,
     pub port_writes: u32,
+    /// A few of the register sets it was actually handed, rather than only
+    /// the range they spanned. What a routine is called *with* is half of
+    /// what it is for, and a range does not show a caller passing $5E00 one
+    /// time and $5F00 the next.
+    pub examples: Vec<Registers>,
     /// What its registers held on the way in.
     pub entry_af: Seen,
     pub entry_bc: Seen,
     pub entry_de: Seen,
     pub entry_hl: Seen,
-    /// The most times round any one loop in it, by the address jumped back to.
+    /// How many times each loop in it went round, by the address jumped back
+    /// to, totalled over every call.
+    ///
+    /// A total rather than the longest unbroken run: with one loop inside
+    /// another, the inner one interrupts the outer one's run every time it
+    /// goes round, and the outer loop reads as one iteration. Divided by the
+    /// number of calls, this gives what a reader wants — how many times round
+    /// per call.
     pub loops: BTreeMap<u16, u32>,
     /// Deepest it was seen nested, which spots recursion.
     pub max_depth: u32,
@@ -98,7 +184,7 @@ pub struct Observed {
     /// relative to the beam. A routine that runs while the picture is being
     /// painted is timed against it; one that runs in the border above the
     /// picture is getting ready for the frame.
-    pub entered_at: Seen,
+    pub entered_at: Span,
     /// The handful of addresses it writes to, when there are few enough to be
     /// worth naming. A routine that always writes the same three bytes is
     /// keeping something.
@@ -110,11 +196,19 @@ pub struct Observed {
 }
 
 impl Observed {
-    /// The most times round its longest loop. On this machine the number is
-    /// diagnostic: 192 is the pixel rows of the screen, 24 or 32 the
+    /// The most times round its longest loop, per call. On this machine the
+    /// number is diagnostic: 192 is the pixel rows of the screen, 24 or 32 the
     /// characters across or down, 8 the rows of one character.
     pub fn longest_loop(&self) -> u32 {
-        self.loops.values().copied().max().unwrap_or(0)
+        self.loops.values().copied().max().unwrap_or(0) / self.calls.max(1)
+    }
+
+    /// How many times a particular loop went round per call.
+    pub fn loop_trips(&self) -> BTreeMap<u16, u32> {
+        self.loops
+            .iter()
+            .map(|(at, total)| (*at, total / self.calls.max(1)))
+            .collect()
     }
 
     /// Whether it runs about once per frame, which is what the work of a game
@@ -136,6 +230,11 @@ struct Frame {
     sp: u16,
     /// Instructions run in this frame, its callees excluded.
     instructions: u64,
+    /// The lowest and highest address executed while this was the innermost
+    /// routine: how far the routine reaches. Kept on the frame rather than
+    /// looked up per instruction, which would cost a map lookup on every one.
+    low: u16,
+    high: u16,
 }
 
 /// The observer itself.
@@ -148,10 +247,12 @@ pub struct Observer {
     pub edges: BTreeMap<(u16, u16), Edge>,
     /// Frames watched, so "runs every frame" means something.
     pub frames: u64,
-    /// The back-jump being counted at the moment, and how far round it is.
-    loop_at: Option<(u16, u32)>,
     /// Where in the frame the machine is, in T-states, as last told.
     frame_t: u32,
+    /// The last few frames' worth of entering and leaving, oldest first. A
+    /// ring rather than a log: a game makes a few hundred calls a frame and
+    /// nobody wants the whole of a twenty-minute recording.
+    steps: std::collections::VecDeque<Step>,
     /// How deep to follow before giving up on a runaway stack.
     max_depth: usize,
     /// Addresses that have been executed: what is code, as against what is
@@ -162,6 +263,26 @@ pub struct Observer {
     /// Which routine read each 256-byte page, and how often. Per page rather
     /// than per byte: a table of 65,536 counters would cost more than it says.
     readers: BTreeMap<(u8, u16), u32>,
+    /// Where each IN and OUT is, by the address of the instruction doing it.
+    /// A routine can hold several, and one of them can be the interesting one:
+    /// per routine, three separate reads of the keyboard in one loop are a
+    /// single line saying "this routine reads ports".
+    pub port_sites: BTreeMap<u16, Site>,
+    /// The address of the instruction being executed, so a port access can be
+    /// attributed to the instruction making it. Set by the machine before each
+    /// instruction; a port is read part-way through one, which is before
+    /// anything else here is told about it.
+    pub executing: u16,
+    /// Which routine last wrote each byte of the display and attribute files.
+    ///
+    /// Per byte, unlike the readers, because this is the one place where being
+    /// able to point at a thing on screen and say what put it there is worth
+    /// 14K of memory. It is the difference between inferring that a routine
+    /// draws and watching it draw a particular sprite.
+    drew: Vec<u16>,
+    /// Whether anything has been written there at all, since routine $0000 is
+    /// a real address.
+    drew_any: Vec<u64>,
 }
 
 impl Observer {
@@ -170,6 +291,8 @@ impl Observer {
             max_depth: 64,
             executed: vec![0; 1024],
             read: vec![0; 1024],
+            drew: vec![0; SCREEN_BYTES],
+            drew_any: vec![0; SCREEN_BYTES.div_ceil(64)],
             ..Default::default()
         }
     }
@@ -189,11 +312,72 @@ impl Observer {
         self.stack.len()
     }
 
+    /// Everything recorded, oldest first.
+    pub fn steps(&self) -> impl Iterator<Item = &Step> {
+        self.steps.iter()
+    }
+
+    /// Everything that happened in one frame, in order.
+    pub fn frame_steps(&self, frame: u32) -> Vec<Step> {
+        self.steps
+            .iter()
+            .copied()
+            .filter(|s| s.frame == frame)
+            .collect()
+    }
+
+    /// The most recent frame that was recorded from beginning to end. The one
+    /// in progress is half a frame and would read as a program that stops
+    /// half way through its work.
+    pub fn last_whole_frame(&self) -> Option<u32> {
+        // The newest frame is the one in progress, and the frame before it may
+        // have been pushed out of the ring: what is wanted is the newest frame
+        // that still has all of itself in here, which is the newest one that
+        // is neither the first nor the last present.
+        let newest = self.steps.back()?.frame;
+        let oldest = self.steps.front()?.frame;
+        self.steps
+            .iter()
+            .rev()
+            .map(|step| step.frame)
+            .find(|frame| *frame < newest && *frame > oldest)
+    }
+
+    fn remember(&mut self, entry: u16, depth: u8, enter: bool) {
+        if self.steps.len() >= MAX_STEPS {
+            self.steps.pop_front();
+        }
+        self.steps.push_back(Step {
+            frame: self.frames as u32,
+            t: self.frame_t,
+            entry,
+            depth,
+            enter,
+        });
+    }
+
     /// Note the end of a frame, so what runs every frame can be told from what
     /// ran once.
     pub fn end_frame(&mut self) {
-        if self.enabled {
-            self.frames += 1;
+        if !self.enabled {
+            return;
+        }
+        self.frames += 1;
+        // What the routines still on the stack have reached so far. A main
+        // loop never returns, so waiting for it to would leave the one routine
+        // whose extent matters most with none at all — the same trap the
+        // inclusive write counts fell into.
+        let reached: Vec<(u16, u16, u16)> = self
+            .stack
+            .iter()
+            .map(|frame| (frame.entry, frame.low, frame.high))
+            .collect();
+        for (entry, low, high) in reached {
+            let stats = self.stats(entry);
+            stats.spans = Some(match stats.spans {
+                Some((was_low, was_high)) => (was_low.min(low), was_high.max(high)),
+                None => (low, high),
+            });
         }
     }
 
@@ -204,6 +388,30 @@ impl Observer {
     /// Addresses read but never executed: data, as far as anything can tell.
     pub fn is_data(&self, addr: u16) -> bool {
         bit(&self.read, addr) && !bit(&self.executed, addr)
+    }
+
+    /// Runs of addresses that were executed, in address order.
+    ///
+    /// Every byte of an instruction counts, operands included: what the CPU
+    /// read as part of an instruction is code however it was reached, and a
+    /// routine nobody was seen to call is still code.
+    pub fn code_runs(&self) -> Vec<(u16, u16)> {
+        let mut runs = Vec::new();
+        let mut start: Option<u16> = None;
+        for addr in 0..=u16::MAX {
+            match (self.was_executed(addr), start) {
+                (true, None) => start = Some(addr),
+                (false, Some(from)) => {
+                    runs.push((from, addr - 1));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(from) = start {
+            runs.push((from, u16::MAX));
+        }
+        runs
     }
 
     /// Runs of data, longest first, for whatever wants to look at them.
@@ -254,12 +462,53 @@ impl Observer {
             return;
         }
         set(&mut self.read, addr);
-        if let Some(entry) = self.stack.last().map(|f| f.entry) {
-            let page = (addr >> 8) as u8;
-            if self.readers.len() < 4096 {
-                *self.readers.entry((page, entry)).or_insert(0) += 1;
+        let Some(entry) = self.stack.last().map(|f| f.entry) else {
+            return;
+        };
+        let page = (addr >> 8) as u8;
+        if self.readers.len() < 4096 {
+            *self.readers.entry((page, entry)).or_insert(0) += 1;
+        }
+        // Counted the same way as the writes, and for the same reason: a
+        // routine that hands the reading to something else has still caused it.
+        let ancestors: Vec<u16> = self.stack.iter().map(|frame| frame.entry).collect();
+        for ancestor in ancestors {
+            self.stats(ancestor).inclusive_reads.add(addr);
+        }
+        self.stats(entry).reads.add(addr);
+    }
+
+    /// Which routine last wrote this byte of the screen, if anything has.
+    ///
+    /// This is the whole of the evidence for what drew something: the bus
+    /// watched it happen, so pointing at a sprite and being told which routine
+    /// put it there is not a guess at all.
+    pub fn drew(&self, addr: u16) -> Option<u16> {
+        let offset = screen_offset(addr)?;
+        let written = self.drew_any[offset >> 6] & (1 << (offset & 63)) != 0;
+        written.then(|| self.drew[offset])
+    }
+
+    /// Everything that drew any part of a character cell, commonest first: the
+    /// eight pixel rows of a cell are rarely all one routine's work.
+    pub fn drew_cell(&self, column: usize, row: usize) -> Vec<(u16, u32)> {
+        let mut who: BTreeMap<u16, u32> = BTreeMap::new();
+        for line in 0..8 {
+            // The display file's thirds and rows, which is why this is not
+            // simply row * 32.
+            let third = row / 8;
+            let y = (row % 8) * 8 + line;
+            let addr = 0x4000 + (third << 11) + (y << 5) + column;
+            if let Some(entry) = self.drew(addr as u16) {
+                *who.entry(entry).or_insert(0) += 1;
             }
         }
+        if let Some(entry) = self.drew(0x5800 + (row * 32 + column) as u16) {
+            *who.entry(entry).or_insert(0) += 1;
+        }
+        let mut who: Vec<(u16, u32)> = who.into_iter().collect();
+        who.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        who
     }
 
     /// Who read a page, most often first.
@@ -272,6 +521,20 @@ impl Observer {
             .collect();
         who.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         who.into_iter().map(|(entry, _)| entry).collect()
+    }
+
+    /// Which pages a routine read, and how often. The other way round from
+    /// [`Self::readers_of`], for asking what one routine looked at rather than
+    /// who looked at one page.
+    pub fn pages_read_by(&self, entry: u16) -> Vec<(u8, u32)> {
+        let mut pages: Vec<(u8, u32)> = self
+            .readers
+            .iter()
+            .filter(|((_, who), _)| *who == entry)
+            .map(|((page, _), count)| (*page, *count))
+            .collect();
+        pages.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        pages
     }
 
     /// The blocks of data found, longest first, each with a guess at what it
@@ -313,13 +576,36 @@ impl Observer {
     }
 
     /// A byte was written here by whatever routine is running.
-    pub fn on_write(&mut self, addr: u16) {
+    pub fn on_write(&mut self, addr: u16, value: u8) {
         if !self.enabled {
             return;
         }
         let Some(entry) = self.current() else { return };
+        if let Some(offset) = screen_offset(addr) {
+            self.drew[offset] = entry;
+            self.drew_any[offset >> 6] |= 1 << (offset & 63);
+        }
+        // Credited to the routine itself, and to everything that called it:
+        // what a routine causes to happen is as much a fact about it as what
+        // it does with its own instructions.
+        //
+        // Counted here rather than totted up when a routine returns, because a
+        // main loop does not return: the one routine whose inclusive figure
+        // matters most would have been the one left at zero.
+        let ancestors: Vec<u16> = self.stack.iter().map(|frame| frame.entry).collect();
+        for ancestor in ancestors {
+            self.stats(ancestor).inclusive.add(addr);
+        }
         let stats = self.stats(entry);
         stats.writes.add(addr);
+        match stats.filled_with {
+            Some(seen) if seen != value => {
+                stats.filled_with = None;
+                stats.mixed_values = true;
+            }
+            None if !stats.mixed_values => stats.filled_with = Some(value),
+            _ => {}
+        }
         // Only worth keeping while there are few of them: a routine writing
         // half the screen is not keeping a variable, and the list is dropped
         // once it stops being a short one.
@@ -337,6 +623,36 @@ impl Observer {
         if !self.enabled {
             return;
         }
+
+        // Recorded against the instruction first, and against the routine
+        // second. A program reads the keyboard from wherever it likes,
+        // including from code nothing was ever seen to call — in which case
+        // there is no routine to credit, and dropping the access on the floor
+        // is how a game's own key handling went unnoticed.
+        let at = self.executing;
+        let routine = self.stack.last().map(|frame| frame.entry);
+        let site = self.port_sites.entry(at).or_insert(Site {
+            at,
+            routine,
+            ports: Vec::new(),
+            reads: 0,
+            writes: 0,
+            frames: 0,
+            last_frame: u64::MAX,
+        });
+        if write {
+            site.writes += 1;
+        } else {
+            site.reads += 1;
+        }
+        if site.ports.len() < 8 && !site.ports.contains(&port) {
+            site.ports.push(port);
+        }
+        if site.last_frame != self.frames {
+            site.frames += 1;
+            site.last_frame = self.frames;
+        }
+
         let Some(entry) = self.current() else { return };
         let stats = self.stats(entry);
         if write {
@@ -364,6 +680,9 @@ impl Observer {
         pc_after: u16,
         sp_after: u16,
         registers: Registers,
+        // The first two bytes of the instruction, for the one thing the stack
+        // cannot answer: whether a jump was conditional.
+        opcode: [u8; 2],
         peek: impl Fn(u16) -> u16,
     ) {
         if !self.enabled {
@@ -371,31 +690,84 @@ impl Observer {
         }
         if let Some(frame) = self.stack.last_mut() {
             frame.instructions += 1;
+            frame.low = frame.low.min(pc_before);
+            frame.high = frame.high.max(pc_before);
         }
 
         // A jump backwards is a loop going round again. Only another
         // back-jump interrupts the count: the instructions of the loop body
         // are forward motion and would otherwise reset it every time round.
         if pc_after < pc_before && pc_before.wrapping_sub(pc_after) < 256 {
-            let round = match self.loop_at {
-                Some((at, count)) if at == pc_after => count + 1,
-                _ => 1,
-            };
-            self.loop_at = Some((pc_after, round));
             if let Some(entry) = self.current() {
                 let stats = self.stats(entry);
                 if stats.loops.len() < 32 {
-                    let seen = stats.loops.entry(pc_after).or_insert(0);
-                    *seen = (*seen).max(round);
+                    *stats.loops.entry(pc_after).or_insert(0) += 1;
                 }
             }
         }
 
+        // A jump that always jumps ends the routine it is in and starts
+        // another where it lands — the tail call a Z80 program writes instead
+        // of CALL followed by RET. A conditional jump is an early way out and
+        // leaves the routine where it is.
+        if always_jumps(opcode) {
+            self.tail_jump(pc_before, pc_after, registers, opcode);
+        }
+
         match classify(pc_before, sp_before, pc_after, sp_after, peek) {
             Flow::Call { entry, sp } => self.enter(entry, sp, registers),
-            Flow::Return { sp_before, .. } => self.leave(sp_before),
+            Flow::Return { sp_before, .. } => {
+                // Where a routine ends is where it returned from, which is a
+                // fact about the run rather than something to be worked out by
+                // decoding forwards and hoping to meet a RET.
+                if let Some(entry) = self.current() {
+                    // RET is one byte; RETI and RETN carry the ED prefix.
+                    let length = if opcode[0] == 0xED { 2 } else { 1 };
+                    let ends_it = always_returns(opcode);
+                    let stats = self.stats(entry);
+                    note_exit(stats, pc_before, pc_before.wrapping_add(length), ends_it);
+                }
+                self.leave(sp_before)
+            }
             Flow::Straight => {}
         }
+    }
+
+    /// An unconditional jump out of the routine it was in.
+    ///
+    /// Where it lands is the entry of another routine, at the same depth and
+    /// with the same stack: whatever eventually returns goes back to whoever
+    /// called the first one, which is what a tail call means. A jump back into
+    /// the routine is a loop going round, not an ending, so only a jump
+    /// outside what the routine has run so far counts.
+    fn tail_jump(&mut self, from: u16, to: u16, registers: Registers, opcode: [u8; 2]) {
+        let Some(frame) = self.stack.last().copied() else {
+            return;
+        };
+        if to >= frame.low && to <= frame.high {
+            return;
+        }
+
+        self.stack.pop();
+        let depth = self.stack.len() as u8 + 1;
+        self.remember(frame.entry, depth, false);
+        let stats = self.stats(frame.entry);
+        stats.instructions += frame.instructions;
+        stats.spans = Some(match stats.spans {
+            Some((low, high)) => (low.min(frame.low), high.max(frame.high)),
+            None => (frame.low, frame.high),
+        });
+        // JP nn is three bytes, JP (IX) two, JP (HL) one.
+        let length = match opcode[0] {
+            0xC3 => 3,
+            0xDD | 0xFD => 2,
+            _ => 1,
+        };
+        note_exit(stats, from, from.wrapping_add(length), true);
+
+        // Entered like anything else, so it is counted, timed and joined to
+        // whoever called the routine it jumped out of.
+        self.enter(to, frame.sp, registers);
     }
 
     /// Entered directly, which is what an interrupt does.
@@ -427,8 +799,6 @@ impl Observer {
         if self.stack.len() >= self.max_depth {
             return;
         }
-        // Whatever loop was going round belongs to the caller.
-        self.loop_at = None;
         let caller = self.current();
         let depth = self.stack.len() as u32 + 1;
         let frame = self.frames;
@@ -441,9 +811,12 @@ impl Observer {
             stats.entry_bc.note(registers.bc);
             stats.entry_de.note(registers.de);
             stats.entry_hl.note(registers.hl);
-            stats
-                .entered_at
-                .note(frame_t_now.min(u16::MAX as u32) as u16);
+            if stats.examples.len() < 4
+                && !stats.examples.iter().any(|seen| seen.hl == registers.hl)
+            {
+                stats.examples.push(registers);
+            }
+            stats.entered_at.note(frame_t_now);
             if stats.frames == 0 || stats.last_frame != frame {
                 stats.frames += 1;
                 stats.last_frame = frame;
@@ -452,10 +825,13 @@ impl Observer {
         if let Some(caller) = caller {
             self.edges.entry((caller, entry)).or_default().calls += 1;
         }
+        self.remember(entry, depth as u8, true);
         self.stack.push(Frame {
             entry,
             sp,
             instructions: 0,
+            low: entry,
+            high: entry,
         });
     }
 
@@ -465,7 +841,14 @@ impl Observer {
                 break;
             }
             self.stack.pop();
-            self.stats(frame.entry).instructions += frame.instructions;
+            let depth = self.stack.len() as u8 + 1;
+            self.remember(frame.entry, depth, false);
+            let stats = self.stats(frame.entry);
+            stats.instructions += frame.instructions;
+            stats.spans = Some(match stats.spans {
+                Some((low, high)) => (low.min(frame.low), high.max(frame.high)),
+                None => (frame.low, frame.high),
+            });
             if frame.sp == sp_before {
                 break;
             }
@@ -498,6 +881,44 @@ impl DataKind {
     }
 }
 
+/// Note where a routine ended and where the byte after that instruction is.
+///
+/// `ends_it` says whether the instruction always ends the routine — a plain
+/// `RET`, or a jump that always jumps — as against a conditional one, which
+/// ended *this* call and leaves the routine carrying on underneath. Both are
+/// exits and both are worth knowing; only the first is a boundary, or a
+/// routine would be drawn as far as its first test and no further.
+fn note_exit(stats: &mut Observed, at: u16, after: u16, ends_it: bool) {
+    if stats.exits.len() >= 8 || stats.exits.contains(&at) {
+        return;
+    }
+    stats.exits.push(at);
+    if ends_it {
+        stats.after.push(after);
+    }
+}
+
+/// One IN or OUT instruction, and what it has been seen doing.
+///
+/// Kept per instruction rather than per routine because that is the grain a
+/// reader works at: stopping on every IN shows a handful of instructions, and
+/// a detector that answers with the routine they are all in is answering a
+/// coarser question than the one asked.
+#[derive(Clone, Debug, Default)]
+pub struct Site {
+    pub at: u16,
+    /// The routine it is in, when anything was seen to call one. Code the
+    /// machine was already running when watching started has none.
+    pub routine: Option<u16>,
+    /// The ports it has touched, up to a handful.
+    pub ports: Vec<u16>,
+    pub reads: u32,
+    pub writes: u32,
+    /// Frames in which it ran at all, so "every frame" means something.
+    pub frames: u32,
+    last_frame: u64,
+}
+
 /// A run of bytes that was read but never executed.
 #[derive(Clone, Debug)]
 pub struct Block {
@@ -508,6 +929,24 @@ pub struct Block {
     pub readers: Vec<u16>,
 }
 
+/// One routine being entered or left, and when in the frame.
+///
+/// Totals say what a routine does; only a sequence says in what order, which
+/// is the question somebody reading a game's main loop is actually asking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Step {
+    /// Which frame it happened in, counted from when watching started.
+    pub frame: u32,
+    /// Where in the frame, in T-states: the x-axis of everything drawn from
+    /// this, and on this machine an absolute position rather than a relative
+    /// one, because the beam is somewhere definite at that moment.
+    pub t: u32,
+    pub entry: u16,
+    pub depth: u8,
+    /// Going in, as against coming back out.
+    pub enter: bool,
+}
+
 /// The registers on the way into a routine: what it was handed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Registers {
@@ -515,6 +954,21 @@ pub struct Registers {
     pub bc: u16,
     pub de: u16,
     pub hl: u16,
+}
+
+/// How many enterings and leavings to keep. Finding the loops in a program
+/// means watching it for minutes, not seconds: a game making a few hundred
+/// calls a frame fills this in about ten minutes, and it costs 32MB.
+const MAX_STEPS: usize = 4_000_000;
+
+/// The display and attribute files, as one run of bytes.
+const SCREEN_BYTES: usize = 0x1B00;
+
+/// Where an address sits in that run, if it is in it at all.
+fn screen_offset(addr: u16) -> Option<usize> {
+    (0x4000..0x5B00)
+        .contains(&addr)
+        .then(|| addr as usize - 0x4000)
 }
 
 fn bit(bits: &[u64], addr: u16) -> bool {

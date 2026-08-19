@@ -441,3 +441,111 @@ fn a_file_with_no_windows_open_is_not_the_same_as_one_that_never_said() {
     let silent = Prefs::parse("rom_dir = \"\"\n");
     assert_eq!(silent.open_windows, None);
 }
+
+/// Recordings remember where they were opened from, and not where a snapshot
+/// was. They live with the games they are of; sending somebody back to
+/// wherever they last opened a snapshot is sending them somewhere else.
+#[test]
+fn recordings_remember_their_own_directory() {
+    let mut prefs = Prefs::default();
+    prefs.remember_file(FileKind::Snapshot, std::path::Path::new("/snaps/game.z80"));
+    prefs.remember_file(
+        FileKind::Recording,
+        std::path::Path::new("/games/manic/manic.rzx"),
+    );
+
+    assert_eq!(
+        prefs.dir_for(FileKind::Recording),
+        Some(&std::path::PathBuf::from("/games/manic")),
+        "the recording's own directory, not the snapshot's"
+    );
+    assert_eq!(
+        prefs.dir_for(FileKind::Snapshot),
+        Some(&std::path::PathBuf::from("/snaps")),
+        "and the snapshot's is left where it was"
+    );
+
+    // It survives being written out and read back.
+    let text = prefs.to_text();
+    let read = Prefs::parse(&text);
+    assert_eq!(
+        read.recording_dir,
+        Some(std::path::PathBuf::from("/games/manic"))
+    );
+}
+
+/// Before a recording has ever been opened, the tapes are the best guess
+/// there is: a recording is of something, and that something came off a tape.
+#[test]
+fn recordings_start_where_the_tapes_are() {
+    let mut prefs = Prefs::default();
+    assert_eq!(prefs.dir_for(FileKind::Recording), None);
+
+    prefs.remember_file(FileKind::Tape, std::path::Path::new("/games/manic.tap"));
+    assert_eq!(
+        prefs.dir_for(FileKind::Recording),
+        Some(&std::path::PathBuf::from("/games")),
+        "wherever the games are"
+    );
+
+    prefs.remember_file(FileKind::Recording, std::path::Path::new("/rzx/manic.rzx"));
+    assert_eq!(
+        prefs.dir_for(FileKind::Recording),
+        Some(&std::path::PathBuf::from("/rzx")),
+        "and after that, wherever the recordings are"
+    );
+}
+
+/// Everything the tape window is set to comes back with the emulator.
+///
+/// A deck somebody has dialled in — a head out of square by a particular
+/// amount, a hiss at a particular level, the scope put away to make room for
+/// the block list — is tedious to find again, and none of it survived a
+/// restart.
+#[test]
+fn the_tape_windows_settings_survive_a_restart() {
+    use zx_rustrum::tape::Quality;
+    use zx_rustrum::ui::tape::Trigger;
+    use zx_rustrum::ui::Hurry;
+
+    let dir = TempDir::new("tape-settings");
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.prefs = Prefs::load_or_create_in(dir.path());
+    app.tape.show_scope = false;
+    app.tape.show_quality = true;
+    app.tape.window_us = 750.0;
+    app.tape.trigger = Trigger::Falling;
+    app.set_hurry(Hurry::Fastload);
+    app.quality = Quality {
+        wobble: true,
+        wow: 0.02,
+        flutter: 0.01,
+        alignment: true,
+        alignment_offset: 0.4,
+        alignment_wobble: 0.2,
+        noise: true,
+        noise_level: 0.35,
+    };
+    app.save_window_state();
+
+    let mut next = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    next.prefs = Prefs::load_or_create_in(dir.path());
+    next.apply_prefs();
+
+    assert!(!next.tape.show_scope, "the scope was put away");
+    assert!(
+        next.tape.show_quality,
+        "and the deck's failings were on show"
+    );
+    assert_eq!(next.tape.window_us, 750.0, "sweep");
+    assert_eq!(next.tape.trigger, Trigger::Falling, "trigger");
+    assert!(
+        next.tape_flash() && next.tape_boost(),
+        "the tape was being got through on Fastload"
+    );
+    assert_eq!(
+        next.quality, app.quality,
+        "and the deck's failings should be exactly what they were"
+    );
+}
