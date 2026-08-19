@@ -33,7 +33,7 @@ fn the_clock_is_the_machines_own_and_multiples_of_it() {
     assert_eq!(
         h.state().clock_mult,
         1.0,
-        "it starts as the machine was built"
+        "it starts at the machine's own clock"
     );
     assert!(
         h.get_all_by_label_contains("3.50MHz").next().is_some(),
@@ -196,7 +196,7 @@ fn the_list_says_which_clock_is_the_machines_own() {
         );
         assert!(
             !label.contains("default"),
-            "only one of them is the machine as built: {label}"
+            "only one of them is the machine's own: {label}"
         );
     }
 
