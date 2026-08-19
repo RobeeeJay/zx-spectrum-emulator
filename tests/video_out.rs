@@ -378,3 +378,76 @@ fn the_samples_are_kept_while_a_recording_is_running() {
         "and the beeper should be in them"
     );
 }
+
+/// The switches that change the picture's size are held while a video is
+/// being written, and the one that does not is left alone.
+///
+/// The encoder is told the frame size once, when the pipe opens, and slices a
+/// headerless stream of bytes into frames by that number: a frame of another
+/// size shears the picture from there on. The refusal in the recorder catches
+/// it, but a switch that stops a recording is a worse thing to offer than one
+/// that waits.
+#[test]
+fn the_switches_that_change_the_size_are_held_while_recording() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    use egui_kittest::Harness;
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{App, Roms};
+
+    if !available() {
+        eprintln!("no {FFMPEG} on the path; skipping");
+        return;
+    }
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    app.show_ram_map = false;
+    app.show_debugger = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.running = false;
+    let mut h: Harness<'_, App> = Harness::builder()
+        .with_size([1800.0, 900.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+
+    let disabled = |h: &Harness<'_, App>, label: &str| -> bool {
+        h.get_by_label(label).accesskit_node().is_disabled()
+    };
+    assert!(!h.state().video_switches_held(), "nothing recording yet");
+    for label in ["CRT", "Overscan"] {
+        assert!(!disabled(&h, label), "{label} should be there to press");
+    }
+
+    // Recording: the three that decide the frame's size are held.
+    let out = Scratch::new("held");
+    let (w, h_px, aspect, fps, smooth) = h.state().video_settings();
+    h.state_mut().video = Some(
+        Recording::start(out.0.clone(), w, h_px, aspect, fps, smooth, 48_000.0)
+            .expect("ffmpeg should have started"),
+    );
+    h.run_steps(3);
+    assert!(h.state().video_switches_held());
+    for label in ["CRT", "Overscan"] {
+        assert!(
+            disabled(&h, label),
+            "{label} changes the picture's size and should be held"
+        );
+    }
+    // Composite changes what the pixels are, not how many, so it stays live.
+    assert!(
+        !disabled(&h, "Composite") || !h.state().crt,
+        "Composite is not one of the three: it is only greyed out because the \
+         set is off"
+    );
+
+    // Stopped, and they are back.
+    h.state_mut().stop_video();
+    h.run_steps(3);
+    assert!(!h.state().video_switches_held());
+    for label in ["CRT", "Overscan"] {
+        assert!(
+            !disabled(&h, label),
+            "{label} should be back after stopping"
+        );
+    }
+}

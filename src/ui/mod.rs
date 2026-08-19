@@ -217,6 +217,13 @@ pub fn zoom_label(scale: f32) -> String {
 /// it twice over.
 pub const CLOCK_MULTIPLES: &[f32] = &[1.0, 2.0, 4.0, 8.0];
 
+/// Why the switches that change the picture's size cannot be moved while a
+/// video is being written.
+pub const HELD_WHILE_RECORDING: &str =
+    "Held while a video is being recorded: the file is one size throughout, \
+     and changing it part way would shear the picture from there on. Stop the \
+     recording to change it. Composite can be switched either way.";
+
 /// Whether the clock is offered in the window.
 ///
 /// Not at the moment. What it does is speed the whole machine, ULA included,
@@ -2917,6 +2924,25 @@ impl App {
         }
     }
 
+    /// Whether the switches that change the picture's *size* are held while a
+    /// video is being written.
+    ///
+    /// The encoder is told the frame size once, when the pipe opens, and reads
+    /// a headerless stream of raw bytes: it slices frames out of it by that
+    /// number alone, so a frame of another size shears the picture from there
+    /// on. The refusal in `video_out` catches that and stops the recording,
+    /// which is better than a ruined file — but a switch that stops the
+    /// recording is a worse thing to offer than one that waits.
+    ///
+    /// The three that change the size are the tube, which gives every line a
+    /// gap under it; the overscan, which is a different amount of border; and
+    /// the zoom, since the gaps are only drawn from 2× up. Composite is not
+    /// one of them — it changes what the pixels are, not how many — so it
+    /// stays live and can be switched while the film is running.
+    pub fn video_switches_held(&self) -> bool {
+        self.video.is_some()
+    }
+
     /// What the encoder is told about the picture: its size, how tall a row
     /// stands for against how wide a column does, the machine's frame rate,
     /// and whether to scale it smoothly.
@@ -3111,7 +3137,12 @@ impl App {
             // pixels higher than everything after it.
             ui.set_min_height(theme::ROW_H);
             theme::group_label(ui, "Zoom");
-            zoom_dropdown(&mut self.scale, ui);
+            let held = self.video_switches_held();
+            ui.add_enabled_ui(!held, |ui| {
+                zoom_dropdown(&mut self.scale, ui);
+            })
+            .response
+            .on_disabled_hover_text(HELD_WHILE_RECORDING);
 
             theme::divider(ui);
             theme::group_label(ui, "Video");
@@ -3142,10 +3173,14 @@ impl App {
             });
 
             theme::divider(ui);
-            theme::toggle(ui, &mut self.crt, "CRT").on_hover_text(
-                "Show the picture on a tube: the curve of the glass, and a gap \
-                 under every line.",
-            );
+            ui.add_enabled_ui(!held, |ui| {
+                theme::toggle(ui, &mut self.crt, "CRT").on_hover_text(
+                    "Show the picture on a tube: the curve of the glass, and a \
+                     gap under every line.",
+                );
+            })
+            .response
+            .on_disabled_hover_text(HELD_WHILE_RECORDING);
             // Only with the tube: composite video is how the picture reached a
             // television, and a television is what the other switch is. There
             // is no picture that arrives down an aerial lead and is then shown
@@ -3173,9 +3208,14 @@ impl App {
                      yet. Stopped machines only.",
                 );
             });
-            theme::toggle(ui, &mut self.overscan, "Overscan").on_hover_text(
-                "Show the whole border the ULA draws, not just a television's worth.",
-            );
+            ui.add_enabled_ui(!held, |ui| {
+                theme::toggle(ui, &mut self.overscan, "Overscan").on_hover_text(
+                    "Show the whole border the ULA draws, not just a \
+                     television's worth.",
+                );
+            })
+            .response
+            .on_disabled_hover_text(HELD_WHILE_RECORDING);
 
             // One whole picture at a time, for watching a game draw itself.
             // Only while it is stopped: a running machine is already doing

@@ -245,6 +245,66 @@ those still pass at 3.5MHz. A beeper note comes out an octave up at 2× on its
 own: the loop that makes it comes round in half the T-states, which is what an
 accelerated machine sounded like.
 
+## Writing the picture out
+
+The **Video** button in the Record section writes what the window is showing to
+an H.264 file until it is stopped. The frames are the buffer that becomes the
+texture, so the effects go into the file with the picture: the line structure,
+the composite colour, the dot crawl. The curve of the glass does not — that is
+the shape the texture is drawn on rather than something done to the pixels.
+
+**A second of the file is a second of the machine.** The window repaints when
+the window system says so — sixty times a second on this screen, and not at all
+while it is behind another window — and the machine draws fifty. A frame per
+repaint therefore put sixty frames in the file for every fifty the machine drew
+and then declared them as fifty, so everything in it happened a fifth too
+slowly. What is counted is the machine's own frames, and that many frames are
+written; a machine being run flat out draws thousands, so it is capped at four
+a repaint, because the file is of what the window showed.
+
+**The sound goes in too.** ffmpeg's standard input is carrying the frames,
+which leaves nowhere for the samples: they are kept as the mixer produces them,
+written beside the picture as raw floats, and the two are joined when the
+recording stops. That costs a second of copying at the end and no dropped
+frames while it runs. If the joining fails the picture is kept rather than
+thrown away, and said so.
+
+The encoding is handed to `ffmpeg`, which is a program rather than a
+dependency: nothing is added to the build, the frames go down a pipe as raw
+RGBA, and a machine without it is told so plainly rather than given a button
+that does nothing. The frame rate the file is written at is the machine's own —
+50.08Hz on a 48K, not a round fifty — so a second of the recording is a second
+of the machine.
+
+**Every file is 1080p**, whatever the picture came in as: 352 by 296 is not a
+size anything plays happily, and a file somebody wants to show somebody else is
+1080p. The picture is scaled up to fit and the rest of the frame left black —
+1284 by 1080 with the border on, centred.
+
+Getting that right means telling the scaling how tall a row of the buffer
+stands for. With the set on every line of the picture is two rows — a line and
+the gap under it — so a row is worth half as much height as a column is width;
+written as though those rows were square, the televised picture went into the
+file twice as tall as it should be. Measured on a real file: the picture spans
+x 318 to 1601 of 1920 either way, which is the 352:296 it should be.
+
+The scaling follows what the window does with the same picture: nearest for the
+machine's own pixels, which are squares, and Lanczos for a televised one, which
+has no pixel edges.
+
+**The switches that change the size are held while it runs.** The tube, the
+overscan and the zoom each change how many pixels a frame has — the tube gives
+every line a gap, the overscan is a different amount of border, and the gaps are
+only drawn from 2× up — so they are greyed out until the recording stops,
+saying why. Composite is not one of them: it changes what the pixels are rather
+than how many, and can be switched with the film running. The refusal stays as
+the backstop for anything else that changes the size.
+
+A recording is one size throughout. The encoder is told the size once, at the
+start, so switching the set on or the view from cropped to overscan while it is
+running would shear the picture from there on: the frame is refused instead and
+the recording stops, saying which size it was expecting.
+
 ## The television at the other end
 
 The picture the emulator has is what the ULA put out: exact pixels, exact
