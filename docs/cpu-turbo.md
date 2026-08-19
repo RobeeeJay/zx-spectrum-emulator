@@ -181,8 +181,41 @@ New tests, once it multiplies:
 
 ## Staging
 
-1. `cpu_cycles` and `turbo`, fixed at 1. Nothing changes; the suite proves it.
-2. Let `turbo` be set. Add the tests above.
-3. The dropdown, unhidden, saying CPU rather than machine.
-4. A note in `docs/timing.md` on what the two clocks mean, and this file
-   deleted or reduced to what was decided.
+All four done, on `cpu-turbo`:
+
+1. **`cpu_cycles` and `turbo`, fixed at 1** (`7e6415e`). Nothing moved, which
+   the timing tests, HALT2INT and the reference numbers decided.
+2. **The multipliers, and seven tests** (`a5e813e`). The frame is still 69,888
+   T-states at 8×; twice the instructions fit in one at 2×; a million
+   instructions at 8× cost exactly an eighth of the time; a contended read
+   costs what an uncontended one does above 1×.
+3. **The dropdown** (`7090ab5`), saying CPU rather than Clock, with the two
+   rules that hold it at 1× and a line in the row saying which is holding it.
+4. **`docs/timing.md`** carries what the two clocks mean; this file is the
+   record of how it was decided.
+
+## What was learned doing it
+
+**No tape loads with the CPU accelerated.** Expected in the abstract — the plan
+said a loader counting pulses in CPU cycles would miscount — but the measurement
+is worth having: at 4× Head over Heels reaches nothing at all and is left in the
+ROM's edge loop at $05ED when the tape has run out. It is not only the game's
+loader; the ROM's own counts turns of its loop the same way. Hence the rule
+rather than a warning.
+
+**The remainder matters more than it looks.** `LD A,(HL)` is seven cycles, and
+seven does not divide by two, four or eight: without carrying the remainder a
+machine at 8× would lose a fraction of a T-state on most instructions and run
+perceptibly slow. The test that catches it runs a million instructions and
+compares to the T-state.
+
+## Still open
+
+- **Snow at turbo.** The M1's last T-state falls in a different place in the
+  ULA's eight-T-state cycle when the CPU is running faster, so a program that
+  snows at 1× may not at 4×. What a real accelerated machine does is not known
+  here, and guessing would be worse than saying so.
+- **The beam drawings.** Race the Beam and Cursor Beam still replay a frame to
+  a T-state, which is right; what "the machine had done by this point" means
+  when the CPU is four times faster is a sentence somebody should write on the
+  drawing.
