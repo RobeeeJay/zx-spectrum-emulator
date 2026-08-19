@@ -226,7 +226,7 @@ pub const CLOCK_MULTIPLES: &[f32] = &[1.0, 2.0, 4.0, 8.0];
 /// ULA's stop being one clock, which is a change to how time is kept here
 /// rather than a multiplier on it. The machinery stays, and the switch comes
 /// back when it is that.
-pub const SHOW_CLOCK: bool = false;
+pub const SHOW_CLOCK: bool = true;
 
 /// The clock dropdown: the machine's own speed, and multiples of it.
 ///
@@ -2214,9 +2214,43 @@ impl App {
         }
     }
 
-    /// The clock it is actually being run at.
+    /// The clock the CPU is actually being run at.
     pub fn clock_hz(&self) -> f64 {
-        self.machine_cpu_hz() * self.clock_mult as f64
+        self.machine_cpu_hz() * self.turbo() as f64
+    }
+
+    /// How many times the machine's own clock the CPU is being run at, after
+    /// the two places it has to be held at one.
+    ///
+    /// **A recording playing.** An RZX frame is a number of opcode fetches and
+    /// the recording's frame boundary is the video frame; a CPU getting
+    /// through those fetches in a quarter of the ULA time would put four
+    /// frames of input into one frame of picture.
+    ///
+    /// **A tape playing.** Every loader counts turns of its own loop against
+    /// pulses that are in ULA time, so at 4× it counts four times as many for
+    /// the same pulse and every length it knows is wrong. Nothing loads at
+    /// all. That is what an accelerated machine did, which is why they had a
+    /// switch — and here the switch throws itself.
+    pub fn turbo(&self) -> u32 {
+        if self.rzx.is_some() || self.tape_is_playing() {
+            return 1;
+        }
+        (self.clock_mult.max(1.0) as u32).clamp(1, 8)
+    }
+
+    /// Why the CPU is not running at what the dropdown says, if it is not.
+    pub fn turbo_held_because(&self) -> Option<&'static str> {
+        if self.clock_mult <= 1.0 {
+            return None;
+        }
+        if self.rzx.is_some() {
+            return Some("a recording is playing");
+        }
+        if self.tape_is_playing() {
+            return Some("a tape is loading");
+        }
+        None
     }
 
     /// Tell the mixer what the clock is now.
@@ -2226,7 +2260,12 @@ impl App {
     /// comes out that way if the mixer counts in the same T-states the machine
     /// does.
     pub fn apply_clock(&mut self) {
-        let hz = self.clock_hz();
+        // The ULA's clock, not the CPU's: samples are made of T-states of the
+        // machine and those still pass at 3.5MHz however fast the CPU is being
+        // run. A beeper note comes out an octave up at 2× on its own, because
+        // the loop that makes it comes round in half the T-states — which is
+        // what an accelerated machine sounded like.
+        let hz = self.machine_cpu_hz();
         match &mut self.zx81 {
             Some(zx) => zx.bus.audio.set_cpu_hz(hz),
             None => self.spec.bus.audio.set_cpu_hz(hz),
@@ -2415,7 +2454,10 @@ impl App {
         } else {
             1.0
         };
-        let want = self.clock_hz() as f32 * dt * self.speed * boost * pace + self.leftover;
+        // The ULA's clock is what the budget is in: a faster CPU does more
+        // inside the same T-states rather than being given more of them.
+        self.spec.bus.turbo = self.turbo();
+        let want = self.machine_cpu_hz() as f32 * dt * self.speed * boost * pace + self.leftover;
         let budget = want.max(0.0) as u32;
         self.leftover = want - budget as f32;
 
@@ -2737,10 +2779,18 @@ impl App {
             theme::group_label(ui, "Machine");
             self.machine_dropdown(ui);
             if SHOW_CLOCK {
-                theme::group_label(ui, "Clock");
+                theme::group_label(ui, "CPU");
                 let base = self.machine_cpu_hz();
                 let before = self.clock_mult;
+                let held = self.turbo_held_because();
                 clock_dropdown(&mut self.clock_mult, base, ui);
+                if let Some(why) = held {
+                    ui.label(
+                        egui::RichText::new(format!("at {:.2}MHz — {why}", base / 1e6))
+                            .small()
+                            .color(theme::DIM),
+                    );
+                }
                 if self.clock_mult != before {
                     // The mixer counts in T-states, so it has to be told: a
                     // beeper note would otherwise come out at the pitch the

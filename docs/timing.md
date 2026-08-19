@@ -201,95 +201,49 @@ on real hardware then the ULA really did paint twice; but the lengths are not
 near whole multiples of a frame, which fits that story no better than the
 other.
 
-## Running the clock faster
+## Running the CPU faster
 
-**Not offered at the moment.** The machinery is here and tested; the control is
-hidden until it is an accelerator rather than a faster crystal, for the reason
-in the paragraph after next. What it would offer:
-
-The **Clock** dropdown in the Machine row offers the machine's own clock and
+The **CPU** dropdown in the Machine row offers the machine's own clock and
 three doublings of it: 3.50, 7.00, 14.00 and 28.00MHz on a 48K, and 3.55, 7.09
-and so on on a 128K, whose own clock is 3.5469MHz. The numbers come from the
-model rather than from a list, which is why they differ.
+and so on a 128K, whose own clock is 3.5469MHz. The numbers come from the model
+rather than from a list.
 
-It is the same machine running quicker, not a different machine. Everything the
-ULA does is counted in T-states — the frame, the contention table, the tape's
-pulses — so nothing about the emulation changes; what changes is how many
-T-states go by in a second of the user's time. That is the difference between
-this and the Speed dropdown beside it: speed is how fast the emulator is being
-run, and the clock is what the machine believes its own to be.
+**The ULA is not wound up with it.** The frame is still 69,888 T-states, the
+interrupt still comes 50.08 times a second, and every table indexed by the
+ULA's clock — the contention pattern, the floating bus, the beam — means what
+it always did. What a faster CPU buys is more instructions inside one of those
+frames, which is an accelerator rather than a different crystal: a game's
+timing loops finish early, and its world does not speed up.
 
-**It speeds the whole machine, not just the CPU.** The ULA is counted in the
-same T-states, so at twice the clock the frame still takes 69,888 of them and
-those 69,888 go by twice as fast: measured, a second of the user's time gets 50
-video frames at 3.5MHz, 100 at 7MHz and 400 at 28MHz, and the interrupt comes
-at each of them. A game reading the frame counter therefore runs fast rather
-than smoothly, which is what a Spectrum with its clock crystal changed did.
+`SpectrumBus::tstates` stays the ULA's clock, and a CPU cycle costs `1/turbo`
+of one with the remainder carried between instructions, so a million cycles at
+8× cost exactly an eighth of a million T-states rather than a little less.
 
-An accelerator that leaves the video at 50Hz is a different thing: it gives the
-CPU more cycles inside a frame of the ULA's own time, which means the CPU's
-clock and the ULA's are no longer the same clock. Everything here counts one —
-contention is a table indexed by the ULA's T-state, and an instruction's cost
-is in those T-states — so that would be a change to how time is kept rather
-than a multiplier on it. Not done.
+**There is no contention above 1×.** Decided rather than derived: an
+accelerated machine is not sharing the ULA's bus on the ULA's terms, and the
+switch exists to get work done. At 1× every delay is exactly what it was, which
+is what the reference tests pin down; above it the delay tables are not
+consulted at all, and a contended read costs what an uncontended one does.
 
-The mixer is told, because sound is made of T-states too. A beeper note is a
-number of T-states between one toggle and the next, and at twice the clock those
-T-states take half as long: the note comes out an octave up, which is what an
-accelerated machine sounded like. That only happens if the mixer counts in the
-same T-states the machine does, so changing the clock sets its rate as well.
+**Two things hold it at 1× whatever the dropdown says**, and the window says
+which:
 
-## Writing the picture out
+- **A tape playing.** Measured, not assumed: at 4× Head over Heels loads
+  nothing at all and is left in the ROM's edge loop at $05ED when the tape has
+  run out. Every loader — the ROM's own as much as a game's — counts turns of
+  its own loop against pulses that are in ULA time, so four times the turns fit
+  in the same pulse and every length it knows is wrong. That is what an
+  accelerated machine did, which is why they had a switch; here the switch
+  throws itself.
+- **A recording playing.** An RZX frame is a number of opcode fetches and the
+  recording's frame boundary is the video frame, so a CPU getting through them
+  in a quarter of the ULA time would put four frames of input into one frame of
+  picture.
 
-The **Video** button in the Record section writes what the window is showing to
-an H.264 file until it is stopped. The frames are the buffer that becomes the
-texture, so the effects go into the file with the picture: the line structure,
-the composite colour, the dot crawl. The curve of the glass does not — that is
-the shape the texture is drawn on rather than something done to the pixels.
-
-**A second of the file is a second of the machine.** The window repaints when
-the window system says so — sixty times a second on this screen, and not at all
-while it is behind another window — and the machine draws fifty. A frame per
-repaint therefore put sixty frames in the file for every fifty the machine drew
-and then declared them as fifty, so everything in it happened a fifth too
-slowly. What is counted is the machine's own frames, and that many frames are
-written; a machine being run flat out draws thousands, so it is capped at four
-a repaint, because the file is of what the window showed.
-
-**The sound goes in too.** ffmpeg's standard input is carrying the frames,
-which leaves nowhere for the samples: they are kept as the mixer produces them,
-written beside the picture as raw floats, and the two are joined when the
-recording stops. That costs a second of copying at the end and no dropped
-frames while it runs. If the joining fails the picture is kept rather than
-thrown away, and said so.
-
-The encoding is handed to `ffmpeg`, which is a program rather than a
-dependency: nothing is added to the build, the frames go down a pipe as raw
-RGBA, and a machine without it is told so plainly rather than given a button
-that does nothing. The frame rate the file is written at is the machine's own —
-50.08Hz on a 48K, not a round fifty — so a second of the recording is a second
-of the machine.
-
-**Every file is 1080p**, whatever the picture came in as: 352 by 296 is not a
-size anything plays happily, and a file somebody wants to show somebody else is
-1080p. The picture is scaled up to fit and the rest of the frame left black —
-1284 by 1080 with the border on, centred.
-
-Getting that right means telling the scaling how tall a row of the buffer
-stands for. With the set on every line of the picture is two rows — a line and
-the gap under it — so a row is worth half as much height as a column is width;
-written as though those rows were square, the televised picture went into the
-file twice as tall as it should be. Measured on a real file: the picture spans
-x 318 to 1601 of 1920 either way, which is the 352:296 it should be.
-
-The scaling follows what the window does with the same picture: nearest for the
-machine's own pixels, which are squares, and Lanczos for a televised one, which
-has no pixel edges.
-
-A recording is one size throughout. The encoder is told the size once, at the
-start, so switching the set on or the view from cropped to overscan while it is
-running would shear the picture from there on: the frame is refused instead and
-the recording stops, saying which size it was expecting.
+The mixer is told nothing, because samples are made of the ULA's T-states and
+those still pass at 3.5MHz. A beeper note comes out an octave up at 2× on its
+own: the loop that makes it comes round in half the T-states, which is what an
+accelerated machine sounded like.
 
 ## The television at the other end
 

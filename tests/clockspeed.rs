@@ -1,4 +1,4 @@
-//! Running the machine at more than its own clock.
+//! The CPU's clock, in the window: an accelerator rather than a new crystal.
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
@@ -19,107 +19,37 @@ fn harness<'a>() -> Harness<'a, App> {
     app.show_tape = false;
     app.running = true;
     Harness::builder()
-        .with_size([1500.0, 900.0])
+        .with_size([1800.0, 900.0])
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app)
 }
 
-/// The clock is not offered in the window at the moment.
-///
-/// What it does is speed the whole machine rather than the CPU alone: at twice
-/// the clock the interrupt comes twice as often, so a game reading the frame
-/// counter runs fast rather than smoothly. The switch comes back when it is an
-/// accelerator — the CPU given more cycles inside a frame of the ULA's own
-/// time — and until then the machinery is here without a control on it.
+/// The dropdown is the machine's own clock and multiples of it, worked out
+/// from the model: a 48K's own is 3.50MHz and a 128K's 3.55, so "twice" is a
+/// different number on each.
 #[test]
-fn the_clock_is_not_offered_yet() {
+fn the_clock_is_the_machines_own_and_multiples_of_it() {
     let mut h = harness();
     h.run_steps(3);
     assert_eq!(
         h.state().clock_mult,
         1.0,
-        "and left as the machine was built"
+        "it starts as the machine was built"
     );
-    assert_eq!(
-        h.query_all_by_label_contains("MHz").count(),
-        0,
-        "with nothing in the window to change it"
-    );
-}
-
-/// The labels it will carry are the machine's own clock and multiples of it,
-/// worked out from the model: a 48K's own is 3.50MHz and a 128K's 3.55, so
-/// "twice" is a different number on each.
-#[test]
-fn the_clock_is_the_machines_own_and_multiples_of_it() {
-    let mut h = harness();
-    h.run_steps(3);
     assert!(
-        (h.state().machine_cpu_hz() - 3_500_000.0).abs() < 1.0,
-        "a 48K's own clock"
+        h.get_all_by_label_contains("3.50MHz").next().is_some(),
+        "a 48K's own clock is 3.5MHz"
     );
+
     h.state_mut().switch_model(Model::Spectrum128);
     h.run_steps(3);
     assert!(
-        (h.state().machine_cpu_hz() - 3_546_900.0).abs() < 1.0,
-        "and a 128K's, measured from the model rather than assumed"
+        h.get_all_by_label_contains("3.55MHz").next().is_some(),
+        "and a 128K's is 3.5469"
     );
     h.state_mut().clock_mult = 2.0;
     assert!(
         (h.state().clock_hz() - 7_093_800.0).abs() < 1.0,
         "twice a 128K's is not twice a 48K's"
-    );
-}
-
-/// Picking a faster clock runs the machine faster: the same host frame does
-/// twice the T-states at twice the clock.
-#[test]
-fn a_faster_clock_does_more_work_in_the_same_time() {
-    let mut h = harness();
-    h.run_steps(3);
-
-    let ran = |h: &mut Harness<'_, App>| -> u64 {
-        let before = h.state().spec.bus.total_t();
-        h.state_mut().advance(1.0 / 50.0);
-        h.state().spec.bus.total_t() - before
-    };
-
-    let normal = ran(&mut h);
-    h.state_mut().clock_mult = 2.0;
-    let doubled = ran(&mut h);
-    h.state_mut().clock_mult = 8.0;
-    let eightfold = ran(&mut h);
-
-    assert!(
-        (doubled as f64 / normal as f64 - 2.0).abs() < 0.05,
-        "twice the clock is twice the work: {doubled} against {normal}"
-    );
-    assert!(
-        (eightfold as f64 / normal as f64 - 8.0).abs() < 0.15,
-        "and eight times is eight: {eightfold} against {normal}"
-    );
-}
-
-/// The mixer is told, so sound comes out at the pitch the machine is running
-/// at rather than the pitch it was built for.
-///
-/// A beeper note is a number of T-states between one toggle and the next. Run
-/// the machine at twice its clock and those T-states take half as long, so the
-/// note is an octave up — which is what an accelerated machine sounded like,
-/// and only happens if the mixer is counting in the same T-states.
-#[test]
-fn the_mixer_is_told_the_clock_has_changed() {
-    let mut h = harness();
-    h.run_steps(3);
-    let per_sample = |h: &Harness<'_, App>| h.state().spec.bus.audio.t_per_sample();
-
-    let normal = per_sample(&h);
-    h.state_mut().clock_mult = 4.0;
-    h.state_mut().apply_clock();
-    let faster = per_sample(&h);
-    assert!(
-        (faster / normal - 4.0).abs() < 0.01,
-        "four times the clock puts four times the T-states in a sample: \
-         {faster} against {normal}"
     );
 }
 
@@ -130,4 +60,111 @@ fn the_clock_steps_are_doublings() {
     for pair in CLOCK_MULTIPLES.windows(2) {
         assert_eq!(pair[1], pair[0] * 2.0, "each is the one before it twice");
     }
+}
+
+/// A faster CPU does more inside the same frame rather than being given more
+/// frames: the ULA is not wound up with it.
+#[test]
+fn a_faster_cpu_does_more_inside_the_same_frame() {
+    let ran = |mult: f32| -> (u64, u32) {
+        let mut h = harness();
+        h.run_steps(3);
+        h.state_mut().clock_mult = mult;
+        let before_t = h.state().spec.bus.total_t();
+        let before_ops = h.state().spec.bus.fetches;
+        h.state_mut().advance(1.0 / 50.0);
+        (
+            h.state().spec.bus.total_t() - before_t,
+            h.state().spec.bus.fetches - before_ops,
+        )
+    };
+
+    let (plain_t, plain_ops) = ran(1.0);
+    for mult in [2.0f32, 4.0, 8.0] {
+        let (t, ops) = ran(mult);
+        assert!(
+            (t as f64 / plain_t as f64 - 1.0).abs() < 0.02,
+            "the machine's own time should pass at the same rate at {mult}x: \
+             {t} against {plain_t}"
+        );
+        let ratio = ops as f64 / plain_ops as f64;
+        assert!(
+            (ratio - mult as f64).abs() < 0.2,
+            "and {mult}x should get about {mult} times as much done: {ratio:.2}"
+        );
+    }
+}
+
+/// The mixer is not told anything, because the samples are made of the
+/// machine's T-states and those still pass at 3.5MHz.
+///
+/// A beeper note still comes out an octave up at 2×, because the loop that
+/// makes it comes round in half the T-states — which is what an accelerated
+/// machine sounded like, and falls out rather than being arranged.
+#[test]
+fn the_mixer_stays_on_the_machines_own_clock() {
+    let mut h = harness();
+    h.run_steps(3);
+    let per_sample = |h: &Harness<'_, App>| h.state().spec.bus.audio.t_per_sample();
+
+    let normal = per_sample(&h);
+    h.state_mut().clock_mult = 4.0;
+    h.state_mut().apply_clock();
+    assert_eq!(
+        per_sample(&h),
+        normal,
+        "the mixer counts the ULA's T-states, and those have not moved"
+    );
+}
+
+/// A tape playing holds the CPU at the machine's own clock whatever the
+/// dropdown says, and the window says why.
+///
+/// Every loader counts turns of its own loop against pulses that are in ULA
+/// time, so at 4× it counts four times as many for the same pulse and nothing
+/// loads at all. That is what an accelerated machine did — which is why they
+/// had a switch, and here the switch throws itself.
+#[test]
+fn the_cpu_is_held_at_one_times_while_a_tape_plays() {
+    let mut h = harness();
+    h.run_steps(3);
+    h.state_mut().clock_mult = 4.0;
+    h.run_steps(2);
+    assert_eq!(h.state().turbo(), 4, "nothing in the way to start with");
+    assert!(h.state().turbo_held_because().is_none());
+    assert_eq!(
+        h.state().spec.bus.turbo,
+        4,
+        "and the machine is running at it"
+    );
+
+    let mut tape = zx_rustrum::tape::Tape::from_blocks(
+        "t".into(),
+        // Long enough that it is still running when it is looked at: a
+        // hundred pulses is three frames, and the window draws more than that.
+        vec![zx_rustrum::tape::Block::PureTone {
+            len: 2168,
+            count: 60_000,
+        }],
+    );
+    tape.play(0);
+    h.state_mut().spec.bus.tape = Some(tape);
+    h.run_steps(2);
+    assert_eq!(h.state().turbo(), 1, "held while the tape runs");
+    assert_eq!(
+        h.state().turbo_held_because(),
+        Some("a tape is loading"),
+        "and the window says why"
+    );
+    assert_eq!(
+        h.state().spec.bus.turbo,
+        1,
+        "which is what the machine is actually running at"
+    );
+
+    // Stopped again, and it is back to what was asked for.
+    h.state_mut().tape_mut().unwrap().stop();
+    h.run_steps(2);
+    assert_eq!(h.state().turbo(), 4);
+    assert_eq!(h.state().spec.bus.turbo, 4);
 }
