@@ -9,12 +9,34 @@
 # whoever is doing the release.
 #
 # Usage: packaging/macos-app.sh [target-triple]
+#        packaging/macos-app.sh --dmg-name [target-triple]   (print it and stop)
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(dirname "$here")"
+name_only=""
+if [ "${1:-}" = "--dmg-name" ]; then
+    name_only=yes
+    shift
+fi
 target="${1:-}"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
+
+# The disk image carries the version and the architecture. Both macOS builds
+# are made in the same workflow and their files end up in one directory: two
+# images called the same thing would be one image, and whichever was uploaded
+# second would be the release.
+case "$target" in
+    aarch64-*) arch=arm64 ;;
+    x86_64-*)  arch=x86_64 ;;
+    "")        arch="$(uname -m)" ;;
+    *)         arch="${target%%-*}" ;;
+esac
+dmg="target/packaging/ZX-Rustrum-$version-macos-$arch.dmg"
+if [ -n "$name_only" ]; then
+    echo "$dmg"
+    exit 0
+fi
 
 cd "$root"
 if [ -n "$target" ]; then
@@ -99,7 +121,6 @@ else
     echo "note: unsigned. Set MACOS_SIGN_IDENTITY to sign, then notarise." >&2
 fi
 
-dmg="target/packaging/ZX-Rustrum-$version.dmg"
 rm -f "$dmg"
 staging="target/packaging/dmg"
 rm -rf "$staging"

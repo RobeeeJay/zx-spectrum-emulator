@@ -11,6 +11,53 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # What is being built, and whether it is a release.
+  #
+  # A commit on main is released when the version in Cargo.toml has not been
+  # released before, so cutting a release is bumping that version: the tag and
+  # the release are made from the commit that changed it. Pushing anything else
+  # to main still builds all four platforms — the artifacts are on the run —
+  # but does not publish a second release under a version that already means
+  # something else.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      release: ${{ steps.read.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            # A tag says what it is; the version in Cargo.toml is only checked
+            # against it, since a release built from a mismatched tree would
+            # report a version it is not.
+            version="${GITHUB_REF#refs/tags/v}"
+            in_manifest="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+            if [ "$version" != "$in_manifest" ]; then
+              echo "tag v$version against Cargo.toml $in_manifest" >&2
+              exit 1
+            fi
+            release=true
+          else
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+            release=false
+            if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+              if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+                echo "v$version is already released; bump the version in Cargo.toml to cut another"
+              else
+                release=true
+              fi
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "version $version, release $release"
+
   # The tests that need a ROM or a tape skip themselves when the file is not
   # there, so the suite is meaningful on CI even though roms/ and tapes/ are
   # not in the repository.
@@ -37,7 +84,7 @@ jobs:
       - run: cargo test --release
 
   package:
-    needs: test
+    needs: [version, test]
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +102,8 @@ jobs:
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -67,6 +116,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev pkg-config
 
+      # The disk image is named for the version and the architecture by the
+      # script itself, so the two macOS builds do not land on one file.
       - name: Build the app bundle
         if: runner.os == 'macOS'
         run: packaging/macos-app.sh ${{ matrix.target }}
@@ -81,7 +132,7 @@ jobs:
         if: runner.os != 'macOS'
         shell: bash
         run: |
-          out="zx-rustrum-${{ matrix.name }}"
+          out="zx-rustrum-$VERSION-${{ matrix.name }}"
           mkdir -p "$out/roms"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/zx-rustrum.exe" "$out/"
@@ -109,8 +160,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
+    needs: [version, package]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -118,13 +169,22 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # The tag is made here when the push was to main: the release and the
+      # tag then name the same commit, and there is nothing to remember to
+      # push afterwards.
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: ZX-Rustrum ${{ needs.version.outputs.version }}
           files: |
             *.tar.gz
             *.zip
             *.dmg
           body: |
+            ZX-Rustrum ${{ needs.version.outputs.version }}, built from
+            ${{ github.sha }}: macOS (Apple silicon and Intel), Linux x86-64
+            and Windows x86-64.
+
             No ROM images are included — they are still under copyright. Put
             yours next to the binary (or in `roms/`), or open one with
             File ▸ Load ROM…

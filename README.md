@@ -685,8 +685,19 @@ open the app on another machine until the quarantine flag is cleared:
 
 `.github/workflows/release.yml` runs the tests, `cargo fmt --check` and
 `cargo clippy -D warnings` on macOS, Linux and Windows, then packages a `.dmg`
-for the two macOS architectures, a `.tar.gz` for Linux and a `.zip` for
-Windows, attaching them to a release on a `v*` tag.
+for each of the two macOS architectures, a `.tar.gz` for Linux and a `.zip`
+for Windows. Every push to main builds all four; the files are on the run.
+
+**Cutting a release is bumping `version` in `Cargo.toml`.** When a commit
+lands on main with a version that has no `v<version>` tag yet, the workflow
+tags that commit and publishes a release with the four builds attached, named
+for the version — `zx-rustrum-0.2.0-linux-x86_64.tar.gz`,
+`ZX-Rustrum-0.2.0-macos-arm64.dmg`, and so on. Pushing anything else to main
+builds the same four and publishes nothing, so a version never means two
+different sets of binaries. Pushing a `v*` tag by hand still releases, and the
+tag is checked against `Cargo.toml` first: a tag that names a version the tree
+does not stops the build rather than shipping binaries that report a version
+they are not.
 
 `packaging/make-icon.py` draws the icon — a `ZX` over the four Spectrum colour
 bars — writing both `icon.png` and a multi-size `icon.ico`. It has no
