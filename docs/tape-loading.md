@@ -481,6 +481,30 @@ the screen, and the ROM is not the address range the check called a loader. The
 check now also refuses the ROM's tape routines, and **every other game here
 passes it** — twelve of them — so the assertion is not simply too strict.
 
+**What it is waiting for, exactly.** Traced by watching every entry into the
+ROM's loading routines rather than only the calls at $0556 — this loader jumps
+in part way, which is why the first look found nothing:
+
+```
+IN $0556 block   3  flag $FF len   183 to $5CCB   from $0805
+IN $0556 block   3  flag $00 len    17 to $5D99   from $0771
+IN $0556 block   4  flag $FF len   512 to $CD00   from $0805
+IN $0562 block 206  flag $0F len  6912 to $4000   from $5DAD
+IN $0562 block 212  flag $0F len  6912 to $4000   from $5DAD   (tape stopped)
+```
+
+Three ROM loads succeed; then, with the tape at block 206, the game enters
+LD-BYTES **at $0562** — past the header handling — asking for 6,912 bytes at
+$4000. That is the loading screen, and **block 209 is exactly it**: a standard
+block, flag $FF, 6,912 bytes of payload. Between the request and the block lie
+a 4,688-pulse tone (206), a 4.6-second pause (207) and a group end (208).
+
+The deck does play block 209 — playing the tape with no machine attached shows
+it running for the 34 seconds a 6,914-byte block takes — so the pulses are
+there and the loader does not take them. It asks again afterwards, by which
+time the deck has stopped at the "Stop the tape" that divides side A from the
+128K version, and that second wait is the freeze.
+
 What was tried and does not fix it:
 
 - **The EAR line hearing the loudspeaker while the tape runs.** A real EAR
@@ -491,6 +515,18 @@ What was tried and does not fix it:
   loaders flash the border in the gaps and would then be reading their own
   border writes. A comparator summing a large signal with a small one is not
   an either/or, and modelling it as one is where this ends.
+
+- **A hiss on the tape.** Entering at $0562 means the loader reads the EAR line
+  once to decide which way round the edges are (`IN A,($FE) / RRA / AND $20 /
+  OR $02 / LD C,A`), so a gap sitting at a level a real one would not could
+  invert every edge after it. Switching the deck's noise on changes nothing:
+  same place, same 1,945 bytes of screen.
+- **Fastload.** Off makes no difference: the same two entries at $0562, the
+  same block, the same freeze at $05F4 rather than $05F6.
+
+What is left to try is watching the loader's own edge counting through block
+209 — what it measures against what the deck put out — which is where this
+stops for now.
 
 The test is `#[ignore]`d with that reason rather than deleted or quietly
 weakened.
