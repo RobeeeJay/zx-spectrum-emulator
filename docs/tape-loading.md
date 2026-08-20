@@ -304,11 +304,10 @@ Host frames from `LOAD ""` to the tape stopping, played against hurried:
 | --- | --- | --- | --- |
 | Bubble Bobble | 21,475 | 1,074 | 41 |
 | Starglider | 19,529 | 977 | 36 |
-| Starglider 2 | — | — | — |
+| Starglider 2 | 24,473 | 1,224 | 46 |
 
-**Starglider 2 does not finish**, and the frames above are struck out because
-what was being measured was a tape running to its end rather than a game
-starting. See the section below.
+Starglider 2 was the one that did not finish, for reasons that had nothing to
+do with Bleepload; see below.
 
 Bubble Bobble is worth knowing about when reading a test: it waits at its menu
 inside the ROM's keyboard scan, which is where BASIC waits too, so where the
@@ -460,30 +459,21 @@ does not separate them. Where they differ is where they *end*: the list only
 ever scrolls to put the block being played in view, so a movement that leaves
 it off the screen — with the pointer over the list — was not the list's doing.
 
-## Still open: Starglider 2 stops with its loading screen up
+## Starglider 2, and the edge that was never sent
 
-The 48K side loads: the screen, then about two hundred of its 267-byte turbo
-blocks, read by the game's own loader. Then the machine sits in the ROM's edge
-routine at $05Ex — Starglider 2's loader calls into the ROM's rather than
-carrying its own — waiting for a block that is not coming, with the loading
-screen up and the tape run out at the "Stop the tape" that divides side A from
-the 128K version behind it. Pressing Play again plays the 128K side past it and
-changes nothing.
-
-**The 128K side of the same tape loads on a 128K machine**, which the user has
-confirmed; it is side A, the 48K version, that does not load on either machine.
-So it is not the tape, the Bleepload family, or the deck: three other Bleepload
-tapes load, and the far end of this one loads too.
+The 48K side loaded its screen, then about two hundred of its 267-byte turbo
+blocks, and then sat in the ROM's edge routine at $05F6 with the loading screen
+up and the tape run out. Pressing Play again changed nothing.
 
 It was passing as a game that loads. The check was "the machine is not in a
 loader, and there is something on the screen": a loading screen is something on
 the screen, and the ROM is not the address range the check called a loader. The
-check now also refuses the ROM's tape routines, and **every other game here
-passes it** — twelve of them — so the assertion is not simply too strict.
+check now also refuses the ROM's tape routines $0530-$0620, and every other
+game here passes it.
 
-**What it is waiting for, exactly.** Traced by watching every entry into the
-ROM's loading routines rather than only the calls at $0556 — this loader jumps
-in part way, which is why the first look found nothing:
+**What it was waiting for.** Traced by watching every entry into the ROM's
+loading routines rather than only the calls at $0556 — this loader jumps in
+part way, which is why the first look found nothing:
 
 ```
 IN $0556 block   3  flag $FF len   183 to $5CCB   from $0805
@@ -495,17 +485,27 @@ IN $0562 block 212  flag $0F len  6912 to $4000   from $5DAD   (tape stopped)
 
 Three ROM loads succeed; then, with the tape at block 206, the game enters
 LD-BYTES **at $0562** — past the header handling — asking for 6,912 bytes at
-$4000. That is the loading screen, and **block 209 is exactly it**: a standard
-block, flag $FF, 6,912 bytes of payload. Between the request and the block lie
-a 4,688-pulse tone (206), a 4.6-second pause (207) and a group end (208).
+$4000. That is the loading screen, and block 209 is exactly it. Counting the
+bytes as they arrived showed the loader reading the whole of it: IX reaching
+$5B00 and DE reaching zero, the entire screen in memory. It then hung on the
+last byte.
 
-The deck does play block 209 — playing the tape with no machine attached shows
-it running for the 34 seconds a 6,914-byte block takes — so the pulses are
-there and the loader does not take them. It asks again afterwards, by which
-time the deck has stopped at the "Stop the tape" that divides side A from the
-128K version, and that second wait is the freeze.
+**The last bit of a block was never closed.** A pulse ends where the next one
+begins, so a block with no pause of its own is closed by the first pulse of the
+block behind it — free, and why this went unnoticed for so long. Block 209 has
+no pause and behind it is block 210, "Stop the tape", which divides side A from
+the 128K version. Nothing followed, the line simply stopped at the level it was
+holding, and the loader waited for ever for the edge that ends its last byte.
+The second request at block 212 is that loader having been sent round again
+with the deck now stopped, and that is the wait that looked like the freeze.
 
-What was tried and does not fix it:
+`Tape::after_data` emits the closing edge when the block behind is one that
+stops the tape. The end of the tape is deliberately not the same case: there is
+no loader left waiting by then, and an extra edge there changes what the last
+block's own loader sees — City Slicker's screen came out 75 bytes different
+between playing and hurrying when the first version of the fix sent one.
+
+Three things were tried first and are worth writing down as not being it:
 
 - **The EAR line hearing the loudspeaker while the tape runs.** A real EAR
   input sums the tape's signal with what the machine's own speaker feeds back,
@@ -514,22 +514,14 @@ What was tried and does not fix it:
   through during a gap breaks Head over Heels and both Dinamic games, whose
   loaders flash the border in the gaps and would then be reading their own
   border writes. A comparator summing a large signal with a small one is not
-  an either/or, and modelling it as one is where this ends.
-
+  an either/or, and modelling it as one is where that ends.
 - **A hiss on the tape.** Entering at $0562 means the loader reads the EAR line
   once to decide which way round the edges are (`IN A,($FE) / RRA / AND $20 /
   OR $02 / LD C,A`), so a gap sitting at a level a real one would not could
-  invert every edge after it. Switching the deck's noise on changes nothing:
+  invert every edge after it. Switching the deck's noise on changed nothing:
   same place, same 1,945 bytes of screen.
-- **Fastload.** Off makes no difference: the same two entries at $0562, the
-  same block, the same freeze at $05F4 rather than $05F6.
-
-What is left to try is watching the loader's own edge counting through block
-209 — what it measures against what the deck put out — which is where this
-stops for now.
-
-The test is `#[ignore]`d with that reason rather than deleted or quietly
-weakened.
+- **Fastload.** Off made no difference, which was the clue that it was the deck
+  rather than the hand-over: the same two entries at $0562, the same block.
 
 ## A deck that is not quite right
 

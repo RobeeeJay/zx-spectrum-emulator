@@ -509,3 +509,61 @@ fn a_run_of_one_byte_does_not_take_the_emulator_down() {
     let merged = blocks::merge(&found, &found);
     assert!(merged.iter().any(|block| block.contains(0x9000)));
 }
+
+/// A block with no pause, followed by a block that stops the tape, still ends
+/// with an edge.
+///
+/// A pulse ends where the next one begins, so a block with no pause behind it
+/// is closed by the first pulse of whatever comes next — free, and why this
+/// went unnoticed. Nothing comes next when the tape is about to stand still:
+/// the line simply stopped, and a loader waiting for the edge that ends its
+/// last byte waited for ever. Starglider 2's loading screen is such a block,
+/// and that was the freeze.
+#[test]
+fn a_block_before_a_stop_is_still_closed_with_an_edge() {
+    use zx_rustrum::tape::{Block, Tape};
+
+    let edges_of = |behind: Vec<Block>| -> usize {
+        let mut blocks = vec![Block::PureData {
+            zero: 400,
+            one: 800,
+            used_bits: 8,
+            pause_ms: 0,
+            data: vec![0xAA; 4],
+        }];
+        blocks.extend(behind);
+        let mut tape = Tape::from_blocks("t".into(), blocks);
+        tape.play(0);
+        let mut level = tape.level_at(0);
+        let mut edges = 0;
+        // Long enough for the block and whatever is behind it.
+        for t in (0..200_000u64).step_by(8) {
+            let now = tape.level_at(t);
+            if now != level {
+                edges += 1;
+                level = now;
+            }
+        }
+        edges
+    };
+
+    // Four bytes of alternating bits is 32 bits and two pulses each: 64
+    // pulses, so 64 transitions into them and one more to close the last —
+    // and that last one only happens if something makes it.
+    let before_a_stop = edges_of(vec![Block::Pause(0)]);
+    assert_eq!(
+        before_a_stop, 65,
+        "every pulse should be closed, the last one included"
+    );
+
+    // With another block behind it the closing edge comes from that block's
+    // first pulse, as it always did.
+    let before_a_block = edges_of(vec![Block::PureTone {
+        len: 2168,
+        count: 4,
+    }]);
+    assert!(
+        before_a_block >= 64,
+        "and nothing is lost when a block follows: {before_a_block}"
+    );
+}

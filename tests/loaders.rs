@@ -396,19 +396,16 @@ fn starglider_loads() {
 
 /// Starglider 2 wraps its blocks in groups and puts a four-millisecond pause
 /// and a long tone in front of them.
-/// Starglider 2 does not finish, and this is what it does instead.
+/// Starglider 2 loads, which for a long time it did not.
 ///
-/// The 48K side loads its screen and about two hundred of its blocks, and then
-/// sits in the ROM's edge routine at $05Ex — the game's own loader calls into
-/// the ROM's and waits there — with the loading screen up and the tape run
-/// out. Pressing Play again runs the 128K side past it and changes nothing.
-///
-/// It was passing as a game that loads because the check was "not in a loader,
-/// and something on screen": the loading screen is something on screen, and
-/// the ROM is not the loader the check was looking at. Every other game here
-/// passes the stricter one.
+/// It reads its two hundred turbo blocks with its own loader and then asks the
+/// ROM's — entering LD-BYTES at $0562 rather than $0556 — for a 6,912-byte
+/// loading screen. That is block 209, and behind it is a "stop the tape". A
+/// block with no pause is closed by the first pulse of whatever follows, and
+/// nothing follows a stop: the line simply stopped, and the loader waited for
+/// ever for the edge that ends its last byte. See
+/// `Tape::after_data`.
 #[test]
-#[ignore = "Starglider 2 does not finish loading: see docs/tape-loading.md"]
 fn starglider_2_loads() {
     starts_after_loading(STARGLIDER_2);
 }

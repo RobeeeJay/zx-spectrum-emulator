@@ -1444,6 +1444,35 @@ impl Tape {
         };
     }
 
+    /// What follows the last bit of a block: the closing edge, and the silence
+    /// if the block asked for one.
+    ///
+    /// A pulse ends where the next one begins, so with another block behind it
+    /// the transition that closes the last bit comes for free — which is why a
+    /// block with no pause needed nothing here. It is not free when nothing
+    /// follows: a block written with no pause and a "stop the tape" behind it
+    /// ends with the line simply stopping, and a loader waiting for the edge
+    /// that ends its last byte waits for ever. Starglider 2's loading screen
+    /// is such a block, and that was the freeze.
+    fn after_data(&self, pause_ms: u16) -> Phase {
+        if pause_ms > 0 {
+            return Phase::PauseEdge { ms: pause_ms };
+        }
+        // A block that stops the tape behind it: the deck is about to stand
+        // still, so nothing else will provide the edge. The end of the tape is
+        // not the same case — there is no loader left waiting by then, and
+        // giving it an edge changes what the last block's loader sees.
+        let quiet = matches!(
+            self.blocks.get(self.block + 1),
+            Some(Block::Pause(0)) | Some(Block::StopIf48k)
+        );
+        if quiet {
+            Phase::PauseEdge { ms: 0 }
+        } else {
+            Phase::Next
+        }
+    }
+
     /// Jump straight to a block, e.g. from the tape window.
     /// Put a stop-the-tape block in front of a block.
     ///
@@ -1681,11 +1710,7 @@ impl Tape {
                     };
                     if byte >= data.len() || bit >= bits_here {
                         if byte >= data.len() {
-                            self.phase = if pause_ms > 0 {
-                                Phase::PauseEdge { ms: pause_ms }
-                            } else {
-                                Phase::Next
-                            };
+                            self.phase = self.after_data(pause_ms);
                             continue;
                         }
                         self.phase = Phase::Data {
@@ -1764,11 +1789,7 @@ impl Tape {
                         }
                     };
                     if byte >= data.len() {
-                        self.phase = if pause_ms > 0 {
-                            Phase::PauseEdge { ms: pause_ms }
-                        } else {
-                            Phase::Next
-                        };
+                        self.phase = self.after_data(pause_ms);
                         continue;
                     }
                     // Bits go out most significant first, each as a burst of
@@ -1833,11 +1854,7 @@ impl Tape {
                         8
                     };
                     if byte >= data.len() {
-                        self.phase = if pause_ms > 0 {
-                            Phase::PauseEdge { ms: pause_ms }
-                        } else {
-                            Phase::Next
-                        };
+                        self.phase = self.after_data(pause_ms);
                         continue;
                     }
                     if bit >= bits_here {
