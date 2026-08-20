@@ -13,6 +13,7 @@ pub mod detect;
 pub mod disasm;
 pub mod flashload;
 pub mod flow;
+pub mod keyboard;
 pub mod listing;
 pub mod logo;
 pub mod loops;

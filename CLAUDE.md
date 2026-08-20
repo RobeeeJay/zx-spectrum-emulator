@@ -281,6 +281,26 @@ socket at once, so it proves nothing on its own: the beeper is told apart by
 hammering the port while writing almost nothing to memory. Watching costs a
 branch on every access, so it only runs while AutoDoc is on.
 
+**The keyboard window is the machine's keyboard, both ways round.** Forty keys
+wired as eight rows of five — the same matrix on every Spectrum and on the
+ZX81, with different words printed on them, which is why `src/keyboard.rs`
+holds two layouts and `src/ui/keyboard.rs` only draws them. Clicking a key
+holds it down for a tenth of a second whatever the pointer does, because the
+ROM scans the keyboard once a frame and wants a key on two scans running before
+it believes in it; a click that lasted one host frame would type nothing. The
+same tenth of a second is how long a key stays lit, so a key tapped on the desk
+is a key that visibly flashes. Everything the machine can see down is lit,
+whichever keyboard it came from. A shift clicked on its own waits for the key
+it is shifting and goes down with it, since one pointer cannot hold two keys —
+and it is pressed with that key rather than dropped at the moment it is
+clicked, or the machine would see the key unshifted. The ZX81's legends are
+from the keyboard table at <https://problemkaputt.de/zxdocs.htm>. The cursor
+keys are written out as words: egui's fonts have no arrow glyphs, and an empty
+box on a key says nothing. The +2A and +3 have typewriter keyboards whose cases
+carry keys the rubber ones did not; what is drawn for them is the matrix they
+share with the 48K, which is honest about what the machine reads and not a
+picture of their case.
+
 **Anything else known goes in a file, not in the source.** `tools/rom-symbols.py`
 turns a disassembly from
 <https://github.com/ZXSpectrumVault/rom-disassemblies> into a symbol file in

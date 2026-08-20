@@ -5,6 +5,7 @@ pub mod callflow;
 pub mod cassette;
 pub mod crt;
 pub mod debugger;
+pub mod keyboard;
 pub mod profiler;
 pub mod ram_map;
 pub mod sprites;
@@ -456,6 +457,10 @@ pub struct App {
     pub sprites: sprites::SpriteView,
     pub show_tape: bool,
     pub show_profiler: bool,
+    /// The machine's own keyboard, drawn and pressable.
+    pub show_keyboard: bool,
+    /// Which keys are down and which are lit, for that window.
+    pub keys: crate::keyboard::Keys,
 
     screen_pixels: Vec<u8>,
     screen_tex: Option<TextureHandle>,
@@ -596,6 +601,8 @@ impl App {
             sprites: sprites::SpriteView::default(),
             show_tape: false,
             show_profiler: false,
+            show_keyboard: false,
+            keys: crate::keyboard::Keys::default(),
             screen_pixels: vec![0; screen::View::OVERSCAN.buffer_len()],
             screen_tex: None,
             crt: false,
@@ -847,6 +854,7 @@ impl App {
             theme::toggle(ui, &mut self.show_sprites, "Graphics");
             theme::toggle(ui, &mut self.show_callflow, "Call flow");
             theme::toggle(ui, &mut self.show_profiler, "Profiler");
+            theme::toggle(ui, &mut self.show_keyboard, "Keyboard");
         });
     }
 
@@ -1775,7 +1783,11 @@ impl App {
     pub fn apply_prefs(&mut self) {
         self.apply_tape_settings();
         if let Some(scale) = self.prefs.display_scale.filter(|s| *s > 0.0) {
-            self.scale = scale;
+            // Somebody who last left it at half size has a preferences file
+            // asking for a zoom that is not offered any more; they get the
+            // smallest that is rather than a window nothing can set.
+            let smallest = screen::SCALES[0];
+            self.scale = scale.max(smallest);
         }
         if let Some(overscan) = self.prefs.overscan {
             self.overscan = overscan;
@@ -1789,6 +1801,7 @@ impl App {
             self.show_sprites = is_open("sprites");
             self.show_callflow = is_open("callflow");
             self.show_profiler = is_open("profiler");
+            self.show_keyboard = is_open("keyboard");
         }
     }
 
@@ -1803,11 +1816,21 @@ impl App {
             ("sprites", self.show_sprites),
             ("callflow", self.show_callflow),
             ("profiler", self.show_profiler),
+            ("keyboard", self.show_keyboard),
         ]
         .into_iter()
         .filter(|(_, open)| *open)
         .map(|(name, _)| name.to_string())
         .collect()
+    }
+
+    /// What the machine is called, as the dropdown says it.
+    pub fn machine_name(&self) -> String {
+        if self.on_zx81() {
+            self.zx81_ram.name().to_string()
+        } else {
+            self.spec.bus.model.name().to_string()
+        }
     }
 
     /// True when the ZX81 is the machine in use.
@@ -3638,6 +3661,7 @@ impl App {
             ("back_buffer", self.show_back_buffer),
             ("sprites", self.show_sprites),
             ("callflow", self.show_callflow),
+            ("keyboard", self.show_keyboard),
         ] {
             if !shown {
                 self.placed.remove(name);
@@ -3816,6 +3840,30 @@ impl App {
             self.show_sprites = open;
         }
 
+        if self.show_keyboard {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("keyboard"),
+                self.restore_window(
+                    "keyboard",
+                    ViewportBuilder::default().with_title("Keyboard"),
+                    [360.0, 760.0],
+                    [760.0, 300.0],
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("keyboard", &ctx, [360.0, 760.0], [760.0, 300.0]) {
+                        self.remember_window("keyboard", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| keyboard::ui(self, ui));
+                },
+            );
+            self.show_keyboard = open;
+        }
+
         if self.show_back_buffer {
             let mut open = true;
             ctx.show_viewport_immediate(
@@ -3927,6 +3975,20 @@ impl App {
                 press(4, 2);
             }
         });
+        // What the keyboard window is holding down is pressed as well, and
+        // everything the machine can see down is lit — including the keys of
+        // the host keyboard, which is what makes the window a view of what is
+        // being typed rather than only a thing to click.
+        let now = std::time::Instant::now();
+        let clicked = self.keys.matrix(now);
+        for (row, keys) in matrix.iter_mut().enumerate() {
+            *keys &= clicked[row];
+            for bit in 0..5u8 {
+                if *keys & (1 << bit) == 0 {
+                    self.keys.lit(row, bit, now);
+                }
+            }
+        }
         match &mut self.zx81 {
             // The ZX81's matrix is wired the same way, minus the bottom row's
             // shift keys.

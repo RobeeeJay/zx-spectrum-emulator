@@ -59,7 +59,11 @@ impl Default for View {
 }
 
 /// Display scales offered in the UI, as multiples of the Spectrum's pixels.
-pub const SCALES: [f32; 6] = [0.5, 1.0, 1.5, 2.0, 3.0, 3.5];
+///
+/// Nothing below 1x: half a pixel is not a pixel, and a picture drawn at half
+/// size threw away every other line of a machine whose whole display is 192 of
+/// them.
+pub const SCALES: [f32; 5] = [1.0, 1.5, 2.0, 3.0, 3.5];
 
 /// Where to draw a picture of `size` so it sits in the middle of `available`,
 /// with the same amount of space on every side. When it is larger than the

@@ -352,9 +352,27 @@ fn the_display_is_centred_whatever_size_the_window_is() {
 fn the_zoom_presets_set_the_display_scale() {
     use zx_rustrum::screen::SCALES;
 
-    assert_eq!(SCALES, [0.5, 1.0, 1.5, 2.0, 3.0, 3.5]);
+    // A slice rather than an array, so a list of a different length is a test
+    // that fails rather than one that will not compile.
+    assert_eq!(SCALES.as_slice(), [1.0, 1.5, 2.0, 3.0, 3.5]);
+    assert!(
+        SCALES.iter().all(|s| *s >= 1.0),
+        "nothing below the machine's own pixels: {SCALES:?}"
+    );
 
     let mut h = harness();
+    h.run_steps(3);
+
+    // Half size is not offered: a Spectrum pixel is the smallest thing on the
+    // screen, and half of one is a line of the picture thrown away.
+    let showing = zoom_label(h.state().scale);
+    h.get_by_label(&format!("{showing}  \u{25be}")).click();
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("0.5x").is_none(),
+        "the list should not offer half size"
+    );
+    h.get_by_label(&zoom_label(h.state().scale)).click();
     h.run_steps(3);
     for scale in SCALES {
         let showing = zoom_label(h.state().scale);
