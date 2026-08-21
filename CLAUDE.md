@@ -4,6 +4,14 @@ ZX-Rustrum: a ZX Spectrum (48K, 128K, +2A, +3) and ZX81 emulator in Rust, on
 `eframe`/`egui` with the wgpu renderer. This file is what a new session needs to
 know that the code does not say for itself.
 
+## Verify Before Reporting Results
+
+Never publish results, tables, or benchmark numbers until the underlying
+pipeline has been end-to-end validated on a known-good case. If a result looks
+surprising (e.g. an engine that never loses, a table that changes shape between
+runs), treat it as a bug in the harness first, not a finding. State explicitly
+which parts were measured and which were assumed.
+
 ## How to work on it
 
 **Verify against the real machine, not against expectations.** The timing was
@@ -32,6 +40,34 @@ logo is drawn in code rather than decoded from a file.
 
 **Prose:** plain, no salesmanship, British spelling. Say what happened,
 including what did not work.
+
+## Working Style
+
+**Shipping vs. improving.** When a task's stated goal is met, stop and ship it:
+commit, push and report. Do not propose additional refactors, cleanups or
+enhancements unless they are asked for. Further improvements noticed on the way
+go in a short "possible follow-ups" list after shipping, not before.
+
+## Debugging
+
+**State the hypothesis before fixing it**, along with the cheapest experiment
+that would prove it wrong. One probe beats one speculative edit. For memory,
+timing and emulator work, confirm an address or a read is stable across at
+least two independent samples before building anything on it.
+
+## Version Control
+
+**Test and commit as you go.** After each self-contained change: run the tests
+that cover it, then commit with a message describing what changed and why. Do
+not batch several features into one commit. Where the area being changed has no
+test, the change comes with a small one.
+
+## Environment Setup
+
+**Docker.** All `docker compose` instructions — in READMEs, in scripts and on
+the command line — use `docker compose up -d --build`, never a bare `up -d`, so
+that code changes are actually rebuilt into the image. A UI change is not done
+until it has been seen in the running container.
 
 ## What is written down elsewhere
 
