@@ -70,7 +70,14 @@ jobs:
           else
             version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
             release=false
-            if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            # A hand-started run counts as well as a push. Pushes to this
+            # repository have stopped starting runs of their own — the events
+            # arrive, no run is created — and a release that can only be cut
+            # by a push cannot be cut at all while that lasts. The gate is
+            # still the version: a run of either kind releases only when the
+            # version in Cargo.toml has no tag.
+            if [ "$GITHUB_REF" = refs/heads/main ] &&
+               { [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; }; then
               if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
                 echo "v$version is already released; bump the version in Cargo.toml to cut another"
               else
