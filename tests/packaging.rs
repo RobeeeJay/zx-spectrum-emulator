@@ -40,9 +40,9 @@ fn the_version_is_where_the_packaging_looks_for_it() {
     );
 }
 
-/// A push to main builds everything that is shipped.
+/// A release builds everything that is shipped.
 #[test]
-fn a_push_to_main_builds_every_platform_that_is_shipped() {
+fn a_release_builds_every_platform_that_is_shipped() {
     assert!(
         WORKFLOW.contains("branches: [main]"),
         "the workflow should run on a push to main"
@@ -59,6 +59,42 @@ fn a_push_to_main_builds_every_platform_that_is_shipped() {
     // whatever happens to be lying about.
     assert!(WORKFLOW.contains("needs: [version, package]"));
     assert!(WORKFLOW.contains("needs: [version, test]"));
+}
+
+/// What an ordinary push costs is one Linux job.
+///
+/// Minutes on a private repository are billed at one a minute on Linux, two on
+/// Windows and ten on macOS. Testing every push on all three and packaging
+/// four builds besides is most of a month's allowance in a handful of pushes,
+/// which is what stopped the builds: the jobs were refused before they
+/// started. So the wide matrix and the packaging wait for something to
+/// release, and a push that only changes prose is not built at all.
+#[test]
+fn an_ordinary_push_is_one_linux_job() {
+    assert!(
+        WORKFLOW.contains("os: ${{ fromJSON(needs.version.outputs.oses) }}"),
+        "the platforms tested should be decided per run, not fixed"
+    );
+    assert!(
+        WORKFLOW.contains("oses='[\"ubuntu-latest\"]'"),
+        "and an ordinary push should be Linux alone"
+    );
+    assert!(
+        WORKFLOW.contains("oses='[\"ubuntu-latest\", \"macos-latest\", \"windows-latest\"]'"),
+        "with all three when there is a release in it"
+    );
+    assert!(
+        WORKFLOW.contains("if: needs.version.outputs.full == 'true'"),
+        "the packaging — four jobs, two of them macOS — should wait for that too"
+    );
+    assert!(
+        WORKFLOW.contains("if: needs.version.outputs.build == 'true'"),
+        "and a prose-only push should build nothing"
+    );
+    assert!(
+        WORKFLOW.contains("cancel-in-progress: true"),
+        "a run that has been overtaken should stop rather than finish"
+    );
 }
 
 /// A release is cut when the version in the manifest is one that has not been

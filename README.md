@@ -684,17 +684,31 @@ open the app on another machine until the quarantine flag is cleared:
     xattr -dr com.apple.quarantine "/Applications/ZX Spectrum.app"
 
 `.github/workflows/release.yml` runs the tests, `cargo fmt --check` and
-`cargo clippy -D warnings` on macOS, Linux and Windows, then packages a `.dmg`
-for each of the two macOS architectures, a `.tar.gz` for Linux and a `.zip`
-for Windows. Every push to main builds all four; the files are on the run.
+`cargo clippy -D warnings`, then packages a `.dmg` for each of the two macOS
+architectures, a `.tar.gz` for Linux and a `.zip` for Windows.
+
+**What each push costs decides what it runs.** This is a private repository,
+so Actions minutes are billed — one a minute on Linux, two on Windows, ten on
+macOS. An ordinary push to main is tested on Linux and nothing else; a push
+that only changes prose is not built at all; and the other two platforms and
+the four packaging jobs run when there is something to release. A run that has
+been overtaken by another push is cancelled. `workflow_dispatch` takes a
+**full** switch for a complete build without a version bump.
+
+The tests are built without link-time optimisation (`CARGO_PROFILE_RELEASE_LTO:
+"false"`), which is thin LTO over seventy-odd binaries and most of the build:
+cold, on this machine, `cargo test --release --no-run` takes 2,194 seconds of
+CPU with it and 374 without. The packaged binaries keep the release profile as
+it stands. `cargo fmt` and `cargo clippy` run on the Linux job alone, since
+their answer does not change with the platform.
 
 **Cutting a release is bumping `version` in `Cargo.toml`.** When a commit
 lands on main with a version that has no `v<version>` tag yet, the workflow
 tags that commit and publishes a release with the four builds attached, named
 for the version — `zx-rustrum-0.2.0-linux-x86_64.tar.gz`,
 `ZX-Rustrum-0.2.0-macos-arm64.dmg`, and so on. Pushing anything else to main
-builds the same four and publishes nothing, so a version never means two
-different sets of binaries. Pushing a `v*` tag by hand still releases, and the
+tests it and publishes nothing, so a version never means two different sets of
+binaries. Pushing a `v*` tag by hand still releases, and the
 tag is checked against `Cargo.toml` first: a tag that names a version the tree
 does not stops the build rather than shipping binaries that report a version
 they are not.

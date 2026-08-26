@@ -6,24 +6,48 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      full:
+        description: "Build every platform, without waiting for a version bump"
+        type: boolean
+        default: false
+
+# A run that has been overtaken is not worth its minutes: this is a private
+# repository, so every minute is billed, and macOS is billed at ten times the
+# rate of Linux.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  # Incremental compilation is for a machine that keeps its target directory
+  # between builds. CI does not, and the artefacts only make the cache larger.
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  # What is being built, and whether it is a release.
+  # What is being built, on what, and whether it is a release.
   #
   # A commit on main is released when the version in Cargo.toml has not been
   # released before, so cutting a release is bumping that version: the tag and
-  # the release are made from the commit that changed it. Pushing anything else
-  # to main still builds all four platforms — the artifacts are on the run —
-  # but does not publish a second release under a version that already means
-  # something else.
+  # the release are made from the commit that changed it.
+  #
+  # What it costs decides the rest. Minutes on a private repository are billed
+  # at one a minute on Linux, two on Windows and ten on macOS, and a full run
+  # of this workflow is seven jobs of which three are macOS — enough to spend
+  # a month's allowance on a handful of pushes. So an ordinary push is tested
+  # on Linux and nothing else, and the other two platforms and the packaging
+  # run when there is something to release: a version bump, a tag, or a
+  # workflow_dispatch asking for it. A push that only touches prose is not
+  # built at all.
   version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.read.outputs.version }}
       release: ${{ steps.read.outputs.release }}
+      full: ${{ steps.read.outputs.full }}
+      build: ${{ steps.read.outputs.build }}
+      oses: ${{ steps.read.outputs.oses }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,19 +78,59 @@ jobs:
               fi
             fi
           fi
+
+          # Everything is built when there is a release in it, or when a tag or
+          # a hand-started run asks for it; otherwise Linux alone.
+          full=false
+          if [ "$release" = true ] || [ "${{ inputs.full }}" = true ]; then
+            full=true
+          fi
+          if [ "$full" = true ]; then
+            oses='["ubuntu-latest", "macos-latest", "windows-latest"]'
+          else
+            oses='["ubuntu-latest"]'
+          fi
+
+          # A commit that only changes prose builds nothing. The comparison is
+          # against what was on main before the push; a first push, or a tag,
+          # has nothing to compare against and is built.
+          build=true
+          before="${{ github.event.before }}"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ] &&
+             [ -n "$before" ] && [ "$before" != 0000000000000000000000000000000000000000 ] &&
+             git cat-file -e "$before^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only "$before" "$GITHUB_SHA")"
+            if [ -n "$changed" ] && ! grep -qvE '(\.md$|^docs/|^designs/|^prompts/)' <<<"$changed"; then
+              build=false
+              echo "prose only, nothing to build:"
+              echo "$changed"
+            fi
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
-          echo "version $version, release $release"
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "oses=$oses" >> "$GITHUB_OUTPUT"
+          echo "version $version, release $release, full $full, build $build, on $oses"
 
   # The tests that need a ROM or a tape skip themselves when the file is not
   # there, so the suite is meaningful on CI even though roms/ and tapes/ are
   # not in the repository.
   test:
+    needs: version
+    if: needs.version.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: ${{ fromJSON(needs.version.outputs.oses) }}
     runs-on: ${{ matrix.os }}
+    env:
+      # The tests are not the thing that ships, so they are built without
+      # link-time optimisation: it is thin LTO over fifty-odd test binaries,
+      # and it is the bulk of the build. The packaging job below keeps the
+      # release profile as it stands.
+      CARGO_PROFILE_RELEASE_LTO: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -79,12 +143,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev pkg-config
+      # Formatting and lints are the same answer on every platform, and
+      # clippy is a second full build of everything. They run on the cheap
+      # runner only; what the other two are here for is the tests.
       - run: cargo fmt --check
+        if: runner.os == 'Linux'
       - run: cargo clippy --all-targets -- -D warnings
+        if: runner.os == 'Linux'
       - run: cargo test --release
 
   package:
     needs: [version, test]
+    if: needs.version.outputs.full == 'true'
     strategy:
       fail-fast: false
       matrix:
