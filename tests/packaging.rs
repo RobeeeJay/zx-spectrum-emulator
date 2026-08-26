@@ -157,6 +157,30 @@ fn the_files_that_go_out_carry_the_version() {
     );
 }
 
+/// The files the release is made of are where the release job looks for them.
+///
+/// An artifact keeps the paths of what went into it. The disk image was built
+/// under target/packaging and uploaded from there, so it came back down under
+/// that path — and the release job's `*.dmg`, which matches at the top, found
+/// nothing. The 1.0.0 release went out with the Linux and Windows archives
+/// and neither disk image.
+#[test]
+fn the_disk_image_is_uploaded_from_where_the_archives_are() {
+    assert!(
+        WORKFLOW.contains("mv target/packaging/*.dmg ."),
+        "the image should be moved up beside the archives before it is uploaded"
+    );
+    assert!(
+        !WORKFLOW.contains("target/packaging/*.dmg\n"),
+        "and not uploaded from under target/packaging"
+    );
+    assert!(
+        WORKFLOW.contains("target_commitish: ${{ github.sha }}"),
+        "and the tag should name the commit this run built, since the branch \
+         may have moved on by the time a late-created run reaches the release"
+    );
+}
+
 /// The two macOS disk images are two files.
 ///
 /// They are built in the same workflow and their artifacts are merged into one

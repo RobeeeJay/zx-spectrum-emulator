@@ -203,7 +203,14 @@ jobs:
       # script itself, so the two macOS builds do not land on one file.
       - name: Build the app bundle
         if: runner.os == 'macOS'
-        run: packaging/macos-app.sh ${{ matrix.target }}
+        # The image is moved up beside the archives. An artifact keeps the
+        # paths of what went into it, and with the image left under
+        # target/packaging it came back down under that path too — where the
+        # release job's `*.dmg` did not match it, and the 1.0.0 release went
+        # out with two files instead of four.
+        run: |
+          packaging/macos-app.sh ${{ matrix.target }}
+          mv target/packaging/*.dmg .
 
       - name: Build
         if: runner.os != 'macOS'
@@ -239,7 +246,7 @@ jobs:
           path: |
             zx-rustrum-*.tar.gz
             zx-rustrum-*.zip
-            target/packaging/*.dmg
+            ZX-Rustrum-*.dmg
           if-no-files-found: error
           # These are a step on the way to the release, which keeps its own
           # copy: a fortnight is long enough to fetch one by hand and short
@@ -263,6 +270,11 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.version }}
+          # The commit this run built, rather than wherever the branch has got
+          # to: runs are created minutes after their push, so by the time one
+          # reaches here the branch may have moved on, and a tag on a commit
+          # whose binaries these are not is a lie about what was released.
+          target_commitish: ${{ github.sha }}
           name: ZX-Rustrum ${{ needs.version.outputs.version }}
           files: |
             *.tar.gz
