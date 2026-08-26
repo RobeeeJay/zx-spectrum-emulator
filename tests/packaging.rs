@@ -92,8 +92,11 @@ fn an_ordinary_push_is_one_linux_job() {
         "and a prose-only push should build nothing"
     );
     assert!(
-        WORKFLOW.contains("cancel-in-progress: true"),
-        "a run that has been overtaken should stop rather than finish"
+        WORKFLOW.contains("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
+        "a pull request pushed to again should stop rather than finish — and a \
+         run on main should not, since runs are created minutes late and out of \
+         order, and cancelling on arrival killed the newest commit's run for an \
+         older one"
     );
     // Storage is billed as well as minutes, and a private repository has half
     // a gigabyte of it. The release keeps its own copy of everything here.

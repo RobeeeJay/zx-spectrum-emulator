@@ -12,12 +12,18 @@ on:
         type: boolean
         default: false
 
-# A run that has been overtaken is not worth its minutes: this is a private
-# repository, so every minute is billed, and macOS is billed at ten times the
-# rate of Linux.
+# A pull request that has been pushed to again is not worth its minutes: this
+# is a private repository, so every minute is billed, and macOS is billed at
+# ten times the rate of Linux.
+#
+# A run on main is never cancelled, though it shares the group. Runs here are
+# created minutes after the push that asks for them — six, sixteen and
+# twenty-one minutes in one afternoon — and they arrive out of order, so
+# cancelling whatever is running in favour of whatever has just been queued
+# killed a nearly finished run of the newest commit for a run of an older one.
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
