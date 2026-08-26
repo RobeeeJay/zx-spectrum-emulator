@@ -95,6 +95,12 @@ fn an_ordinary_push_is_one_linux_job() {
         WORKFLOW.contains("cancel-in-progress: true"),
         "a run that has been overtaken should stop rather than finish"
     );
+    // Storage is billed as well as minutes, and a private repository has half
+    // a gigabyte of it. The release keeps its own copy of everything here.
+    assert!(
+        WORKFLOW.contains("retention-days: 14"),
+        "the build artifacts should not be kept for ninety days"
+    );
 }
 
 /// A release is cut when the version in the manifest is one that has not been

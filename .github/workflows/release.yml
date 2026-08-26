@@ -228,6 +228,11 @@ jobs:
             zx-rustrum-*.zip
             target/packaging/*.dmg
           if-no-files-found: error
+          # These are a step on the way to the release, which keeps its own
+          # copy: a fortnight is long enough to fetch one by hand and short
+          # enough that a private repository's half-gigabyte of storage is not
+          # spent on ninety days of them, at forty-odd megabytes a run.
+          retention-days: 14
 
   release:
     needs: [version, package]
