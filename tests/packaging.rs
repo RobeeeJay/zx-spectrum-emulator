@@ -124,9 +124,9 @@ fn a_release_is_cut_when_the_version_is_a_new_one() {
         WORKFLOW.contains("tag_name: v${{ needs.version.outputs.version }}"),
         "the tag is the version, made from the commit that changed it"
     );
-    // And a hand-started run on main counts as a push would. Pushes to this
-    // repository have stopped starting runs — the events arrive and no run is
-    // created — so a release that only a push can cut could not be cut at all.
+    // And a hand-started run on main counts as a push would, so a release
+    // does not need one — after a cancelled run, say. The version gate is what
+    // stops the two publishing the same version twice.
     assert!(
         WORKFLOW.contains(r#"[ "$GITHUB_EVENT_NAME" = workflow_dispatch ]"#),
         "a workflow_dispatch on main should be able to release too"

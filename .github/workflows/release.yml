@@ -70,12 +70,12 @@ jobs:
           else
             version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
             release=false
-            # A hand-started run counts as well as a push. Pushes to this
-            # repository have stopped starting runs of their own — the events
-            # arrive, no run is created — and a release that can only be cut
-            # by a push cannot be cut at all while that lasts. The gate is
-            # still the version: a run of either kind releases only when the
-            # version in Cargo.toml has no tag.
+            # A hand-started run counts as well as a push, so a release can
+            # be cut without one — a re-run after a cancelled job, say. The
+            # gate is the same either way: a run releases only when the
+            # version in Cargo.toml has no tag, so the two cannot both publish
+            # the same version, and a push arriving while a hand-started run
+            # is going cancels it through the concurrency group above.
             if [ "$GITHUB_REF" = refs/heads/main ] &&
                { [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; }; then
               if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
