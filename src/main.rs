@@ -183,12 +183,16 @@ fn decode_png(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     let rgba = match info.color_type {
         png::ColorType::Rgba => buffer,
         png::ColorType::Rgb => buffer
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2], 0xFF])
             .collect(),
         png::ColorType::Grayscale => buffer.iter().flat_map(|v| [*v, *v, *v, 0xFF]).collect(),
         png::ColorType::GrayscaleAlpha => buffer
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[0], p[0], p[1]])
             .collect(),
         png::ColorType::Indexed => return None,

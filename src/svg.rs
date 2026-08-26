@@ -637,7 +637,7 @@ fn subpaths(d: &str, transform: &Transform) -> Vec<Vec<(f32, f32)>> {
         let relative = command.is_lowercase();
         match command.to_ascii_uppercase() {
             'M' => {
-                for pair in numbers.chunks_exact(2) {
+                for pair in numbers.as_chunks::<2>().0 {
                     let p = if relative {
                         (cursor.0 + pair[0], cursor.1 + pair[1])
                     } else {
@@ -654,7 +654,7 @@ fn subpaths(d: &str, transform: &Transform) -> Vec<Vec<(f32, f32)>> {
                 }
             }
             'L' => {
-                for pair in numbers.chunks_exact(2) {
+                for pair in numbers.as_chunks::<2>().0 {
                     let p = if relative {
                         (cursor.0 + pair[0], cursor.1 + pair[1])
                     } else {
@@ -677,7 +677,7 @@ fn subpaths(d: &str, transform: &Transform) -> Vec<Vec<(f32, f32)>> {
                 }
             }
             'C' => {
-                for six in numbers.chunks_exact(6) {
+                for six in numbers.as_chunks::<6>().0 {
                     let at = |i: usize| {
                         if relative {
                             (cursor.0 + six[i], cursor.1 + six[i + 1])
