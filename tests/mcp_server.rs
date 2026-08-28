@@ -598,3 +598,130 @@ fn memory_can_be_read_as_graphics() {
     assert!(text.contains(".#....#."), "the sides of the H:\n{text}");
     assert!(text.contains(".######."), "and its bar:\n{text}");
 }
+
+/// Keys can be pressed, which is how a game is driven to the part worth
+/// looking at — and how the input routine is found, by pressing something and
+/// seeing who reads port $FE.
+#[test]
+fn keys_can_be_pressed_and_the_machine_sees_them() {
+    let mut server = Server::new();
+    // A program that spins reading the keyboard, so what it last read is in
+    // memory to look at: IN A,($FE) with B=$FE... written out as a loop that
+    // stores what it read.
+    let program: &[(u16, u8)] = &[
+        (0x8000, 0x01),
+        (0x8001, 0xFE),
+        (0x8002, 0x7F), // LD BC,$7FFE — the half-row with SPACE in it
+        (0x8003, 0xED),
+        (0x8004, 0x78), // IN A,(C)
+        (0x8005, 0x32),
+        (0x8006, 0x00),
+        (0x8007, 0x90), // LD ($9000),A
+        (0x8008, 0xC3),
+        (0x8009, 0x00),
+        (0x800A, 0x80), // JP $8000
+    ];
+    for (at, byte) in program {
+        server.session.spec.bus.poke(*at, *byte);
+    }
+    server.session.spec.cpu.pc = 0x8000;
+
+    // Nothing pressed: every bit of the half-row reads high.
+    call(
+        &mut server,
+        "run_frames",
+        Json::obj([("frames", Json::num(1))]),
+    )
+    .unwrap();
+    assert_eq!(
+        server.session.spec.bus.peek_raw(0x9000) & 0x01,
+        0x01,
+        "with nothing held, SPACE reads high"
+    );
+
+    let text = call(
+        &mut server,
+        "press_keys",
+        Json::obj([
+            ("keys", Json::arr(vec![Json::str("SPACE")])),
+            ("frames", Json::num(4)),
+            ("then_frames", Json::num(0)),
+        ]),
+    )
+    .unwrap();
+    assert!(text.contains("SPACE"), "{text}");
+    // What is in $9000 is the last read before the key was let go, so it is
+    // the proof the machine saw it down.
+    assert_eq!(
+        server.session.spec.bus.peek_raw(0x9000) & 0x01,
+        0x00,
+        "the program read SPACE as down while it was held"
+    );
+
+    // And once it is let go and the machine runs on, high again.
+    call(
+        &mut server,
+        "run_frames",
+        Json::obj([("frames", Json::num(1))]),
+    )
+    .unwrap();
+    assert_eq!(
+        server.session.spec.bus.peek_raw(0x9000) & 0x01,
+        0x01,
+        "and high again afterwards"
+    );
+
+    // A key nobody has heard of is refused with the list.
+    let why = call(
+        &mut server,
+        "press_keys",
+        Json::obj([("keys", Json::arr(vec![Json::str("F1")]))]),
+    )
+    .unwrap_err();
+    assert!(why.contains("no key called"), "{why}");
+}
+
+/// A key held is a key the machine sees down while it is held.
+#[test]
+fn a_held_key_reads_as_down_while_it_is_held() {
+    let mut server = Server::new();
+    // Read the half-row with A in it ($FDFE, bit 0) every frame and remember
+    // whether it was ever low.
+    let program: &[(u16, u8)] = &[
+        (0x8000, 0x01),
+        (0x8001, 0xFE),
+        (0x8002, 0xFD), // LD BC,$FDFE
+        (0x8003, 0xED),
+        (0x8004, 0x78), // IN A,(C)
+        (0x8005, 0xE6),
+        (0x8006, 0x01), // AND 1
+        (0x8007, 0x20),
+        (0x8008, 0xF9), // JR NZ,$8002 — spin until A is pressed
+        (0x8009, 0x3E),
+        (0x800A, 0x99), // LD A,$99
+        (0x800B, 0x32),
+        (0x800C, 0x00),
+        (0x800D, 0x90), // LD ($9000),A
+        (0x800E, 0x76), // HALT
+    ];
+    for (at, byte) in program {
+        server.session.spec.bus.poke(*at, *byte);
+    }
+    server.session.spec.cpu.pc = 0x8000;
+
+    call(
+        &mut server,
+        "press_keys",
+        Json::obj([
+            ("keys", Json::str("A")),
+            ("frames", Json::num(3)),
+            ("then_frames", Json::num(1)),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(
+        server.session.spec.bus.peek_raw(0x9000),
+        0x99,
+        "the program should have seen A go down"
+    );
+}

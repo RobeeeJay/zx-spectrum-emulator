@@ -190,6 +190,59 @@ pub fn tools() -> Json {
                 ),
             ],
         ),
+        schema_tool(
+            "press_keys",
+            "Press keys, hold them, and let go. Several together is a chord: [\"CAPS SHIFT\", \
+             \"1\"]. The ROM scans the keyboard once a frame and wants a key on two scans \
+             running, so a key is held for ten frames by default. This is how a game is \
+             driven to the part worth looking at, and how to find the input routine: press \
+             something and see who reads port $FE.",
+            [
+                (
+                    "keys",
+                    Json::obj([
+                        (
+                            "type",
+                            Json::arr(vec![Json::str("array"), Json::str("string")]),
+                        ),
+                        (
+                            "items",
+                            prop(
+                                "string",
+                                "a key: A-Z, 0-9, ENTER, SPACE, CAPS SHIFT, SYMBOL SHIFT",
+                            ),
+                        ),
+                        ("description", Json::str("the keys to hold down together")),
+                    ]),
+                ),
+                (
+                    "frames",
+                    prop("integer", "how long to hold them (default 10)"),
+                ),
+                (
+                    "then_frames",
+                    prop("integer", "frames to run afterwards (default 10)"),
+                ),
+            ],
+            &["keys"],
+        ),
+        schema_tool(
+            "type_text",
+            "Type a line: letters, digits and spaces, with ENTER at the end. For anything \
+             behind a shift, use press_keys.",
+            [
+                ("text", prop("string", "what to type")),
+                (
+                    "enter",
+                    prop("boolean", "press ENTER at the end (default true)"),
+                ),
+                (
+                    "frames",
+                    prop("integer", "frames a key is held (default 6)"),
+                ),
+            ],
+            &["text"],
+        ),
         tool(
             "registers",
             "Every register, the flags spelled out, and where the machine is in the frame.",

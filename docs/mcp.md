@@ -47,6 +47,14 @@ set to, for one that cannot. `graphics` reads memory as characters and sprites,
 eight bytes each, which is how graphics are found: point it at a candidate
 address and see whether letters, a sprite or rubbish comes out.
 
+**Typing at it.** `press_keys`, `type_text`.
+
+The ROM scans the keyboard once a frame and wants a key on two scans running
+before it believes in it, so a key is held for ten frames by default. Several
+keys at once is a chord: `["CAPS SHIFT", "1"]`. This is how a game is driven to
+the level worth looking at, and how the input routine is found — press
+something and see who reads port $FE.
+
 **Reading it.** `registers`, `read_memory`, `write_memory`, `disassemble`,
 `load_symbols`, `symbols`, `identify`.
 
@@ -134,4 +142,3 @@ worth knowing before assuming they are missing from the emulator too:
 - the tape deck's own contents — blocks, loaders recognised by
   `flashload::CORES`, where a turbo block starts;
 - the ZX81, and the 128K's AY registers;
-- keyboard input, other than the `LOAD ""` that `load_tape` types.
