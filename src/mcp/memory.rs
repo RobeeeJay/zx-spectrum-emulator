@@ -27,10 +27,10 @@ pub fn read_memory(session: &mut Session, args: &Json) -> Result<String, String>
     Ok(out)
 }
 
-pub fn write_memory(session: &mut Session, args: &Json) -> Result<String, String> {
-    let start = addr(args, "address")?;
-    let bytes = match args.get("bytes") {
-        Some(Json::Str(text)) => parse_hex_bytes(text)?,
+/// Bytes given as hex in a string, or as a list of numbers.
+pub fn bytes_argument(args: &Json) -> Result<Vec<u8>, String> {
+    match args.get("bytes") {
+        Some(Json::Str(text)) => parse_hex_bytes(text),
         Some(Json::Arr(items)) => items
             .iter()
             .map(|i| {
@@ -39,9 +39,14 @@ pub fn write_memory(session: &mut Session, args: &Json) -> Result<String, String
                     .map(|v| v as u8)
                     .ok_or_else(|| format!("{i} is not a byte"))
             })
-            .collect::<Result<Vec<u8>, String>>()?,
-        _ => return Err("write_memory needs bytes: a list, or a string of hex".into()),
-    };
+            .collect::<Result<Vec<u8>, String>>(),
+        _ => Err("write_memory needs bytes: a list, or a string of hex".into()),
+    }
+}
+
+pub fn write_memory(session: &mut Session, args: &Json) -> Result<String, String> {
+    let start = addr(args, "address")?;
+    let bytes = bytes_argument(args)?;
     for (i, byte) in bytes.iter().enumerate() {
         session.spec.bus.poke(start.wrapping_add(i as u16), *byte);
     }

@@ -858,3 +858,68 @@ fn the_profiler_says_where_the_time_went() {
     assert!(text.contains("$9000"), "the routine doing the work: {text}");
     assert!(text.contains('%'), "with its share of the time: {text}");
 }
+
+/// A recording is somebody else's session: it plays back by fetch count, and
+/// it can be wound to a frame — forwards by playing on, backwards by starting
+/// again, since nothing can be un-executed.
+#[test]
+fn a_recording_can_be_played_and_sought() {
+    let dir = std::path::Path::new("recordings");
+    let Some(path) = std::fs::read_dir(dir).ok().and_then(|entries| {
+        let mut found: Vec<_> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "rzx"))
+            .collect();
+        found.sort();
+        found.into_iter().next()
+    }) else {
+        eprintln!("no recordings/*.rzx here; skipping");
+        return;
+    };
+    if std::fs::read("roms/48.rom").is_err() {
+        return;
+    }
+
+    let mut server = Server::new();
+    let loaded = call(
+        &mut server,
+        "load_recording",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    );
+    let Ok(loaded) = loaded else {
+        eprintln!("{}: {}", path.display(), loaded.unwrap_err());
+        return;
+    };
+    assert!(loaded.contains("frames"), "{loaded}");
+
+    let info = call(&mut server, "recording_info", Json::obj([])).unwrap();
+    assert!(info.contains("opcode fetches"), "{info}");
+    assert!(info.contains("At frame 0"), "{info}");
+
+    call(
+        &mut server,
+        "play_recording",
+        Json::obj([("frames", Json::num(20))]),
+    )
+    .unwrap();
+    assert_eq!(server.session.rzx.as_ref().unwrap().frame, 20);
+
+    // Back to five, which means starting again and playing forward.
+    let text = call(
+        &mut server,
+        "seek_recording",
+        Json::obj([("frame", Json::num(5))]),
+    )
+    .unwrap();
+    assert!(text.contains("Sought to frame 5"), "{text}");
+    assert_eq!(server.session.rzx.as_ref().unwrap().frame, 5);
+
+    // And forwards from there is just playing on.
+    call(
+        &mut server,
+        "seek_recording",
+        Json::obj([("frame", Json::num(12))]),
+    )
+    .unwrap();
+    assert_eq!(server.session.rzx.as_ref().unwrap().frame, 12);
+}

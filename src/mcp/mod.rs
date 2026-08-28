@@ -17,6 +17,7 @@ pub mod names;
 pub mod picture;
 pub mod sound;
 pub mod tools;
+pub mod zx81;
 
 pub use tools::Session;
 

@@ -155,11 +155,19 @@ the same bargain as `src/svg.rs`.
 
 ## What is not exposed
 
-The emulator can do these and the server does not offer them yet, which is
-worth knowing before assuming they are missing from the emulator too:
+Still in the emulator and not offered here:
 
-- Race the Beam (`race.rs`): replaying a frame instruction by instruction to
-  see the picture being built;
-- the timeline (`timeline.rs`): a turn of the loop drawn against the frames it
-  ran in;
-- the ZX81;
+- Race the Beam (`race.rs`) — replaying a frame instruction by instruction to
+  watch the picture being built, and the tints that say which side of the beam
+  a write landed on;
+- the timeline (`timeline.rs`) — a turn of the loop drawn against the frames it
+  ran in, which `frame_timing` answers a flatter version of;
+- the CRT and composite rendering (`crt.rs`), since what a model needs from the
+  screen is what is on it rather than what a television did to it;
+- the +3's disk, and the ZX81's tape deck;
+- the RZX playback's visited-address set.
+
+The ZX81 answers the tools that mean something on it — loading a `.p`,
+running, registers, memory, disassembly, the screen and the notes. The rest say
+what they are about and how to get back to a Spectrum, rather than reporting
+zeros: an empty answer reads like a finding.

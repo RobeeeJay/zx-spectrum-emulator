@@ -90,6 +90,10 @@ pub struct Session {
     pub memories: BTreeMap<String, Vec<u8>>,
     /// The recording being played, if there is one.
     pub rzx: Option<Playing>,
+    /// A ZX81, when that is the machine in use. A different machine rather
+    /// than a Spectrum with less in it: the CPU draws its screen, so most of
+    /// what the Spectrum tools measure has nothing to measure here.
+    pub zx81: Option<crate::zx81::Zx81>,
     /// Where the ROMs are looked for.
     pub rom_dirs: Vec<PathBuf>,
     /// Names for addresses that came from a file rather than from this
@@ -130,6 +134,7 @@ impl Session {
             states: BTreeMap::new(),
             memories: BTreeMap::new(),
             rzx: None,
+            zx81: None,
             history: Vec::new(),
             symbols: crate::autodoc::Symbols::default(),
             signatures: crate::autodoc::Signatures::empty(),
@@ -144,12 +149,52 @@ impl Session {
     pub fn call(&mut self, name: &str, args: &Json) -> Result<Reply, String> {
         // Tools that give back a picture are called out; everything else
         // returns text and is wrapped here.
+        if crate::mcp::zx81::in_use(self) {
+            return self.zx81_call(name, args);
+        }
         match name {
             "screen" => return crate::mcp::looking::screen(self, args),
             "graphics" => return crate::mcp::looking::graphics(self, args),
             _ => {}
         }
         self.text_call(name, args).map(Reply::Text)
+    }
+
+    /// What a ZX81 answers. The tools that are about a Spectrum's hardware say
+    /// so rather than reporting zeros, since an empty answer reads like a
+    /// finding.
+    fn zx81_call(&mut self, name: &str, args: &Json) -> Result<Reply, String> {
+        use crate::mcp::zx81;
+        match name {
+            "screen" => zx81::screen(self, args),
+            "graphics" => crate::mcp::looking::graphics(self, args),
+            "machine_info" => Ok(Reply::Text(format!("ZX81. {}", zx81::registers(self)))),
+            "set_machine" => self.set_machine(args).map(Reply::Text),
+            "reset" => {
+                if let Some(machine) = self.zx81.as_mut() {
+                    machine.reset();
+                }
+                Ok(Reply::Text("Reset.".into()))
+            }
+            "load_program" => zx81::load_program(self, args).map(Reply::Text),
+            "step" => zx81::step(self, args).map(Reply::Text),
+            "run_frames" => zx81::run_frames(self, args).map(Reply::Text),
+            "registers" => Ok(Reply::Text(zx81::registers(self))),
+            "read_memory" => zx81::read_memory(self, args).map(Reply::Text),
+            "write_memory" => zx81::write_memory(self, args).map(Reply::Text),
+            "disassemble" => zx81::disassemble(self, args).map(Reply::Text),
+            "set_comment" => crate::mcp::analysis::set_comment(self, args).map(Reply::Text),
+            "comments" => crate::mcp::analysis::comments(self, args).map(Reply::Text),
+            "save_comments" => crate::mcp::analysis::save_comments(self, args).map(Reply::Text),
+            "find_bytes" | "changed_since" | "run_until" | "run_tstates" | "watch_events"
+            | "watch_routines" | "routines" | "routine" | "call_graph" | "code_map" | "xrefs"
+            | "autodoc" | "blocks" | "profile" | "frame_timing" | "sound_state" | "paging"
+            | "memory_activity" | "tape_blocks" | "loader" | "save_state" | "restore_state"
+            | "step_forward" | "step_back" | "press_keys" | "type_text" | "load_symbols"
+            | "symbols" | "identify" | "export_listing" | "load_tape" | "load_snapshot"
+            | "load_recording" | "play_recording" => Err(zx81::not_here(name)),
+            other => Err(format!("no tool called {other:?}; try tools/list")),
+        }
     }
 
     fn text_call(&mut self, name: &str, args: &Json) -> Result<String, String> {
@@ -164,6 +209,8 @@ impl Session {
             "load_snapshot" => self.load_snapshot(args),
             "load_recording" => self.load_recording(args),
             "play_recording" => self.play_recording(args),
+            "recording_info" => self.recording_info(),
+            "seek_recording" => self.seek_recording(args),
             "tape_blocks" => crate::mcp::deck::tape_blocks(self, args),
             "loader" => crate::mcp::deck::loader(self, args),
             "step" => crate::mcp::control::step(self, args),
@@ -257,12 +304,27 @@ impl Session {
 
     fn set_machine(&mut self, args: &Json) -> Result<String, String> {
         let name = text(args, "model")?;
-        let model = match name.to_ascii_lowercase().replace([' ', '-'], "").as_str() {
+        let lowered = name.to_ascii_lowercase().replace([' ', '-'], "");
+        if lowered.starts_with("zx81") {
+            let ram = if lowered.contains("1k") {
+                crate::zx81::Ram::K1
+            } else {
+                crate::zx81::Ram::K16
+            };
+            return crate::mcp::zx81::start(self, ram);
+        }
+        // Asking for a Spectrum puts the ZX81 away.
+        self.zx81 = None;
+        let model = match lowered.as_str() {
             "48" | "48k" | "spectrum48" => Model::Spectrum48,
             "128" | "128k" | "spectrum128" => Model::Spectrum128,
             "+2a" | "plus2a" => Model::Plus2A,
             "+3" | "plus3" => Model::Plus3,
-            other => return Err(format!("no model {other:?}: try 48k, 128k, +2a, +3")),
+            other => {
+                return Err(format!(
+                    "no model {other:?}: try 48k, 128k, +2a, +3, zx81 or zx81-1k"
+                ))
+            }
         };
         let rom = self.rom_for(model)?;
         self.spec.set_model(model, &rom);
@@ -489,6 +551,65 @@ impl Session {
             ));
         }
         Ok(out)
+    }
+
+    fn recording_info(&mut self) -> Result<String, String> {
+        let rzx = self.rzx.as_ref().ok_or("no recording is loaded")?;
+        let short = self.spec.bus.playback.as_ref().map_or(0, |p| p.short);
+        let total: u64 = rzx.recording.frames.iter().map(|f| f.fetches as u64).sum();
+        Ok(format!(
+            "{}: {} frames, {total} opcode fetches in all. At frame {} ({:.0}%).\n\
+             A frame of a recording is a number of fetches rather than a number of \
+             T-states, and the interrupt comes at the recording's own boundary.{}",
+            if rzx.recording.creator.is_empty() {
+                "A recording".to_string()
+            } else {
+                format!("Recorded by {}", rzx.recording.creator)
+            },
+            rzx.recording.len(),
+            rzx.frame,
+            rzx.frame as f64 / rzx.recording.len().max(1) as f64 * 100.0,
+            if short > 0 {
+                format!(
+                    "\n{short} frames have asked for more input than the recording holds: \
+                     it has come adrift from the machine."
+                )
+            } else {
+                String::new()
+            }
+        ))
+    }
+
+    /// Go to a frame of the recording.
+    ///
+    /// Forwards is playing on. Backwards is starting again from the snapshot
+    /// the recording carries and playing forward, because nothing can be
+    /// un-executed — the same reason the beam cannot be run up the screen.
+    fn seek_recording(&mut self, args: &Json) -> Result<String, String> {
+        let want = count(args, "frame", 0)? as usize;
+        let at = self.rzx.as_ref().ok_or("no recording is loaded")?.frame;
+        if want < at {
+            // Back to the beginning, then forward. The snapshot is what the
+            // recording starts from, so this is exactly where it began.
+            let snap = self
+                .rzx
+                .as_ref()
+                .and_then(|r| r.recording.snapshot.clone())
+                .ok_or("the recording carries no snapshot to start from")?;
+            match snap.extension.as_str() {
+                "sna" => snapshot::load_sna(&mut self.spec, &snap.data)?,
+                "z80" => snapshot::load_z80(&mut self.spec, &snap.data)?,
+                other => return Err(format!("unsupported snapshot in the recording: .{other}")),
+            }
+            self.spec.bus.playback = Some(crate::machine::Playback::default());
+            if let Some(rzx) = self.rzx.as_mut() {
+                rzx.frame = 0;
+            }
+        }
+        let here = self.rzx.as_ref().expect("still loaded").frame;
+        let ahead = want.saturating_sub(here) as u32;
+        let played = self.play_recording(&Json::obj([("frames", Json::num(ahead))]))?;
+        Ok(format!("Sought to frame {want}. {played}"))
     }
 
     // ---- running -----------------------------------------------------------

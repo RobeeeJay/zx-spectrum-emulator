@@ -73,7 +73,15 @@ pub fn tools() -> Json {
             "set_machine",
             "Switch model and reset. The ROM must be findable: roms/ beside the emulator, \
              or the preferences directory.",
-            [("model", prop("string", "48k, 128k, +2a or +3"))],
+            [(
+                "model",
+                prop(
+                    "string",
+                    "48k, 128k, +2a, +3, zx81 or zx81-1k. A ZX81 is a different machine, not \
+                     a Spectrum with less in it: the CPU draws its screen, so the tools that \
+                     watch a ULA have nothing to report there.",
+                ),
+            )],
             &["model"],
         ),
         tool("reset", "Reset the machine, as the power switch would.", []),
@@ -90,6 +98,13 @@ pub fn tools() -> Json {
                     prop("boolean", "type LOAD \"\" and run it (default true)"),
                 ),
             ],
+            &["path"],
+        ),
+        schema_tool(
+            "load_program",
+            "Load a ZX81 .p or .81 file: that machine's own snapshot, which is its memory \
+             from $4009 up. Starts a ZX81 if one is not running.",
+            [("path", prop("string", "the .p or .81 file"))],
             &["path"],
         ),
         schema_tool(
@@ -113,6 +128,19 @@ pub fn tools() -> Json {
              fetches rather than a number of T-states, and the interrupt comes at the \
              recording's own frame boundary.",
             [("frames", prop("integer", "how many frames (default 1)"))],
+        ),
+        tool(
+            "recording_info",
+            "How long the loaded recording is, who made it, how far through it is, and \
+             whether it has come adrift — a frame that asks for more input than was \
+             recorded is a recording that no longer matches the machine.",
+            [],
+        ),
+        tool(
+            "seek_recording",
+            "Go to a frame of the recording. Forwards plays on; backwards starts again from \
+             the snapshot it carries and plays forward, because nothing can be un-executed.",
+            [("frame", prop("integer", "which frame to stop at"))],
         ),
         tool(
             "tape_blocks",
