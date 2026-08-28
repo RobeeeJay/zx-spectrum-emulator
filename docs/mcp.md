@@ -87,6 +87,12 @@ decoding opcodes. Nothing is counted until `watch_routines` switches it on, and
 the tools say so rather than answering with an empty table that reads like an
 answer. It costs a branch on every access, so switch it off when finished.
 
+**Searching it.** `find_bytes`, `changed_since`.
+
+The variable hunt: `save_state`, lose a life, `changed_since` — the counter is
+among the handful of addresses that come back. The display file is left out
+unless asked for, since it changes every frame and would bury the answer.
+
 **Keeping it.** `save_state`, `restore_state` — by name in the session, or as a
 `.sna` file. An experiment that goes wrong is undone by putting the machine
 back.
@@ -131,8 +137,6 @@ the same bargain as `src/svg.rs`.
 The emulator can do these and the server does not offer them yet, which is
 worth knowing before assuming they are missing from the emulator too:
 
-- searching memory for bytes, and comparing two snapshots to find what changed
-  (which is how a variable is found);
 - the RAM heat map (`tracker.rs`): what has been written and read, and when;
 - the profiler (`profiler.rs`): where the time goes;
 - Race the Beam (`race.rs`): replaying a frame instruction by instruction to

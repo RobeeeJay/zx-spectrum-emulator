@@ -6,7 +6,11 @@
 
 pub mod analysis;
 pub mod catalogue;
+pub mod input;
 pub mod json;
+pub mod looking;
+pub mod memory;
+pub mod names;
 pub mod picture;
 pub mod tools;
 

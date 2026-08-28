@@ -274,6 +274,53 @@ pub fn tools() -> Json {
             &["address", "bytes"],
         ),
         tool(
+            "find_bytes",
+            "Where a sequence of bytes appears in memory: a sprite you have the bytes of, a \
+             string the game prints, a value you are hunting for.",
+            [
+                (
+                    "bytes",
+                    prop("string", "hex bytes, \"3E 00 32\", or a list of numbers"),
+                ),
+                ("text", prop("string", "ASCII to look for instead")),
+                ("value", prop("integer", "a single byte to look for")),
+                ("from", address("where to start (default $4000)")),
+                ("to", address("where to stop (default $FFFF)")),
+                (
+                    "limit",
+                    prop("integer", "how many hits to list (default 40)"),
+                ),
+            ],
+        ),
+        tool(
+            "changed_since",
+            "What is different in memory from a state saved earlier. This is how a variable \
+             is found: save the machine, lose a life, ask what changed, and the counter is \
+             among the handful of addresses that come back. Narrow it with value. The \
+             display file is left out unless asked for, since it changes every frame and \
+             says nothing.",
+            [
+                (
+                    "name",
+                    prop(
+                        "string",
+                        "the saved state to compare with (default \"last\")",
+                    ),
+                ),
+                (
+                    "value",
+                    prop("integer", "only addresses that now hold this byte"),
+                ),
+                ("from", address("lowest address (default $4000)")),
+                ("to", address("highest address (default $FFFF)")),
+                (
+                    "include_screen",
+                    prop("boolean", "include $4000-$5AFF (default false)"),
+                ),
+                ("limit", prop("integer", "how many to list (default 60)")),
+            ],
+        ),
+        tool(
             "save_state",
             "Take a snapshot of the whole machine and keep it under a name, so an experiment \
              can be undone. With a path it is also written as a .sna file.",

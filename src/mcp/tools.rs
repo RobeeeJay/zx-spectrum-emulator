@@ -26,7 +26,7 @@ and autodoc read.";
 
 /// How much memory one read will hand back. Enough for a screen third; more
 /// than that in one reply is a wall of hex nobody reads.
-const MAX_READ: usize = 4096;
+pub const MAX_READ: usize = 4096;
 
 /// How long a run tool will let the machine go before saying so, in frames.
 /// Twenty seconds of emulated time: enough to load a level, short enough that
@@ -85,6 +85,9 @@ pub struct Session {
     pub notes: Notes,
     /// Snapshots taken by save_state, by the name they were given.
     pub states: BTreeMap<String, Vec<u8>>,
+    /// What was in memory when each of those was taken, as the CPU saw it, so
+    /// "what changed since" can be answered without unpacking a snapshot.
+    pub memories: BTreeMap<String, Vec<u8>>,
     /// The recording being played, if there is one.
     pub rzx: Option<Playing>,
     /// Where the ROMs are looked for.
@@ -122,6 +125,7 @@ impl Session {
             spec: Spectrum::new(),
             notes: Notes::unattached(),
             states: BTreeMap::new(),
+            memories: BTreeMap::new(),
             rzx: None,
             symbols: crate::autodoc::Symbols::default(),
             signatures: crate::autodoc::Signatures::empty(),
@@ -137,8 +141,8 @@ impl Session {
         // Tools that give back a picture are called out; everything else
         // returns text and is wrapped here.
         match name {
-            "screen" => return self.screen(args),
-            "graphics" => return self.graphics(args),
+            "screen" => return crate::mcp::looking::screen(self, args),
+            "graphics" => return crate::mcp::looking::graphics(self, args),
             _ => {}
         }
         self.text_call(name, args).map(Reply::Text)
@@ -161,11 +165,13 @@ impl Session {
             "run_tstates" => self.run_tstates(args),
             "run_until" => self.run_until(args),
             "watch_events" => self.watch_events(args),
-            "press_keys" => self.press_keys(args),
-            "type_text" => self.type_text(args),
+            "press_keys" => crate::mcp::input::press_keys(self, args),
+            "type_text" => crate::mcp::input::type_text(self, args),
             "registers" => Ok(self.registers()),
-            "read_memory" => self.read_memory(args),
-            "write_memory" => self.write_memory(args),
+            "read_memory" => crate::mcp::memory::read_memory(self, args),
+            "write_memory" => crate::mcp::memory::write_memory(self, args),
+            "find_bytes" => crate::mcp::memory::find_bytes(self, args),
+            "changed_since" => crate::mcp::memory::changed_since(self, args),
             "save_state" => self.save_state(args),
             "restore_state" => self.restore_state(args),
             "disassemble" => crate::mcp::analysis::disassemble(self, args),
@@ -175,9 +181,9 @@ impl Session {
             "call_graph" => crate::mcp::analysis::call_graph(self, args),
             "code_map" => crate::mcp::analysis::code_map(self, args),
             "xrefs" => crate::mcp::analysis::xrefs(self, args),
-            "load_symbols" => self.load_symbols(args),
-            "symbols" => self.list_symbols(args),
-            "identify" => self.identify(args),
+            "load_symbols" => crate::mcp::names::load_symbols(self, args),
+            "symbols" => crate::mcp::names::list_symbols(self, args),
+            "identify" => crate::mcp::names::identify(self, args),
             "autodoc" => crate::mcp::analysis::autodoc(self, args),
             "set_comment" => crate::mcp::analysis::set_comment(self, args),
             "comments" => crate::mcp::analysis::comments(self, args),
@@ -683,50 +689,6 @@ impl Session {
         )
     }
 
-    fn read_memory(&mut self, args: &Json) -> Result<String, String> {
-        let start = addr(args, "address")?;
-        let length = count(args, "length", 256)?.min(MAX_READ as u32) as usize;
-        let bank = args.get("bank").and_then(|b| b.as_i64());
-        let mut bytes = Vec::with_capacity(length);
-        for i in 0..length {
-            let at = start.wrapping_add(i as u16);
-            bytes.push(match bank {
-                Some(bank) => self.spec.bus.bank_byte(bank as usize, at),
-                None => self.spec.bus.peek_raw(at),
-            });
-        }
-        let mut out = match bank {
-            Some(bank) => format!("{length} bytes from ${start:04X} in bank {bank}\n"),
-            None => format!("{length} bytes from ${start:04X} as the CPU sees them\n"),
-        };
-        out.push_str(&hex_dump(start, &bytes));
-        Ok(out)
-    }
-
-    fn write_memory(&mut self, args: &Json) -> Result<String, String> {
-        let start = addr(args, "address")?;
-        let bytes = match args.get("bytes") {
-            Some(Json::Str(text)) => parse_hex_bytes(text)?,
-            Some(Json::Arr(items)) => items
-                .iter()
-                .map(|i| {
-                    i.as_i64()
-                        .filter(|v| (0..=255).contains(v))
-                        .map(|v| v as u8)
-                        .ok_or_else(|| format!("{i} is not a byte"))
-                })
-                .collect::<Result<Vec<u8>, String>>()?,
-            _ => return Err("write_memory needs bytes: a list, or a string of hex".into()),
-        };
-        for (i, byte) in bytes.iter().enumerate() {
-            self.spec.bus.poke(start.wrapping_add(i as u16), *byte);
-        }
-        Ok(format!(
-            "Wrote {} bytes at ${start:04X}. This changes the machine, not the file.",
-            bytes.len()
-        ))
-    }
-
     fn save_state(&mut self, args: &Json) -> Result<String, String> {
         let name = args
             .get("name")
@@ -743,7 +705,15 @@ impl Session {
             std::fs::write(path, &data).map_err(|e| format!("{path}: {e}"))?;
             out.push_str(&format!(", and written to {path}"));
         }
-        self.states.insert(name, data);
+        self.states.insert(name.clone(), data);
+        // And the memory as the CPU sees it, for changed_since. 48K of it,
+        // which is nothing beside what a snapshot costs.
+        self.memories.insert(
+            name,
+            (0x4000..=0xFFFFu32)
+                .map(|a| self.spec.bus.peek_raw(a as u16))
+                .collect(),
+        );
         Ok(out)
     }
 
@@ -782,318 +752,9 @@ impl Session {
             self.spec.cpu.pc, self.spec.cpu.sp
         ))
     }
-
-    // ---- typing at it ------------------------------------------------------
-
-    /// Hold keys down, run, and let go.
-    ///
-    /// The ROM scans the keyboard once a frame and wants a key on two scans
-    /// running before it believes in it, so a key held for one frame types
-    /// nothing. Ten frames is a fifth of a second, which is a person pressing
-    /// a key rather than a machine pretending to.
-    fn press_keys(&mut self, args: &Json) -> Result<String, String> {
-        let names: Vec<String> = match args.get("keys") {
-            Some(Json::Arr(items)) => items
-                .iter()
-                .map(|i| {
-                    i.as_str()
-                        .map(|s| s.to_string())
-                        .ok_or_else(|| format!("{i} is not a key name"))
-                })
-                .collect::<Result<_, _>>()?,
-            Some(Json::Str(one)) => vec![one.clone()],
-            _ => return Err("press_keys needs keys: a name, or a list of them".into()),
-        };
-        let hold = count(args, "frames", 10)?.clamp(1, 600);
-        let after = count(args, "then_frames", 10)?.min(600);
-
-        let mut pressed = Vec::new();
-        for name in &names {
-            pressed.push(key_named(name, self.spec.bus.model)?);
-        }
-        for (row, bit) in &pressed {
-            self.spec.bus.keys[*row] &= !(1 << bit);
-        }
-        for _ in 0..hold {
-            self.spec.run(FRAME_T);
-        }
-        for (row, bit) in &pressed {
-            self.spec.bus.keys[*row] |= 1 << bit;
-        }
-        for _ in 0..after {
-            self.spec.run(FRAME_T);
-        }
-        Ok(format!(
-            "Held {} for {hold} frames, then ran {after} more. {}",
-            names.join(" + "),
-            self.registers()
-        ))
-    }
-
-    /// Type a line the way somebody at the keyboard would: a letter at a
-    /// time, with ENTER at the end unless told otherwise.
-    ///
-    /// Only what can be typed without shifts: letters, digits, space and
-    /// ENTER. A Spectrum's punctuation is behind SYMBOL SHIFT and its keywords
-    /// behind a mode, and pretending otherwise would type something else.
-    fn type_text(&mut self, args: &Json) -> Result<String, String> {
-        let line = text(args, "text")?;
-        let hold = count(args, "frames", 6)?.clamp(1, 60);
-        for c in line.chars() {
-            let name = match c {
-                ' ' => "SPACE".to_string(),
-                c if c.is_ascii_alphanumeric() => c.to_ascii_uppercase().to_string(),
-                other => {
-                    return Err(format!(
-                        "{other:?} cannot be typed without a shift; press_keys takes \
-                         SYMBOL SHIFT and a key together"
-                    ))
-                }
-            };
-            let (row, bit) = key_named(&name, self.spec.bus.model)?;
-            self.spec.bus.keys[row] &= !(1 << bit);
-            for _ in 0..hold {
-                self.spec.run(FRAME_T);
-            }
-            self.spec.bus.keys[row] |= 1 << bit;
-            for _ in 0..hold {
-                self.spec.run(FRAME_T);
-            }
-        }
-        if flag(args, "enter", true) {
-            let (row, bit) = key_named("ENTER", self.spec.bus.model)?;
-            self.spec.bus.keys[row] &= !(1 << bit);
-            for _ in 0..hold {
-                self.spec.run(FRAME_T);
-            }
-            self.spec.bus.keys[row] |= 1 << bit;
-            for _ in 0..hold {
-                self.spec.run(FRAME_T);
-            }
-        }
-        Ok(format!("Typed {line:?}. {}", self.registers()))
-    }
-
-    // ---- names that came from somewhere else -------------------------------
-
-    /// The symbol files this machine would use, in the order they are read.
-    /// The paged machines have a file per ROM, since a name means nothing
-    /// without knowing which ROM is in.
-    fn symbol_files(&self) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        let Some(dir) = crate::prefs::config_dir() else {
-            return files;
-        };
-        let machine = match self.spec.bus.model {
-            Model::Spectrum48 => "48",
-            Model::Spectrum128 => "128",
-            Model::Plus2A => "plus2a",
-            Model::Plus3 => "plus3",
-        };
-        files.push(dir.join("symbols.txt"));
-        files.push(dir.join(format!("symbols-{machine}.txt")));
-        if self.spec.bus.rom_pages() > 1 {
-            let rom = self.spec.bus.rom_in_use();
-            files.push(dir.join(format!("symbols-{machine}-rom{rom}.txt")));
-        }
-        files
-    }
-
-    /// Read the symbol files, and build the signature table from the ROM in
-    /// the machine. `tools/rom-symbols.py` and `tools/skool-symbols.py` write
-    /// files of the right shape.
-    fn load_symbols(&mut self, args: &Json) -> Result<String, String> {
-        let mut text = String::new();
-        let mut read = Vec::new();
-        let paths: Vec<PathBuf> = match args.get("path").and_then(|p| p.as_str()) {
-            Some(one) => vec![PathBuf::from(one)],
-            None => self.symbol_files(),
-        };
-        for path in &paths {
-            match std::fs::read_to_string(path) {
-                Ok(content) => {
-                    text.push_str(&content);
-                    text.push('\n');
-                    read.push(path.display().to_string());
-                }
-                // A missing file is not a failure: most people have none, and
-                // the ones they have are the ones they made.
-                Err(_) => continue,
-            }
-        }
-        self.symbols = crate::autodoc::Symbols::from_text(&text);
-        self.signatures = crate::autodoc::Signatures::from_rom(&self.spec.bus.rom);
-        self.signatures.add_from_text(&text);
-        if read.is_empty() {
-            return Ok(format!(
-                "No symbol file found; looked at {}. {} routines are recognised by their \
-                 bytes from the ROM in the machine, which works wherever a copy of one \
-                 has been put. tools/rom-symbols.py and tools/skool-symbols.py write \
-                 symbol files.",
-                paths
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                self.signatures.len()
-            ));
-        }
-        Ok(format!(
-            "{} names from {}, and {} routines recognisable by their bytes. \
-             Names from a file are shown by disassemble and routines.",
-            self.symbols.len(),
-            read.join(", "),
-            self.signatures.len()
-        ))
-    }
-
-    fn list_symbols(&mut self, args: &Json) -> Result<String, String> {
-        if self.symbols.is_empty() {
-            return Err("no symbols are loaded: call load_symbols".into());
-        }
-        let from = match args.get("from") {
-            Some(_) => addr(args, "from")?,
-            None => 0,
-        };
-        let to = match args.get("to") {
-            Some(_) => addr(args, "to")?,
-            None => 0xFFFF,
-        };
-        let mut lines = Vec::new();
-        for at in from..=to {
-            if let Some((name, comment)) = self.symbols.get(at) {
-                lines.push(if comment.is_empty() {
-                    format!("${at:04X}  {name}")
-                } else {
-                    format!("${at:04X}  {name}  — {comment}")
-                });
-            }
-            if at == 0xFFFF {
-                break;
-            }
-        }
-        if lines.is_empty() {
-            return Ok(format!("no names between ${from:04X} and ${to:04X}"));
-        }
-        let shown = lines.len().min(200);
-        let mut out = lines[..shown].join("\n");
-        if lines.len() > shown {
-            out.push_str(&format!("\n({} more)", lines.len() - shown));
-        }
-        Ok(out)
-    }
-
-    /// What the code at an address is, if its first bytes are a routine that
-    /// is known. Games copy ROM routines into RAM; the same bytes hash the
-    /// same wherever they land, so a copy is named after the original.
-    fn identify(&mut self, args: &Json) -> Result<String, String> {
-        let at = addr(args, "address")?;
-        if self.signatures.is_empty() {
-            self.signatures = crate::autodoc::Signatures::from_rom(&self.spec.bus.rom);
-        }
-        let peek = |a: u16| self.spec.bus.peek_raw(a);
-        match self.signatures.identify(&peek, at) {
-            Some((name, comment)) => Ok(format!("${at:04X} is {name} — {comment}")),
-            None => Ok(format!(
-                "${at:04X} does not match any of the {} routines known by their bytes. \
-                 That is not evidence it is nothing; the table only holds what can be \
-                 checked against the ROM in the machine.",
-                self.signatures.len()
-            )),
-        }
-    }
-
-    // ---- looking at it ------------------------------------------------------
-
-    /// The screen. As a PNG for a model that can see one, and as a sketch of
-    /// character cells for one that cannot — with the attributes summarised,
-    /// since a Spectrum picture is half colour.
-    fn screen(&mut self, args: &Json) -> Result<Reply, String> {
-        let view = if flag(args, "border", false) {
-            crate::screen::View::OVERSCAN
-        } else {
-            crate::screen::View::CROPPED
-        };
-        // The flash phase is the machine's own: sixteen frames on, sixteen off.
-        let flash_on = (self.spec.bus.frame / 16) % 2 == 1;
-        let sketch = crate::mcp::picture::sketch(&self.spec.bus);
-        let colours = crate::mcp::picture::colours(&self.spec.bus);
-        let words = format!(
-            "The screen as it stands, frame {}.\n{colours}\n{sketch}",
-            self.spec.bus.frame
-        );
-        if let Some(path) = args.get("path").and_then(|p| p.as_str()) {
-            let png = crate::mcp::picture::png(&self.spec.bus, view, flash_on)?;
-            std::fs::write(path, &png).map_err(|e| format!("{path}: {e}"))?;
-            return Ok(Reply::Text(format!("{words}\nWritten to {path}")));
-        }
-        if flag(args, "image", true) {
-            let png = crate::mcp::picture::png(&self.spec.bus, view, flash_on)?;
-            return Ok(Reply::Picture { png, text: words });
-        }
-        Ok(Reply::Text(words))
-    }
-
-    /// Memory read as graphics: eight bytes to a character, as the Spectrum
-    /// stores its own. Point it at a candidate address and see whether
-    /// letters, sprites or rubbish come out.
-    fn graphics(&mut self, args: &Json) -> Result<Reply, String> {
-        let start = addr(args, "address")?;
-        let count = count(args, "count", 16)?.min(256) as u16;
-        let across = count_in(args, "across", 8, 1, 32)? as u16;
-        let text = crate::mcp::picture::tiles(|a| self.spec.bus.peek_raw(a), start, count, across);
-        let words = format!(
-            "{count} characters' worth from ${start:04X}, {across} across. \
-             Eight bytes a character, one bit a pixel, top row first.\n{text}"
-        );
-        if flag(args, "image", false) {
-            let (w, h) = ((across as usize) * 8, count.div_ceil(across) as usize * 8);
-            let mut rgba = vec![0u8; w * h * 4];
-            for (i, pixel) in rgba.chunks_mut(4).enumerate() {
-                let (x, y) = (i % w, i / w);
-                let (tile_x, tile_y) = (x / 8, y / 8);
-                let byte =
-                    self.spec.bus.peek_raw(start.wrapping_add(
-                        (tile_y * across as usize + tile_x) as u16 * 8 + (y % 8) as u16,
-                    ));
-                let lit = byte & (0x80 >> (x % 8)) != 0;
-                let value = if lit { 0xFF } else { 0x00 };
-                pixel.copy_from_slice(&[value, value, value, 0xFF]);
-            }
-            let png = crate::mcp::picture::encode(&rgba, w, h)?;
-            return Ok(Reply::Picture { png, text: words });
-        }
-        Ok(Reply::Text(words))
-    }
 }
 
 // ---- shared helpers --------------------------------------------------------
-
-/// Where a key is in the matrix, by the name written on it.
-///
-/// The keyboard is the same eight rows of five on every Spectrum and on the
-/// ZX81; what differs is the words printed on the keys, which is why this asks
-/// the layout rather than holding a table of its own.
-pub fn key_named(name: &str, _model: Model) -> Result<(usize, u8), String> {
-    let wanted = name.trim().to_ascii_uppercase();
-    let wanted = match wanted.as_str() {
-        // What people call them, against what is printed on them.
-        "CAPS" | "SHIFT" | "CAPSSHIFT" | "CAPS_SHIFT" => "CAPS SHIFT".to_string(),
-        "SYMBOL" | "SYM" | "SYMBOLSHIFT" | "SYMBOL_SHIFT" => "SYMBOL SHIFT".to_string(),
-        "RETURN" | "NEWLINE" | "CR" => "ENTER".to_string(),
-        other => other.to_string(),
-    };
-    crate::keyboard::SPECTRUM
-        .iter()
-        .find(|key| key.main.eq_ignore_ascii_case(&wanted))
-        .map(|key| key.press[0])
-        .ok_or_else(|| {
-            format!(
-                "no key called {name:?}. The forty are 0-9, A-Z, ENTER, SPACE, \
-                 CAPS SHIFT and SYMBOL SHIFT."
-            )
-        })
-}
 
 /// A required string argument.
 pub fn text(args: &Json, key: &str) -> Result<String, String> {
@@ -1167,16 +828,6 @@ pub fn addr_of(value: &Json) -> Result<u16, String> {
     }
 }
 
-fn parse_hex_bytes(text: &str) -> Result<Vec<u8>, String> {
-    text.split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let part = part.trim_start_matches('$').trim_start_matches("0x");
-            u8::from_str_radix(part, 16).map_err(|_| format!("{part:?} is not a hex byte"))
-        })
-        .collect()
-}
-
 /// The flags register, spelled out. SZ5H3PNC is the order the bits are in.
 pub fn flags(f: u8) -> String {
     let names = ['S', 'Z', '5', 'H', '3', 'P', 'N', 'C'];
@@ -1195,32 +846,4 @@ pub fn describe_stop(stop: Stop) -> String {
         Stop::Breakpoint(at) => format!("breakpoint at ${at:04X}"),
         Stop::Watched(event, at) => format!("{event:?} at ${at:04X}"),
     }
-}
-
-/// Sixteen bytes a line, with the printable ones beside them.
-pub fn hex_dump(start: u16, bytes: &[u8]) -> String {
-    let mut out = String::new();
-    for (row, chunk) in bytes.chunks(16).enumerate() {
-        let at = start.wrapping_add((row * 16) as u16);
-        out.push_str(&format!("${at:04X}  "));
-        for i in 0..16 {
-            match chunk.get(i) {
-                Some(b) => out.push_str(&format!("{b:02X} ")),
-                None => out.push_str("   "),
-            }
-        }
-        out.push(' ');
-        for b in chunk {
-            // The Spectrum's own character set is ASCII from 32 to 126; above
-            // that are its block graphics and its keywords, which are not
-            // letters and are not printed as any.
-            out.push(if (0x20..0x7F).contains(b) {
-                *b as char
-            } else {
-                '.'
-            });
-        }
-        out.push('\n');
-    }
-    out
 }

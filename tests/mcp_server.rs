@@ -725,3 +725,87 @@ fn a_held_key_reads_as_down_while_it_is_held() {
         "the program should have seen A go down"
     );
 }
+
+/// Finding bytes, which is how a sprite or a string is located when you have
+/// its bytes but not its address.
+#[test]
+fn memory_can_be_searched_for_bytes_and_text() {
+    let mut server = Server::new();
+    for (i, b) in b"SCORE".iter().enumerate() {
+        server.session.spec.bus.poke(0x9100 + i as u16, *b);
+    }
+    server.session.spec.bus.poke(0xA000, 0xDD);
+    server.session.spec.bus.poke(0xA001, 0x21);
+
+    let text = call(
+        &mut server,
+        "find_bytes",
+        Json::obj([("text", Json::str("SCORE"))]),
+    )
+    .unwrap();
+    assert!(text.contains("$9100"), "{text}");
+
+    let text = call(
+        &mut server,
+        "find_bytes",
+        Json::obj([("bytes", Json::str("DD 21"))]),
+    )
+    .unwrap();
+    assert!(text.contains("$A000"), "{text}");
+
+    let text = call(
+        &mut server,
+        "find_bytes",
+        Json::obj([("text", Json::str("NOWHERE"))]),
+    )
+    .unwrap();
+    assert!(text.contains("nothing"), "{text}");
+}
+
+/// The variable hunt: save the machine, let something happen, ask what
+/// changed. The display file is left out because it changes every frame and
+/// would bury the answer.
+#[test]
+fn what_changed_since_a_saved_state_is_how_a_variable_is_found() {
+    let mut server = Server::new();
+    server.session.spec.bus.poke(0x9000, 3); // lives
+    server.session.spec.bus.poke(0x9001, 0); // something else
+    call(
+        &mut server,
+        "save_state",
+        Json::obj([("name", Json::str("before"))]),
+    )
+    .unwrap();
+
+    server.session.spec.bus.poke(0x9000, 2); // a life lost
+    server.session.spec.bus.poke(0x4100, 0xFF); // and the screen redrawn
+
+    let text = call(
+        &mut server,
+        "changed_since",
+        Json::obj([("name", Json::str("before"))]),
+    )
+    .unwrap();
+    assert!(text.contains("$9000  $03 -> $02"), "{text}");
+    assert!(
+        !text.contains("$4100"),
+        "the display file should be left out: {text}"
+    );
+
+    // And it can be narrowed to what now holds a particular value.
+    let text = call(
+        &mut server,
+        "changed_since",
+        Json::obj([("name", Json::str("before")), ("value", Json::num(2))]),
+    )
+    .unwrap();
+    assert!(text.contains("$9000"), "{text}");
+
+    let text = call(
+        &mut server,
+        "changed_since",
+        Json::obj([("name", Json::str("before")), ("value", Json::num(99))]),
+    )
+    .unwrap();
+    assert!(text.contains("nothing"), "{text}");
+}
