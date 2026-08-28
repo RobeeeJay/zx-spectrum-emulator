@@ -29,6 +29,13 @@ handed over, so a four-minute tape loads in a second or two of real time; pass
 quicker still and starts in the middle of a game, which is usually where the
 interesting code is.
 
+**The map, before disassembling.** `memory_activity`, `tape_blocks`, `loader`.
+
+`memory_activity` is the access map: reads, writes and whether anything ran
+there, per 256-byte page, with a guess at what each page is for and whether a
+back buffer has been detected. `tape_blocks` decodes the headers — what loads
+where — which is the memory map before there is one.
+
 **Running it.** `step` (with `over` for stepping over a `CALL`), `run_frames`,
 `run_tstates`, `run_until`, `watch_events`.
 
@@ -137,12 +144,9 @@ the same bargain as `src/svg.rs`.
 The emulator can do these and the server does not offer them yet, which is
 worth knowing before assuming they are missing from the emulator too:
 
-- the RAM heat map (`tracker.rs`): what has been written and read, and when;
 - the profiler (`profiler.rs`): where the time goes;
 - Race the Beam (`race.rs`): replaying a frame instruction by instruction to
   see the picture being built;
 - the timeline (`timeline.rs`): a turn of the loop drawn against the frames it
   ran in;
-- the tape deck's own contents — blocks, loaders recognised by
-  `flashload::CORES`, where a turbo block starts;
 - the ZX81, and the 128K's AY registers;

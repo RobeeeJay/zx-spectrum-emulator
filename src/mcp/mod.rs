@@ -4,8 +4,10 @@
 //! stdin and stdout, one message a line; `Server::handle` takes a request and
 //! gives back the reply, which is what the tests drive.
 
+pub mod activity;
 pub mod analysis;
 pub mod catalogue;
+pub mod deck;
 pub mod input;
 pub mod json;
 pub mod looking;

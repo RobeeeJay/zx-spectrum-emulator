@@ -564,3 +564,91 @@ fn a_rom_routine_copied_into_ram_is_recognised() {
     .unwrap();
     assert!(text.contains("does not match"), "{text}");
 }
+
+/// The access map: which pages a program reads, which it writes, and which it
+/// runs — the shape of a program's memory before a byte of it is disassembled.
+#[test]
+fn the_access_map_says_what_each_page_is_for() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(30_000))]),
+    )
+    .unwrap();
+
+    let text = call(&mut server, "memory_activity", Json::obj([])).unwrap();
+    // The routine's own page was executed; the screen was written.
+    assert!(text.contains("$9000xx"), "the code's page: {text}");
+    assert!(
+        text.contains("code"),
+        "and it should be called code: {text}"
+    );
+    assert!(text.contains("$4000xx"), "the screen it wrote: {text}");
+    // And it says what it does not know rather than implying it found nothing.
+    assert!(
+        text.contains("No back buffer detected") || text.contains("Back buffer:"),
+        "{text}"
+    );
+}
+
+/// The tape's own block list, which is the memory map before there is one: a
+/// standard block's header says what it loads and where.
+#[test]
+fn the_tape_says_what_it_holds_and_where_it_loads() {
+    let tape = "tapes/Jetpac (1983)(Ultimate Play The Game)[16K].tzx";
+    if std::fs::read("roms/48.rom").is_err() || std::fs::read(tape).is_err() {
+        eprintln!("need roms/48.rom and {tape}; skipping");
+        return;
+    }
+    let mut server = Server::new();
+    // In the deck without starting it, so the block list is the tape as it
+    // was rather than as it ended.
+    call(
+        &mut server,
+        "load_tape",
+        Json::obj([("path", Json::str(tape)), ("autoload", Json::Bool(false))]),
+    )
+    .unwrap();
+
+    let text = call(&mut server, "tape_blocks", Json::obj([])).unwrap();
+    assert!(text.contains("blocks"), "{text}");
+    assert!(
+        text.contains("Program") || text.contains("Bytes"),
+        "a header should be decoded: {text}"
+    );
+    assert!(
+        text.contains("loading at $") || text.contains("autostart line"),
+        "and say where it loads: {text}"
+    );
+
+    // With no tape at all it says so rather than answering emptily.
+    let mut empty = Server::new();
+    let why = call(&mut empty, "tape_blocks", Json::obj([])).unwrap_err();
+    assert!(why.contains("no tape"), "{why}");
+}
+
+/// Which loader is reading the tape, told from the loop the CPU is in.
+#[test]
+fn the_loader_is_named_from_the_loop_it_is_counting_pulses_in() {
+    let mut server = Server::new();
+    // The ROM's own sampling loop, which is the one every standard block is
+    // read by: LD-EDGE-1 as it is written at $05ED.
+    let core: [u8; 12] = [
+        0x04, 0xC8, 0x3E, 0x7F, 0xDB, 0xFE, 0x1F, 0xA9, 0xE6, 0x20, 0x28, 0xF4,
+    ];
+    for (i, byte) in core.iter().enumerate() {
+        server.session.spec.bus.poke(0x9000 + i as u16, *byte);
+    }
+    server.session.spec.cpu.pc = 0x9000;
+    let text = call(&mut server, "loader", Json::obj([])).unwrap();
+    assert!(
+        text.contains("sampling loop"),
+        "it should recognise the ROM's own loop: {text}"
+    );
+
+    server.session.spec.cpu.pc = 0x8000;
+    let text = call(&mut server, "loader", Json::obj([])).unwrap();
+    assert!(text.contains("Not in a loader"), "{text}");
+}

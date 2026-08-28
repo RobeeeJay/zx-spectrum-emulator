@@ -115,6 +115,23 @@ pub fn tools() -> Json {
             [("frames", prop("integer", "how many frames (default 1)"))],
         ),
         tool(
+            "tape_blocks",
+            "What is on the tape: every block, with the header of a standard one decoded — \
+             what it loads and at what address. This is the memory map before there is one. \
+             A turbo block is the game's own loader at work.",
+            [(
+                "limit",
+                prop("integer", "how many blocks to list (default 60)"),
+            )],
+        ),
+        tool(
+            "loader",
+            "Which loader the machine is sitting in, read off the sampling loop it is \
+             counting pulses in — Speedlock, Bleepload, Alkatraz and the rest. Nine are \
+             recognised, taken off the tapes rather than from a list.",
+            [],
+        ),
+        tool(
             "step",
             "Step instructions, printing each one as it goes. With over: true a CALL or a \
              block instruction is run to completion rather than stepped into.",
@@ -272,6 +289,22 @@ pub fn tools() -> Json {
                 ),
             ],
             &["address", "bytes"],
+        ),
+        tool(
+            "memory_activity",
+            "Where the program keeps things: reads, writes and whether anything was executed, \
+             counted per 256-byte page, with a guess at what each page is for. Also whether a \
+             back buffer has been detected — a screen built somewhere other than the display \
+             file and blitted across. This is the map to read before disassembling anything.",
+            [
+                ("from", address("lowest address (default $4000)")),
+                ("to", address("highest address (default $FFFF)")),
+                (
+                    "include_quiet",
+                    prop("boolean", "list pages nothing has touched"),
+                ),
+                ("limit", prop("integer", "how many pages (default 40)")),
+            ],
         ),
         tool(
             "find_bytes",
