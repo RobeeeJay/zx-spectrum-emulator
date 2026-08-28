@@ -337,6 +337,22 @@ carry keys the rubber ones did not; what is drawn for them is the matrix they
 share with the 48K, which is honest about what the machine reads and not a
 picture of their case.
 
+**The MCP server is the emulator without a window.** `src/mcp/` and the `mcp`
+binary expose the machine over JSON-RPC so a language model can drive it:
+loading, running, breakpoints and event watches, registers, memory,
+disassembly, the observer's measurements, snapshots and the notes. Everything a
+tool returns is text, because the thing reading it is a model. There is no JSON
+crate in the lock file, so `src/mcp/json.rs` implements what JSON-RPC uses and
+no more, the same bargain as `src/svg.rs`. What is deliberately not exposed —
+and why it would be worth exposing — is at the end of
+[`docs/mcp.md`](docs/mcp.md).
+
+**A machine with no ROM in it looks like a game that crashed.** `SpectrumBus`
+fills its ROM space with `$FF`, which is `RST $38` over and over: the machine
+runs, draws rubbish and sits at `$0038`. Anything that loads something has to
+know whether a real ROM has been put in rather than testing the bytes for
+emptiness.
+
 **Anything else known goes in a file, not in the source.** `tools/rom-symbols.py`
 turns a disassembly from
 <https://github.com/ZXSpectrumVault/rom-disassemblies> into a symbol file in

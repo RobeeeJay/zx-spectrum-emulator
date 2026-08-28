@@ -673,6 +673,16 @@ matches the tape byte for byte, and it types `LOAD ""` on the emulated keyboard
 and loads a whole game from a real TZX. Tests that need `roms/48.rom` or
 `tapes/` skip themselves when those are absent.
 
+## Driving it from a program
+
+`cargo run --release --bin mcp` runs the emulator as an
+[MCP](https://modelcontextprotocol.io) server over stdin and stdout: load a
+tape, snapshot or recording, run the machine under control, read its registers
+and memory, disassemble, watch which routine does what, and write labels and
+comments against addresses. It is the emulator without a window, meant for a
+language model taking a game apart. [`docs/mcp.md`](docs/mcp.md) lists the
+tools and what each is for.
+
 ## Building a release
 
 `packaging/macos-app.sh` builds `ZX Spectrum.app` and a `.dmg` around it,

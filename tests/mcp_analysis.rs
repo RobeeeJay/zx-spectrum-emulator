@@ -1,0 +1,408 @@
+//! Reading a program through the MCP server: the disassembly, what the machine
+//! was watched doing, and the notes written about it.
+
+use zx_rustrum::mcp::json::{parse, Json};
+use zx_rustrum::mcp::Server;
+
+fn call(server: &mut Server, tool: &str, args: Json) -> Result<String, String> {
+    let line = Json::obj([
+        ("jsonrpc", Json::str("2.0")),
+        ("id", Json::num(1)),
+        ("method", Json::str("tools/call")),
+        (
+            "params",
+            Json::obj([("name", Json::str(tool)), ("arguments", args)]),
+        ),
+    ])
+    .to_string();
+    let reply = parse(&server.handle(&line).unwrap()).unwrap();
+    let result = reply.get("result").unwrap().clone();
+    let text = result
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|i| i.first())
+        .and_then(|i| i.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    match result.get("isError").and_then(|e| e.as_bool()) {
+        Some(true) => Err(text),
+        _ => Ok(text),
+    }
+}
+
+/// A small program that calls a routine which fills part of the screen, so
+/// there is something for the observer to have an opinion about.
+///
+/// The outer loop is a routine of its own rather than a bare loop, because an
+/// edge in the call graph is a call made from inside something: the observer
+/// works the stack out from what the CPU did, and code that was never called
+/// has no frame for a call to come from.
+fn drawing_program(server: &mut Server) {
+    let program: &[(u16, u8)] = &[
+        // $7FF0: CALL $8000 : JP $7FF0 — the stub that keeps it going.
+        (0x7FF0, 0xCD),
+        (0x7FF1, 0x00),
+        (0x7FF2, 0x80),
+        (0x7FF3, 0xC3),
+        (0x7FF4, 0xF0),
+        (0x7FF5, 0x7F),
+        // $8000: CALL $9000 : RET — the main loop.
+        (0x8000, 0xCD),
+        (0x8001, 0x00),
+        (0x8002, 0x90),
+        (0x8003, 0xC9),
+        // $9000: LD HL,$4000 : LD B,32 : LD (HL),$FF : INC HL : DJNZ : RET
+        (0x9000, 0x21),
+        (0x9001, 0x00),
+        (0x9002, 0x40),
+        (0x9003, 0x06),
+        (0x9004, 0x20),
+        (0x9005, 0x36),
+        (0x9006, 0xFF),
+        (0x9007, 0x23),
+        (0x9008, 0x10),
+        (0x9009, 0xFB),
+        (0x900A, 0xC9),
+    ];
+    for (at, byte) in program {
+        server.session.spec.bus.poke(*at, *byte);
+    }
+    server.session.spec.cpu.pc = 0x7FF0;
+    server.session.spec.cpu.sp = 0xFF00;
+}
+
+/// The disassembly reads as the debugger's does, and carries whatever has been
+/// written against the addresses.
+#[test]
+fn the_disassembly_carries_the_notes_written_against_it() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$9000")),
+            ("label", Json::str("fill_top_line")),
+            (
+                "comment",
+                Json::str("32 bytes of $FF into the display file"),
+            ),
+        ]),
+    )
+    .unwrap();
+
+    let text = call(
+        &mut server,
+        "disassemble",
+        Json::obj([("address", Json::str("$9000")), ("count", Json::num(4))]),
+    )
+    .unwrap();
+    assert!(text.contains("fill_top_line:"), "{text}");
+    assert!(text.contains("LD HL,$4000"), "{text}");
+    assert!(text.contains("21 00 40"), "the bytes are there too: {text}");
+    assert!(text.contains("32 bytes of $FF"), "and the comment: {text}");
+    assert!(text.contains("(next address $9008)"), "{text}");
+}
+
+/// Without the observer there is nothing to report, and the tools say so
+/// rather than answering with an empty table that reads like an answer.
+#[test]
+fn the_analysis_tools_say_when_nothing_has_been_watched() {
+    let mut server = Server::new();
+    for tool in ["routines", "call_graph", "code_map"] {
+        let answer = call(&mut server, tool, Json::obj([]));
+        let why = answer.expect_err(&format!("{tool} should refuse"));
+        assert!(
+            why.contains("watch_routines"),
+            "{tool} should say what to do first: {why}"
+        );
+    }
+}
+
+/// What the observer is for: which routine did the drawing, how often it was
+/// called, and how much it wrote.
+#[test]
+fn a_watched_routine_is_reported_with_what_it_wrote() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    assert!(server.session.spec.bus.observer.enabled);
+
+    // Long enough for the loop to come round a few times.
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(20_000))]),
+    )
+    .unwrap();
+
+    let listing = call(&mut server, "routines", Json::obj([])).unwrap();
+    assert!(
+        listing.contains("$9000"),
+        "the routine is listed: {listing}"
+    );
+
+    let detail = call(
+        &mut server,
+        "routine",
+        Json::obj([("address", Json::str("$9000"))]),
+    )
+    .unwrap();
+    assert!(detail.contains("called"), "{detail}");
+    assert!(
+        detail.contains("display file"),
+        "it should say what it wrote to: {detail}"
+    );
+    assert!(
+        detail.contains("loops") || detail.contains("reaches"),
+        "and what it looks like: {detail}"
+    );
+
+    let graph = call(&mut server, "call_graph", Json::obj([])).unwrap();
+    assert!(
+        graph.contains("$9000"),
+        "the call from $8000 should be in the graph: {graph}"
+    );
+
+    // What ran is code; the screen it wrote to is not, and was never read.
+    let map = call(&mut server, "code_map", Json::obj([])).unwrap();
+    assert!(map.contains("code:"), "{map}");
+    assert!(map.contains("$9000"), "{map}");
+}
+
+/// Turning the observer off leaves what it saw, unless asked to forget it.
+#[test]
+fn the_observer_can_be_switched_off_without_losing_what_it_saw() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(20_000))]),
+    )
+    .unwrap();
+    let seen = server.session.spec.bus.observer.routines.len();
+    assert!(seen > 0, "something should have been seen");
+
+    call(
+        &mut server,
+        "watch_routines",
+        Json::obj([("enabled", Json::Bool(false))]),
+    )
+    .unwrap();
+    assert!(!server.session.spec.bus.observer.enabled);
+    assert_eq!(
+        server.session.spec.bus.observer.routines.len(),
+        seen,
+        "what was seen is kept"
+    );
+
+    call(
+        &mut server,
+        "watch_routines",
+        Json::obj([("enabled", Json::Bool(false)), ("clear", Json::Bool(true))]),
+    )
+    .unwrap();
+    assert_eq!(
+        server.session.spec.bus.observer.routines.len(),
+        0,
+        "and forgotten when asked"
+    );
+}
+
+/// Comments and labels are the point of the exercise: they go in, they come
+/// back, and what a person typed is marked apart from what was guessed.
+#[test]
+fn comments_go_in_and_come_back_with_the_guesses_marked() {
+    let mut server = Server::new();
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("label", Json::str("main_loop")),
+            (
+                "comment",
+                Json::str("calls the drawing routine every frame"),
+            ),
+        ]),
+    )
+    .unwrap();
+    // A guess, as AutoDoc would write one.
+    server
+        .session
+        .notes
+        .suggest(0x9000, "maybe_draw", "possibly a drawing routine");
+
+    let all = call(&mut server, "comments", Json::obj([])).unwrap();
+    assert!(all.contains("$8000  main_loop"), "{all}");
+    assert!(all.contains("calls the drawing routine"), "{all}");
+    assert!(
+        all.contains("maybe_draw (a guess)"),
+        "a guess is marked as one: {all}"
+    );
+
+    // And a range asks for a range.
+    let narrow = call(
+        &mut server,
+        "comments",
+        Json::obj([("from", Json::str("$8100")), ("to", Json::str("$FFFF"))]),
+    )
+    .unwrap();
+    assert!(!narrow.contains("main_loop"), "{narrow}");
+    assert!(narrow.contains("maybe_draw"), "{narrow}");
+}
+
+/// Typing over a guess makes it yours, which is the rule everywhere else in
+/// this emulator and has to hold here too.
+#[test]
+fn writing_over_a_guess_makes_it_a_persons_note() {
+    let mut server = Server::new();
+    server
+        .session
+        .notes
+        .suggest(0x9000, "maybe_draw", "possibly a drawing routine");
+    assert!(server.session.notes.label_is_auto(0x9000));
+
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$9000")),
+            ("label", Json::str("draw_row")),
+        ]),
+    )
+    .unwrap();
+    assert!(!server.session.notes.label_is_auto(0x9000));
+    assert_eq!(server.session.notes.label(0x9000), "draw_row");
+
+    let text = call(&mut server, "comments", Json::obj([])).unwrap();
+    assert!(text.contains("draw_row"), "{text}");
+    assert!(!text.contains("draw_row (a guess)"), "{text}");
+}
+
+/// Notes with nowhere to go say so instead of being lost quietly.
+#[test]
+fn saving_notes_with_no_file_says_where_they_would_have_gone() {
+    let mut server = Server::new();
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([("address", Json::num(0x8000)), ("label", Json::str("x"))]),
+    )
+    .unwrap();
+    let why = call(&mut server, "save_comments", Json::obj([])).unwrap_err();
+    assert!(why.contains("not attached to a file"), "{why}");
+}
+
+/// AutoDoc guesses, and is made to say that it is guessing.
+#[test]
+fn autodoc_offers_guesses_and_calls_them_guesses() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    let text = call(
+        &mut server,
+        "autodoc",
+        Json::obj([("entries", Json::arr(vec![Json::str("$9000")]))]),
+    )
+    .unwrap();
+    assert!(
+        text.to_lowercase().contains("guess"),
+        "it should not be read as fact: {text}"
+    );
+}
+
+/// The whole thing against a real game: load the tape, watch, run, and see
+/// what the machine was doing. Skips itself where the ROM or the tapes are
+/// not on the machine, as the rest of the suite does.
+#[test]
+fn a_real_game_can_be_loaded_watched_and_read() {
+    let tape = "tapes/Jetpac (1983)(Ultimate Play The Game)[16K].tzx";
+    if std::fs::read("roms/48.rom").is_err() || std::fs::read(tape).is_err() {
+        eprintln!("need roms/48.rom and {tape}; skipping");
+        return;
+    }
+    let mut server = Server::new();
+    let loaded = call(
+        &mut server,
+        "load_tape",
+        Json::obj([("path", Json::str(tape))]),
+    )
+    .expect("the tape should load");
+    assert!(loaded.contains("blocks"), "{loaded}");
+
+    // A game that has loaded is out of the ROM's loader and drawing something.
+    let drawn = (0x4000..0x5800u16)
+        .filter(|a| server.session.spec.bus.peek_raw(*a) != 0)
+        .count();
+    assert!(drawn > 500, "there should be a picture: {drawn} bytes");
+
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_frames",
+        Json::obj([("frames", Json::num(50))]),
+    )
+    .unwrap();
+
+    let routines = call(&mut server, "routines", Json::obj([])).unwrap();
+    assert!(
+        server.session.spec.bus.observer.routines.len() > 3,
+        "a running game calls things: {routines}"
+    );
+    assert!(routines.contains("writes"), "{routines}");
+
+    // Whatever the busiest routine is, it can be read as code and asked about.
+    let busiest = server
+        .session
+        .spec
+        .bus
+        .observer
+        .routines
+        .values()
+        .max_by_key(|r| r.instructions)
+        .map(|r| r.entry)
+        .unwrap();
+    let detail = call(
+        &mut server,
+        "routine",
+        Json::obj([("address", Json::num(busiest as f64))]),
+    )
+    .unwrap();
+    assert!(detail.contains(&format!("${busiest:04X}")), "{detail}");
+    let listing = call(
+        &mut server,
+        "disassemble",
+        Json::obj([
+            ("address", Json::num(busiest as f64)),
+            ("count", Json::num(8)),
+        ]),
+    )
+    .unwrap();
+    assert!(listing.contains(&format!("${busiest:04X}")), "{listing}");
+
+    // The machine can be put down and picked up again exactly.
+    call(
+        &mut server,
+        "save_state",
+        Json::obj([("name", Json::str("mid-game"))]),
+    )
+    .unwrap();
+    let pc = server.session.spec.cpu.pc;
+    call(
+        &mut server,
+        "run_frames",
+        Json::obj([("frames", Json::num(10))]),
+    )
+    .unwrap();
+    call(
+        &mut server,
+        "restore_state",
+        Json::obj([("name", Json::str("mid-game"))]),
+    )
+    .unwrap();
+    assert_eq!(server.session.spec.cpu.pc, pc, "back where it was");
+}

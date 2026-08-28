@@ -1,0 +1,509 @@
+//! The MCP server: the handshake, the tool list, and the tools themselves.
+//!
+//! The tools are driven through `Server::handle`, which is the same path a
+//! client takes, so what these tests exercise is the thing that ships rather
+//! than the functions underneath it.
+
+use zx_rustrum::mcp::json::{parse, Json};
+use zx_rustrum::mcp::{Server, PROTOCOL};
+
+fn request(id: i64, method: &str, params: Json) -> String {
+    Json::obj([
+        ("jsonrpc", Json::str("2.0")),
+        ("id", Json::num(id as f64)),
+        ("method", Json::str(method)),
+        ("params", params),
+    ])
+    .to_string()
+}
+
+fn call(server: &mut Server, tool: &str, args: Json) -> Result<String, String> {
+    let line = request(
+        1,
+        "tools/call",
+        Json::obj([("name", Json::str(tool)), ("arguments", args)]),
+    );
+    let reply = parse(&server.handle(&line).expect("a call is answered")).unwrap();
+    let result = reply.get("result").expect("a result").clone();
+    let text = result
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    match result.get("isError").and_then(|e| e.as_bool()) {
+        Some(true) => Err(text),
+        _ => Ok(text),
+    }
+}
+
+/// A machine with the real ROM in it, or nothing when the ROM is not here —
+/// the same bargain the rest of the suite makes with roms/ and tapes/.
+fn with_rom() -> Option<Server> {
+    let rom = std::fs::read("roms/48.rom").ok()?;
+    let mut server = Server::new();
+    server.session.spec.load_rom(&rom);
+    server.session.spec.reset();
+    Some(server)
+}
+
+/// The handshake: a client says hello and is told what it is talking to.
+#[test]
+fn the_handshake_says_what_this_is() {
+    let mut server = Server::new();
+    let reply = parse(
+        &server
+            .handle(&request(1, "initialize", Json::obj([])))
+            .expect("initialize is answered"),
+    )
+    .unwrap();
+    let result = reply.get("result").expect("a result");
+    assert_eq!(
+        result.get("protocolVersion").and_then(|v| v.as_str()),
+        Some(PROTOCOL)
+    );
+    assert!(
+        result
+            .get("capabilities")
+            .and_then(|c| c.get("tools"))
+            .is_some(),
+        "it offers tools"
+    );
+    assert_eq!(
+        result
+            .get("serverInfo")
+            .and_then(|s| s.get("name"))
+            .and_then(|n| n.as_str()),
+        Some("zx-rustrum")
+    );
+    // The instructions are what a model reads before it starts guessing.
+    let instructions = result
+        .get("instructions")
+        .and_then(|i| i.as_str())
+        .unwrap_or("");
+    assert!(instructions.contains("watch_routines"), "{instructions}");
+}
+
+/// A notification is answered with silence, which is what JSON-RPC asks for.
+#[test]
+fn a_notification_gets_no_reply() {
+    let mut server = Server::new();
+    let line = Json::obj([
+        ("jsonrpc", Json::str("2.0")),
+        ("method", Json::str("notifications/initialized")),
+    ])
+    .to_string();
+    assert!(server.handle(&line).is_none());
+}
+
+/// Every tool in the list can be called by the name the list gives, and every
+/// one carries a schema. A tool that is advertised and then not there is worse
+/// than one that was never offered.
+#[test]
+fn every_advertised_tool_exists_and_has_a_schema() {
+    let mut server = Server::new();
+    let reply = parse(
+        &server
+            .handle(&request(1, "tools/list", Json::Null))
+            .unwrap(),
+    )
+    .unwrap();
+    let tools = reply
+        .get("result")
+        .and_then(|r| r.get("tools"))
+        .and_then(|t| t.as_array())
+        .expect("a list of tools")
+        .to_vec();
+    assert!(tools.len() >= 25, "there are {} tools", tools.len());
+
+    for tool in &tools {
+        let name = tool.get("name").and_then(|n| n.as_str()).expect("a name");
+        let description = tool
+            .get("description")
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+        assert!(
+            description.len() > 30,
+            "{name} should say what it is for: {description:?}"
+        );
+        let schema = tool.get("inputSchema").expect("a schema");
+        assert_eq!(schema.get("type").and_then(|t| t.as_str()), Some("object"));
+        assert!(schema.get("properties").is_some(), "{name} has properties");
+
+        // Called with nothing at all, a tool either works or explains itself.
+        // What it must not do is disappear.
+        let answer = call(&mut server, name, Json::obj([]));
+        let text = match answer {
+            Ok(text) | Err(text) => text,
+        };
+        assert!(
+            !text.contains("no tool called"),
+            "{name} is advertised but not implemented"
+        );
+    }
+}
+
+/// An unknown method is a protocol error; an unknown tool is not — the model
+/// is told, and can try another one.
+#[test]
+fn unknown_methods_and_unknown_tools_are_told_apart() {
+    let mut server = Server::new();
+    let reply = parse(&server.handle(&request(1, "nonsense", Json::Null)).unwrap()).unwrap();
+    assert_eq!(
+        reply
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64()),
+        Some(-32601)
+    );
+
+    let answer = call(&mut server, "not_a_tool", Json::obj([]));
+    assert!(answer.is_err(), "an unknown tool is an error result");
+    assert!(answer.unwrap_err().contains("no tool called"));
+
+    // Rubbish on the wire is a parse error with the id JSON-RPC asks for.
+    let reply = parse(&server.handle("{oops").unwrap()).unwrap();
+    assert_eq!(
+        reply
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64()),
+        Some(-32700)
+    );
+}
+
+/// Registers come back as the debugger writes them, flags and all.
+#[test]
+fn the_registers_are_reported_with_the_flags_spelled_out() {
+    let mut server = Server::new();
+    server.session.spec.cpu.pc = 0x8000;
+    server.session.spec.cpu.sp = 0xFF00;
+    server.session.spec.cpu.a = 0x3C;
+    server.session.spec.cpu.f = 0b0100_0001; // Z and C
+    let text = call(&mut server, "registers", Json::obj([])).unwrap();
+    assert!(text.contains("PC=$8000"), "{text}");
+    assert!(text.contains("SP=$FF00"), "{text}");
+    assert!(text.contains("AF=$3C41"), "{text}");
+    assert!(text.contains(".Z.....C"), "the flags, spelled out: {text}");
+}
+
+/// Memory comes back as hex with the printable bytes beside it, and an address
+/// may be written as a number or as $8000 either way round.
+#[test]
+fn memory_is_read_as_hex_and_addresses_may_be_written_either_way() {
+    let mut server = Server::new();
+    for (i, b) in b"HELLO".iter().enumerate() {
+        server.session.spec.bus.poke(0x8000 + i as u16, *b);
+    }
+    let by_string = call(
+        &mut server,
+        "read_memory",
+        Json::obj([("address", Json::str("$8000")), ("length", Json::num(16))]),
+    )
+    .unwrap();
+    assert!(by_string.contains("48 45 4C 4C 4F"), "{by_string}");
+    assert!(by_string.contains("HELLO"), "{by_string}");
+
+    let by_number = call(
+        &mut server,
+        "read_memory",
+        Json::obj([("address", Json::num(32768)), ("length", Json::num(16))]),
+    )
+    .unwrap();
+    assert_eq!(
+        by_number, by_string,
+        "32768 and \"$8000\" are the same address"
+    );
+
+    // A bare string of digits is decimal, deliberately: reading it as hex is
+    // how a disassembly converter once found nothing at all.
+    let decimal = call(
+        &mut server,
+        "read_memory",
+        Json::obj([("address", Json::str("32768")), ("length", Json::num(16))]),
+    )
+    .unwrap();
+    assert_eq!(decimal, by_string);
+}
+
+/// Writing memory changes what the machine sees, and says that it has.
+#[test]
+fn memory_can_be_written_to_test_a_theory() {
+    let mut server = Server::new();
+    call(
+        &mut server,
+        "write_memory",
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("bytes", Json::str("3E 05 32 00 60")),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(server.session.spec.bus.peek_raw(0x8000), 0x3E);
+    assert_eq!(server.session.spec.bus.peek_raw(0x8004), 0x60);
+
+    call(
+        &mut server,
+        "write_memory",
+        Json::obj([
+            ("address", Json::num(0x9000)),
+            (
+                "bytes",
+                Json::arr(vec![Json::num(1), Json::num(2), Json::num(255)]),
+            ),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(server.session.spec.bus.peek_raw(0x9002), 255);
+}
+
+/// Stepping runs one instruction and shows what it was.
+#[test]
+fn stepping_runs_one_instruction_and_says_which() {
+    let mut server = Server::new();
+    // LD A,$05 / INC A
+    for (at, byte) in [(0x8000u16, 0x3Eu8), (0x8001, 0x05), (0x8002, 0x3C)] {
+        server.session.spec.bus.poke(at, byte);
+    }
+    server.session.spec.cpu.pc = 0x8000;
+
+    let text = call(&mut server, "step", Json::obj([])).unwrap();
+    assert!(text.contains("$8000  LD A,$05"), "{text}");
+    assert_eq!(server.session.spec.cpu.pc, 0x8002);
+    assert_eq!(server.session.spec.cpu.a, 5);
+
+    let text = call(&mut server, "step", Json::obj([("count", Json::num(1))])).unwrap();
+    assert!(text.contains("INC A"), "{text}");
+    assert_eq!(server.session.spec.cpu.a, 6);
+}
+
+/// A frame is a frame of the machine's own time, and the ULA is what says how
+/// long that is.
+#[test]
+fn running_a_frame_advances_the_machine_by_one_frame() {
+    let Some(mut server) = with_rom() else {
+        eprintln!("need roms/48.rom; skipping");
+        return;
+    };
+    let before = server.session.spec.bus.frame;
+    let text = call(
+        &mut server,
+        "run_frames",
+        Json::obj([("frames", Json::num(2))]),
+    )
+    .unwrap();
+    assert_eq!(server.session.spec.bus.frame - before, 2, "{text}");
+    assert!(text.contains("Ran 2 frames"), "{text}");
+
+    let before = server.session.spec.bus.total_t();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(10_000))]),
+    )
+    .unwrap();
+    let ran = server.session.spec.bus.total_t() - before;
+    assert!(
+        (10_000..10_040).contains(&ran),
+        "a T-state budget is spent to the instruction that overruns it: {ran}"
+    );
+}
+
+/// run_until is the breakpoint: it stops where it was told and leaves the
+/// machine there.
+#[test]
+fn run_until_stops_at_the_address_it_was_given() {
+    let mut server = Server::new();
+    // A loop that falls through to $8010 after five turns.
+    let program: [(u16, u8); 8] = [
+        (0x8000, 0x06),
+        (0x8001, 0x05), // LD B,5
+        (0x8002, 0x05), // DEC B
+        (0x8003, 0xC2),
+        (0x8004, 0x02),
+        (0x8005, 0x80), // JP NZ,$8002
+        (0x8006, 0xC3),
+        (0x8007, 0x06), // JP $8006 — a stop
+    ];
+    for (at, byte) in program {
+        server.session.spec.bus.poke(at, byte);
+    }
+    server.session.spec.bus.poke(0x8008, 0x80);
+    server.session.spec.cpu.pc = 0x8000;
+
+    let text = call(
+        &mut server,
+        "run_until",
+        Json::obj([("address", Json::str("$8006"))]),
+    )
+    .unwrap();
+    assert_eq!(server.session.spec.cpu.pc, 0x8006, "{text}");
+    assert!(text.contains("breakpoint at $8006"), "{text}");
+    assert_eq!(server.session.spec.cpu.b, 0, "the loop ran to its end");
+
+    // And it says so rather than pretending, when the address is never reached.
+    let text = call(
+        &mut server,
+        "run_until",
+        Json::obj([
+            ("address", Json::str("$C000")),
+            ("max_frames", Json::num(2)),
+        ]),
+    )
+    .unwrap();
+    assert!(text.contains("the time asked for ran out"), "{text}");
+}
+
+/// The watches are the way to find a routine without knowing its address:
+/// stop on the first write to the display file, and there is the drawing code.
+#[test]
+fn watching_for_a_screen_write_stops_at_the_instruction_that_did_it() {
+    let mut server = Server::new();
+    // LD HL,$4000 / LD (HL),$FF, then spin.
+    for (at, byte) in [
+        (0x8000u16, 0x21u8),
+        (0x8001, 0x00),
+        (0x8002, 0x40),
+        (0x8003, 0x36),
+        (0x8004, 0xFF),
+        (0x8005, 0xC3),
+        (0x8006, 0x05),
+        (0x8007, 0x80),
+    ] {
+        server.session.spec.bus.poke(at, byte);
+    }
+    server.session.spec.cpu.pc = 0x8000;
+
+    let text = call(
+        &mut server,
+        "watch_events",
+        Json::obj([
+            ("screen", Json::Bool(true)),
+            ("run", Json::Bool(true)),
+            ("max_frames", Json::num(2)),
+        ]),
+    )
+    .unwrap();
+    assert!(text.contains("Screen"), "it says what stopped it: {text}");
+    assert!(text.contains("$8003"), "and where: {text}");
+    assert_eq!(server.session.spec.bus.peek_raw(0x4000), 0xFF);
+}
+
+/// A snapshot is the whole machine, and putting it back undoes whatever the
+/// experiment did. This is what makes poking things safe.
+#[test]
+fn a_saved_machine_can_be_put_back_exactly() {
+    let mut server = Server::new();
+    server.session.spec.cpu.pc = 0x8000;
+    server.session.spec.cpu.sp = 0xFF00;
+    server.session.spec.bus.poke(0x9000, 0x42);
+
+    call(
+        &mut server,
+        "save_state",
+        Json::obj([("name", Json::str("before"))]),
+    )
+    .unwrap();
+
+    server.session.spec.bus.poke(0x9000, 0x99);
+    server.session.spec.cpu.pc = 0xC000;
+    assert_eq!(server.session.spec.bus.peek_raw(0x9000), 0x99);
+
+    let text = call(
+        &mut server,
+        "restore_state",
+        Json::obj([("name", Json::str("before"))]),
+    )
+    .unwrap();
+    assert_eq!(server.session.spec.bus.peek_raw(0x9000), 0x42, "{text}");
+    assert_eq!(server.session.spec.cpu.pc, 0x8000);
+    assert_eq!(server.session.spec.cpu.sp, 0xFF00);
+
+    // And a name nobody saved says what there is rather than failing silently.
+    let missing = call(
+        &mut server,
+        "restore_state",
+        Json::obj([("name", Json::str("nope"))]),
+    )
+    .unwrap_err();
+    assert!(missing.contains("before"), "{missing}");
+}
+
+/// A snapshot can go to a file and come back from one, which is how a session
+/// is picked up again tomorrow.
+#[test]
+fn a_machine_can_be_written_to_a_file_and_read_back() {
+    let Some(mut server) = with_rom() else {
+        eprintln!("need roms/48.rom; skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join("zxrs-mcp-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("state.sna");
+
+    server.session.spec.bus.poke(0x9000, 0x5A);
+    call(
+        &mut server,
+        "save_state",
+        Json::obj([
+            ("name", Json::str("disc")),
+            ("path", Json::str(path.display().to_string())),
+        ]),
+    )
+    .unwrap();
+    assert!(path.exists(), "the file should be there");
+
+    server.session.spec.bus.poke(0x9000, 0x00);
+    call(
+        &mut server,
+        "restore_state",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    )
+    .unwrap();
+    assert_eq!(server.session.spec.bus.peek_raw(0x9000), 0x5A);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A machine that has just been made has $FF where its ROM should be, which
+/// is RST $38 forty thousand times over. It runs, it fills the screen with
+/// rubbish and it sits at $0038 — which looks from the outside exactly like a
+/// game that loaded and crashed.
+///
+/// Loading a tape has to put a real ROM in first. Every game "loaded" against
+/// the empty one and ran for thousands of frames of nothing, and the report
+/// said so cheerfully.
+#[test]
+fn a_tape_is_loaded_into_a_machine_with_a_real_rom_in_it() {
+    let tape = "tapes/Jetpac (1983)(Ultimate Play The Game)[16K].tzx";
+    if std::fs::read("roms/48.rom").is_err() || std::fs::read(tape).is_err() {
+        eprintln!("need roms/48.rom and {tape}; skipping");
+        return;
+    }
+    let mut server = Server::new();
+    assert!(
+        server.session.spec.bus.rom.iter().all(|b| *b == 0xFF),
+        "a fresh machine's ROM space is $FF, not zeros"
+    );
+
+    call(
+        &mut server,
+        "load_tape",
+        Json::obj([("path", Json::str(tape))]),
+    )
+    .unwrap();
+
+    assert!(
+        server.session.spec.bus.rom[..4] != [0xFF; 4],
+        "the real ROM should have been put in"
+    );
+    assert_ne!(
+        server.session.spec.cpu.pc, 0x0038,
+        "and the machine should be running the game, not RST $38"
+    );
+    assert_eq!(
+        server.session.spec.cpu.im, 1,
+        "which a machine that ran the ROM's start-up has set"
+    );
+}
