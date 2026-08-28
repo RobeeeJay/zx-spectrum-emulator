@@ -208,6 +208,10 @@ impl Session {
             "load_tape" => self.load_tape(args),
             "load_snapshot" => self.load_snapshot(args),
             "load_recording" => self.load_recording(args),
+            // A ZX81 program can be asked for from a Spectrum session: it
+            // starts the other machine, which is what somebody asking for a
+            // .p file means.
+            "load_program" => crate::mcp::zx81::load_program(self, args),
             "play_recording" => self.play_recording(args),
             "recording_info" => self.recording_info(),
             "seek_recording" => self.seek_recording(args),
