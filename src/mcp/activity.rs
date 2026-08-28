@@ -60,7 +60,20 @@ pub fn memory_activity(session: &mut Session, args: &Json) -> Result<String, Str
         "Memory by 256-byte page, busiest first. Reads and writes are counted from the \
          last reset; \"run\" means something was executed there.\n",
     );
+    let sp = session.spec.cpu.sp;
     for (page, reads, writes, executed) in pages.iter().take(limit) {
+        // Where the machine's own furniture is, so a page that is the stack or
+        // the system variables is not reported as "variables" and left for
+        // somebody to work out.
+        let known = match page {
+            0x0000..=0x3F00 => Some("the ROM"),
+            0x4000..=0x5700 => Some("the display file"),
+            0x5800 => Some("the attributes"),
+            0x5B00 => Some("the printer buffer"),
+            0x5C00 => Some("the system variables"),
+            _ if *page == (sp & 0xFF00) => Some("the stack is in here"),
+            _ => None,
+        };
         let what = match (*writes > 0, *reads > 0, *executed) {
             (_, _, true) => "code",
             (true, _, _) if *writes > *reads * 4 => "written far more than read — a buffer",
@@ -69,7 +82,13 @@ pub fn memory_activity(session: &mut Session, args: &Json) -> Result<String, Str
             _ => "",
         };
         out.push_str(&format!(
-            "  ${page:04X}xx  reads {reads:>9}  writes {writes:>9}  {what}\n"
+            "  ${page:04X}xx  reads {reads:>9}  writes {writes:>9}  {}\n",
+            // A page the machine itself defines is called what it is; the
+            // guess is for the rest, where nobody has said.
+            match known {
+                Some(name) => name.to_string(),
+                None => what.to_string(),
+            }
         ));
     }
     if pages.len() > limit {

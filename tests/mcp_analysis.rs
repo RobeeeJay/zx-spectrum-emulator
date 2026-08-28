@@ -586,6 +586,10 @@ fn the_access_map_says_what_each_page_is_for() {
         "and it should be called code: {text}"
     );
     assert!(text.contains("$4000xx"), "the screen it wrote: {text}");
+    assert!(
+        text.contains("the display file"),
+        "and the machine's own furniture should be named: {text}"
+    );
     // And it says what it does not know rather than implying it found nothing.
     assert!(
         text.contains("No back buffer detected") || text.contains("Back buffer:"),
