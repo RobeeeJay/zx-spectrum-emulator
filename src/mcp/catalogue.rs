@@ -457,6 +457,17 @@ pub fn tools() -> Json {
             &["address"],
         ),
         tool(
+            "frame_timing",
+            "Where the beam is, and when in the frame a watched routine ran. On this machine \
+             when is half the question: the ULA puts the picture out as it goes, so a write \
+             above the beam is seen this frame and one below it waits for the next — which \
+             is what a flickering sprite is.",
+            [(
+                "address",
+                address("a routine's entry point, to ask about that one"),
+            )],
+        ),
+        tool(
             "call_graph",
             "Who called whom, and how often. A line back to something already reached is a \
              loop in the program.",

@@ -652,3 +652,48 @@ fn the_loader_is_named_from_the_loop_it_is_counting_pulses_in() {
     let text = call(&mut server, "loader", Json::obj([])).unwrap();
     assert!(text.contains("Not in a loader"), "{text}");
 }
+
+/// When in the frame a routine ran, which on this machine is half the
+/// question: a write above the beam is seen now, one below it next frame.
+#[test]
+fn a_routine_is_placed_in_the_frame_it_ran_in() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_frames",
+        Json::obj([("frames", Json::num(3))]),
+    )
+    .unwrap();
+
+    // The frame itself, described in the machine's own terms.
+    let text = call(&mut server, "frame_timing", Json::obj([])).unwrap();
+    assert!(text.contains("69888"), "a 48K frame: {text}");
+    // The machine's own number, not one from memory: the emulator anchors the
+    // first pixel at 14335 and the ULA's fetch cycle a T-state later, and a
+    // test that hard-codes the other one would be arguing with docs/timing.md.
+    let first = server.session.spec.bus.first_pixel_t();
+    assert!(
+        text.contains(&first.to_string()),
+        "and where the first pixel is (T {first}): {text}"
+    );
+    assert!(
+        text.contains("display line") || text.contains("border"),
+        "and where the beam is: {text}"
+    );
+
+    // And the drawing routine, placed against it.
+    let text = call(
+        &mut server,
+        "frame_timing",
+        Json::obj([("address", Json::str("$9000"))]),
+    )
+    .unwrap();
+    assert!(text.contains("$9000"), "{text}");
+    assert!(text.contains("was entered between"), "{text}");
+    assert!(
+        text.contains("display file"),
+        "it writes to the screen, so it should say what that means: {text}"
+    );
+}

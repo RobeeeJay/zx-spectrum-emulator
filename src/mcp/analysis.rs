@@ -590,3 +590,108 @@ pub fn xrefs(session: &mut Session, args: &Json) -> Result<String, String> {
     }
     Ok(out)
 }
+
+/// Where the beam is, and when in the frame the routines ran.
+///
+/// On this machine *when* is half the question. The ULA puts the picture out
+/// as it goes, so a write above the beam is seen this frame and one below it
+/// waits for the next: that is what a flickering sprite is. A routine that
+/// always runs at the same point in the frame is doing its work to a
+/// timetable; one that wanders is not.
+pub fn frame_timing(session: &mut Session, args: &Json) -> Result<String, String> {
+    let bus = &session.spec.bus;
+    let model = bus.model;
+    let first_pixel = bus.first_pixel_t();
+    let per_line = model.t_per_line();
+    let frame_t = model.frame_t();
+    let display_end = first_pixel + 192 * per_line;
+
+    let line_of = |t: u32| -> i64 {
+        // Counted from the first line of the display, so the top border is
+        // negative — which is where the beam is at the interrupt.
+        (t as i64 - first_pixel as i64).div_euclid(per_line as i64)
+    };
+    let describe = |t: u32| -> String {
+        let line = line_of(t);
+        if t < first_pixel {
+            format!("T {t}, the top border, {} lines before the display", -line)
+        } else if t < display_end {
+            format!("T {t}, display line {line} of 192")
+        } else {
+            format!("T {t}, below the display, {} lines past it", line - 192)
+        }
+    };
+
+    let mut out = format!(
+        "{}: a frame is {frame_t} T-states, a line {per_line}. The interrupt is at T 0; \
+         the first pixel goes out at T {first_pixel} and the last at T {}.\n\
+         The machine is at {} in frame {}.\n",
+        model.name(),
+        display_end - 1,
+        describe(bus.tstates),
+        bus.frame
+    );
+
+    if let Some(one) = args.get("address") {
+        let entry = crate::mcp::tools::addr_of(one)?;
+        let observed = session
+            .spec
+            .bus
+            .observer
+            .routines
+            .get(&entry)
+            .ok_or_else(|| format!("${entry:04X} has not been seen called while watching"))?;
+        let frames_seen = session.spec.bus.observer.frames as u32;
+        if observed.entered_at.is_empty() {
+            out.push_str(&format!(
+                "${entry:04X} has been called, but not while the frame position was being \
+                 recorded.\n"
+            ));
+            return Ok(out);
+        }
+        out.push_str(&format!(
+            "\n${entry:04X} {} was entered between {} and {}.\n",
+            session.notes.label(entry),
+            describe(observed.entered_at.low),
+            describe(observed.entered_at.high)
+        ));
+        // The same T-state every time is a routine on a timetable. A line's
+        // worth of slack, since an interrupt is taken between instructions and
+        // the handler's own work varies by a few dozen T-states.
+        if observed.entered_at.high - observed.entered_at.low < per_line {
+            out.push_str(
+                "Always at the same point in the frame: it is being run to a timetable, \
+                 which usually means from the interrupt handler.\n",
+            );
+        }
+        out.push_str(&format!(
+            "It ran in {} of the {frames_seen} frames watched{}.\n",
+            observed.frames,
+            if observed.every_frame(frames_seen) {
+                " — every frame, near enough"
+            } else {
+                ""
+            }
+        ));
+        if observed.inclusive.screen > 0 {
+            let above = observed.entered_at.high < first_pixel;
+            let below = observed.entered_at.low > display_end;
+            out.push_str(match (above, below) {
+                (true, _) => {
+                    "It writes to the display file before the beam reaches it, so \
+                              what it draws is seen in the same frame.\n"
+                }
+                (_, true) => {
+                    "It writes to the display file after the beam has passed, so \
+                              what it draws is not seen until the next frame — which is \
+                              what a flickering sprite is.\n"
+                }
+                _ => {
+                    "It writes to the display file while the beam is crossing it, so some \
+                      of what it draws is seen this frame and some next.\n"
+                }
+            });
+        }
+    }
+    Ok(out)
+}
