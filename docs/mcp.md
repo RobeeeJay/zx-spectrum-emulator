@@ -58,7 +58,12 @@ quietly.
 theory (freeze the counter and see what stops moving), not for patching a file.
 
 **Watching it.** `watch_routines`, then `routines`, `routine`, `call_graph`,
-`code_map`, `autodoc`.
+`code_map`, `xrefs`, `autodoc`.
+
+`xrefs` answers "what refers to this address" two ways at once, and labels
+which is which: what the machine was *watched* doing is fact, and what the
+*code* says is a search whose hits include data that happens to look like an
+instruction.
 
 The observer attributes every write, read, port access and loop to the routine
 on top of the call stack, worked out from what the CPU did rather than by

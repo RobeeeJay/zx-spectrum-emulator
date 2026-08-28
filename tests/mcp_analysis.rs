@@ -406,3 +406,52 @@ fn a_real_game_can_be_loaded_watched_and_read() {
     .unwrap();
     assert_eq!(server.session.spec.cpu.pc, pc, "back where it was");
 }
+
+/// Cross-references, which is the question asked when naming anything: who
+/// calls this, who writes to it, and what in memory names it.
+#[test]
+fn cross_references_separate_what_was_watched_from_what_was_searched_for() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(20_000))]),
+    )
+    .unwrap();
+
+    let text = call(
+        &mut server,
+        "xrefs",
+        Json::obj([("address", Json::str("$9000"))]),
+    )
+    .unwrap();
+
+    // The call from $8000 was watched happening.
+    assert!(text.contains("called by (watched)"), "{text}");
+    assert!(text.contains("$8000"), "{text}");
+    // And the CALL instruction itself is in memory, found by searching.
+    assert!(
+        text.contains("CALL $9000"),
+        "the instruction that names it: {text}"
+    );
+    assert!(
+        text.contains("some of these will be data"),
+        "a search is not a fact, and should not read as one: {text}"
+    );
+}
+
+/// An address nothing refers to says so, rather than an empty heading that
+/// reads like an answer.
+#[test]
+fn an_address_with_no_references_says_so() {
+    let mut server = Server::new();
+    let text = call(
+        &mut server,
+        "xrefs",
+        Json::obj([("address", Json::str("$BEEF"))]),
+    )
+    .unwrap();
+    assert!(text.contains("nothing in"), "{text}");
+}

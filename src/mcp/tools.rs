@@ -164,6 +164,7 @@ impl Session {
             "routine" => crate::mcp::analysis::routine(self, args),
             "call_graph" => crate::mcp::analysis::call_graph(self, args),
             "code_map" => crate::mcp::analysis::code_map(self, args),
+            "xrefs" => crate::mcp::analysis::xrefs(self, args),
             "autodoc" => crate::mcp::analysis::autodoc(self, args),
             "set_comment" => crate::mcp::analysis::set_comment(self, args),
             "comments" => crate::mcp::analysis::comments(self, args),

@@ -441,3 +441,128 @@ pub fn save_comments(session: &mut Session, _args: &Json) -> Result<String, Stri
         }
     }
 }
+
+/// Everything that refers to an address, both ways round.
+///
+/// Two kinds of answer, and they are worth telling apart. What the machine was
+/// watched doing is fact: these routines called it, this one drew that cell,
+/// these read that page. What the code says is a search: the bytes `CD 00 90`
+/// are a call to $9000 wherever they appear, and some of them will be data
+/// that happens to look like one. Both are given, labelled.
+pub fn xrefs(session: &mut Session, args: &Json) -> Result<String, String> {
+    let at = addr(args, "address")?;
+    let mut out = format!("References to ${at:04X}\n");
+
+    // ---- what was watched -------------------------------------------------
+    let observer = &session.spec.bus.observer;
+    let callers: Vec<(u16, u32)> = observer
+        .edges
+        .iter()
+        .filter(|((_, to), _)| *to == at)
+        .map(|((from, _), edge)| (*from, edge.calls))
+        .collect();
+    if !callers.is_empty() {
+        out.push_str("called by (watched):\n");
+        for (from, calls) in callers.iter().take(20) {
+            out.push_str(&format!(
+                "  ${from:04X} {:<16} {calls} times\n",
+                session.notes.label(*from)
+            ));
+        }
+    }
+    let calls_out: Vec<(u16, u32)> = observer
+        .edges
+        .iter()
+        .filter(|((from, _), _)| *from == at)
+        .map(|((_, to), edge)| (*to, edge.calls))
+        .collect();
+    if !calls_out.is_empty() {
+        out.push_str("calls (watched):\n");
+        for (to, calls) in calls_out.iter().take(20) {
+            out.push_str(&format!(
+                "  ${to:04X} {:<16} {calls} times\n",
+                session.notes.label(*to)
+            ));
+        }
+    }
+    let users = observer.users_of(at);
+    if !users.is_empty() {
+        out.push_str("routines that hammered this address (watched):\n");
+        for entry in users.iter().take(20) {
+            out.push_str(&format!("  ${entry:04X} {}\n", session.notes.label(*entry)));
+        }
+    }
+    let readers = observer.readers_of((at >> 8) as u8);
+    if !readers.is_empty() {
+        out.push_str(&format!(
+            "routines that read page ${:02X}xx (watched, commonest first):\n",
+            at >> 8
+        ));
+        for entry in readers.iter().take(12) {
+            out.push_str(&format!("  ${entry:04X} {}\n", session.notes.label(*entry)));
+        }
+    }
+    if let Some(who) = observer.drew(at) {
+        out.push_str(&format!(
+            "the byte of screen at ${at:04X} was last drawn by ${who:04X} {}\n",
+            session.notes.label(who)
+        ));
+    }
+
+    // ---- what the code says ----------------------------------------------
+    let from = match args.get("search_from") {
+        Some(_) => addr(args, "search_from")?,
+        None => 0x4000,
+    };
+    let to = match args.get("search_to") {
+        Some(_) => addr(args, "search_to")?,
+        None => 0xFFFF,
+    };
+    let target = at.to_le_bytes();
+    let mut found = Vec::new();
+    let mut a = from;
+    while a < to {
+        if session.spec.bus.peek_raw(a.wrapping_add(1)) == target[0]
+            && session.spec.bus.peek_raw(a.wrapping_add(2)) == target[1]
+        {
+            let opcode = session.spec.bus.peek_raw(a);
+            // The three-byte instructions that carry an address: CALL, JP,
+            // their conditional forms, and the loads through (nn).
+            let kind = match opcode {
+                0xCD => Some("CALL"),
+                0xC4 | 0xCC | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC => Some("CALL cc"),
+                0xC3 => Some("JP"),
+                0xC2 | 0xCA | 0xD2 | 0xDA | 0xE2 | 0xEA | 0xF2 | 0xFA => Some("JP cc"),
+                0x21 | 0x01 | 0x11 | 0x31 => Some("LD rr,nn"),
+                0x2A | 0x3A | 0x22 | 0x32 => Some("LD (nn)"),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                let insn = crate::disasm::disasm(&|x| session.spec.bus.peek_raw(x), a);
+                found.push(format!("  ${a:04X}  {:<18} ({kind})", insn.text));
+            }
+        }
+        a = a.wrapping_add(1);
+        if a == 0 {
+            break;
+        }
+    }
+    if found.is_empty() {
+        out.push_str(&format!(
+            "nothing in ${from:04X}-${to:04X} holds the bytes of ${at:04X} as an instruction would.\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "instructions naming ${at:04X}, found by searching ${from:04X}-${to:04X} — some of \
+             these will be data that happens to look like code:\n"
+        ));
+        for line in found.iter().take(40) {
+            out.push_str(line);
+            out.push('\n');
+        }
+        if found.len() > 40 {
+            out.push_str(&format!("  ({} more)\n", found.len() - 40));
+        }
+    }
+    Ok(out)
+}

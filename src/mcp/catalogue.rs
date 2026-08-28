@@ -339,6 +339,23 @@ pub fn tools() -> Json {
                 prop("integer", "shortest data block to report (default 8)"),
             )],
         ),
+        schema_tool(
+            "xrefs",
+            "Everything that refers to an address, both ways round: which routines were \
+             watched calling it, which hammered it, which read its page, and which \
+             instruction in memory names it. The watched answers are facts about the run; \
+             the instructions are a search, and some of what it finds will be data that \
+             happens to look like code. This is the question to ask when naming a variable.",
+            [
+                ("address", address("the address to look for")),
+                (
+                    "search_from",
+                    address("where the search starts (default $4000)"),
+                ),
+                ("search_to", address("where it ends (default $FFFF)")),
+            ],
+            &["address"],
+        ),
         tool(
             "autodoc",
             "Guesses at what routines do, from what they touch — ports, screen ranges, ROM \
