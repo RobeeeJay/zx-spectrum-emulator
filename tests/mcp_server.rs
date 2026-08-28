@@ -507,3 +507,94 @@ fn a_tape_is_loaded_into_a_machine_with_a_real_rom_in_it() {
         "which a machine that ran the ROM's start-up has set"
     );
 }
+
+/// The screen comes back as a picture and as something to read, because a
+/// model that cannot see one still has to be able to tell whether the sprite
+/// is on the screen.
+#[test]
+fn the_screen_can_be_looked_at() {
+    let mut server = Server::new();
+    // The top row of character cells filled solid, and green ink on black.
+    // The display file's rows are interleaved, so a whole cell is eight
+    // addresses a scan line apart rather than eight in a row.
+    for row in 0..8u16 {
+        for x in 0..32u16 {
+            server.session.spec.bus.poke(0x4000 + row * 256 + x, 0xFF);
+        }
+    }
+    for cell in 0..32u16 {
+        server.session.spec.bus.poke(0x5800 + cell, 0x04);
+    }
+
+    let line = Json::obj([
+        ("jsonrpc", Json::str("2.0")),
+        ("id", Json::num(1)),
+        ("method", Json::str("tools/call")),
+        (
+            "params",
+            Json::obj([("name", Json::str("screen")), ("arguments", Json::obj([]))]),
+        ),
+    ])
+    .to_string();
+    let reply = parse(&server.handle(&line).unwrap()).unwrap();
+    let content = reply
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_array())
+        .expect("content")
+        .to_vec();
+
+    // A picture block first, then the words.
+    assert_eq!(
+        content[0].get("type").and_then(|t| t.as_str()),
+        Some("image"),
+        "the screen should come back as an image"
+    );
+    assert_eq!(
+        content[0].get("mimeType").and_then(|t| t.as_str()),
+        Some("image/png")
+    );
+    let data = content[0].get("data").and_then(|d| d.as_str()).unwrap();
+    assert!(data.len() > 100, "there should be a PNG in there");
+    // The PNG's own signature, base64'd, is how a real one starts.
+    assert!(
+        data.starts_with("iVBORw0KGgo"),
+        "{}",
+        &data[..20.min(data.len())]
+    );
+
+    let text = content[1].get("text").and_then(|t| t.as_str()).unwrap();
+    assert!(text.contains("green"), "the attributes are named: {text}");
+    assert!(
+        text.lines().any(|l| l.contains("@@@@@@@@")),
+        "the top row of cells is solid, and the sketch should show it:\n{text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|l| l.trim().is_empty() || l.contains("   "))
+            .count()
+            > 10,
+        "and the rest of the screen is empty:\n{text}"
+    );
+}
+
+/// Memory read as graphics: the way to find where a game keeps its sprites.
+#[test]
+fn memory_can_be_read_as_graphics() {
+    let mut server = Server::new();
+    // A capital H, as the ROM draws one.
+    for (i, byte) in [0x00u8, 0x42, 0x42, 0x7E, 0x42, 0x42, 0x42, 0x00]
+        .iter()
+        .enumerate()
+    {
+        server.session.spec.bus.poke(0x9000 + i as u16, *byte);
+    }
+    let text = call(
+        &mut server,
+        "graphics",
+        Json::obj([("address", Json::str("$9000")), ("count", Json::num(1))]),
+    )
+    .unwrap();
+    assert!(text.contains(".#....#."), "the sides of the H:\n{text}");
+    assert!(text.contains(".######."), "and its bar:\n{text}");
+}

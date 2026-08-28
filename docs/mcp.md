@@ -39,6 +39,14 @@ beeper or the sound chip being touched, the frame interrupt, a call into the
 ROM, any `IN`, any `OUT`. Switch on `screen` and run, and the machine stops at
 the instruction that drew something.
 
+**Looking at it.** `screen`, `graphics`.
+
+`screen` sends a PNG in an image block — a model with eyes sees the picture —
+along with a sketch of the 32x24 character cells and what the attributes are
+set to, for one that cannot. `graphics` reads memory as characters and sprites,
+eight bytes each, which is how graphics are found: point it at a candidate
+address and see whether letters, a sprite or rubbish comes out.
+
 **Reading it.** `registers`, `read_memory`, `write_memory`, `disassemble`.
 
 Addresses may be numbers or strings: `32768`, `"$8000"`, `"0x8000"`, `"8000h"`.
@@ -102,7 +110,6 @@ the same bargain as `src/svg.rs`.
 The emulator can do these and the server does not offer them yet, which is
 worth knowing before assuming they are missing from the emulator too:
 
-- the screen as pixels — `screen.rs` renders one, and a model cannot see it;
 - searching memory for bytes, and comparing two snapshots to find what changed
   (which is how a variable is found);
 - the RAM heat map (`tracker.rs`): what has been written and read, and when;

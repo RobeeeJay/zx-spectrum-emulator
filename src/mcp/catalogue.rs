@@ -238,6 +238,46 @@ pub fn tools() -> Json {
             ],
         ),
         tool(
+            "screen",
+            "What is on the screen: a PNG you can look at, a sketch of the 32x24 character \
+             cells for when you cannot, and what the attributes are set to. This is how to \
+             check whether a change did what you thought — did the sprite disappear, is the \
+             score where you think it is.",
+            [
+                (
+                    "image",
+                    prop("boolean", "send the picture as well (default true)"),
+                ),
+                (
+                    "border",
+                    prop("boolean", "include the border (default false)"),
+                ),
+                (
+                    "path",
+                    prop("string", "write the PNG here instead of sending it"),
+                ),
+            ],
+        ),
+        schema_tool(
+            "graphics",
+            "Read memory as characters and sprites — eight bytes a character, one bit a \
+             pixel — and draw them. Point it at a candidate address and see whether letters, \
+             a sprite or rubbish comes out. This is how graphics are found.",
+            [
+                ("address", address("where the graphics might start")),
+                ("count", prop("integer", "how many characters (default 16)")),
+                (
+                    "across",
+                    prop("integer", "how many to a row, 1-32 (default 8)"),
+                ),
+                (
+                    "image",
+                    prop("boolean", "send a picture as well as the text"),
+                ),
+            ],
+            &["address"],
+        ),
+        tool(
             "disassemble",
             "Disassemble, with your labels and comments against the lines that have them, \
              and a note of whether each address has been executed or only read while \

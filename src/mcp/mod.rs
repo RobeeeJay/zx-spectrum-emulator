@@ -7,6 +7,7 @@
 pub mod analysis;
 pub mod catalogue;
 pub mod json;
+pub mod picture;
 pub mod tools;
 
 pub use tools::Session;
@@ -97,7 +98,7 @@ impl Server {
                 // what went wrong and can try something else, which is what
                 // isError is for.
                 Ok(match self.session.call(&name, &arguments) {
-                    Ok(text) => content(&text, false),
+                    Ok(reply) => reply.content(),
                     Err(why) => content(&why, true),
                 })
             }
@@ -121,7 +122,7 @@ impl Fault {
     }
 }
 
-fn content(text: &str, is_error: bool) -> Json {
+pub fn content(text: &str, is_error: bool) -> Json {
     Json::obj([
         (
             "content",
