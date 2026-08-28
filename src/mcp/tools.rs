@@ -603,8 +603,30 @@ impl Session {
                 }
             }
         }
+        // A write to an address, or to a range of them. The one watch that is
+        // about a place rather than a kind of thing.
+        if let Some(value) = args.get("write_to") {
+            if value.is_null() {
+                self.spec.bus.breaks.write_range = None;
+            } else {
+                let low = addr_of(value)?;
+                let high = match args.get("write_to_end") {
+                    Some(end) => addr_of(end)?,
+                    None => low,
+                };
+                self.spec.bus.breaks.write_range = Some((low.min(high), low.max(high)));
+            }
+        }
+
         let breaks = self.spec.bus.breaks;
-        let mut on: Vec<&str> = Vec::new();
+        let mut on: Vec<String> = Vec::new();
+        if let Some((low, high)) = breaks.write_range {
+            on.push(if low == high {
+                format!("writes to ${low:04X}")
+            } else {
+                format!("writes to ${low:04X}-${high:04X}")
+            });
+        }
         for (name, set) in [
             ("screen", breaks.screen),
             ("beeper", breaks.beeper),
@@ -615,7 +637,7 @@ impl Session {
             ("port_out", breaks.port_out),
         ] {
             if set {
-                on.push(name);
+                on.push(name.to_string());
             }
         }
         let watching = if on.is_empty() {
@@ -850,6 +872,8 @@ pub fn describe_stop(stop: Stop) -> String {
         Stop::SlowDraw => "the slow-draw write allowance ran out".to_string(),
         Stop::Stepped => "one instruction was stepped".to_string(),
         Stop::Breakpoint(at) => format!("breakpoint at ${at:04X}"),
-        Stop::Watched(event, at) => format!("{event:?} at ${at:04X}"),
+        // The machine's own words for it, which say what happened rather than
+        // naming the variant.
+        Stop::Watched(event, at) => format!("{} — at ${at:04X}", event.describe()),
     }
 }

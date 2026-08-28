@@ -386,7 +386,10 @@ fn watching_for_a_screen_write_stops_at_the_instruction_that_did_it() {
         ]),
     )
     .unwrap();
-    assert!(text.contains("Screen"), "it says what stopped it: {text}");
+    assert!(
+        text.contains("Wrote to the screen"),
+        "it says what stopped it: {text}"
+    );
     assert!(text.contains("$8003"), "and where: {text}");
     assert_eq!(server.session.spec.bus.peek_raw(0x4000), 0xFF);
 }
@@ -808,4 +811,72 @@ fn what_changed_since_a_saved_state_is_how_a_variable_is_found() {
     )
     .unwrap();
     assert!(text.contains("nothing"), "{text}");
+}
+
+/// The other half of finding a variable: once an address is known, stop the
+/// machine at whatever writes to it. That instruction is the code behind it.
+#[test]
+fn the_machine_stops_at_whatever_writes_to_a_watched_address() {
+    let mut server = Server::new();
+    // LD A,$07 / LD ($9000),A, then spin.
+    for (at, byte) in [
+        (0x8000u16, 0x3Eu8),
+        (0x8001, 0x07),
+        (0x8002, 0x32),
+        (0x8003, 0x00),
+        (0x8004, 0x90),
+        (0x8005, 0xC3),
+        (0x8006, 0x05),
+        (0x8007, 0x80),
+    ] {
+        server.session.spec.bus.poke(at, byte);
+    }
+    server.session.spec.cpu.pc = 0x8000;
+
+    let text = call(
+        &mut server,
+        "watch_events",
+        Json::obj([
+            ("write_to", Json::str("$9000")),
+            ("run", Json::Bool(true)),
+            ("max_frames", Json::num(2)),
+        ]),
+    )
+    .unwrap();
+    assert!(
+        text.contains("Wrote $07 to $9000"),
+        "it should say what was written: {text}"
+    );
+    assert!(
+        text.contains("$8002"),
+        "and which instruction did it: {text}"
+    );
+
+    // A range, for a table rather than a single byte.
+    server.session.spec.cpu.pc = 0x8000;
+    let text = call(
+        &mut server,
+        "watch_events",
+        Json::obj([
+            ("write_to", Json::str("$8FF0")),
+            ("write_to_end", Json::str("$9010")),
+            ("run", Json::Bool(true)),
+            ("max_frames", Json::num(2)),
+        ]),
+    )
+    .unwrap();
+    assert!(text.contains("$9000"), "{text}");
+
+    // And it can be switched off again.
+    let text = call(
+        &mut server,
+        "watch_events",
+        Json::obj([("write_to", Json::Null)]),
+    )
+    .unwrap();
+    assert!(
+        !text.contains("writes to"),
+        "the watch should be off: {text}"
+    );
+    assert!(server.session.spec.bus.breaks.write_range.is_none());
 }

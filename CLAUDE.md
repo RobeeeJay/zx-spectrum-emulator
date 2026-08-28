@@ -337,6 +337,13 @@ carry keys the rubber ones did not; what is drawn for them is the matrix they
 share with the 48K, which is honest about what the machine reads and not a
 picture of their case.
 
+**A watch can be on a place as well as on a kind of thing.** `Breaks` carries
+watches for the sorts of thing a program does — a screen write, the beeper, an
+`IN` — and `write_range`, which is a watch on an address. It costs one
+comparison on every write when it is `None`, which is why it is an `Option` and
+not a list. It is the answer to "what writes to this?", which is the question a
+debugger is for.
+
 **The MCP server is the emulator without a window.** `src/mcp/` and the `mcp`
 binary expose the machine over JSON-RPC so a language model can drive it:
 loading, running, breakpoints and event watches, registers, memory,

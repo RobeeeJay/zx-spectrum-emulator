@@ -212,3 +212,58 @@ fn one_instruction_back_is_the_one_that_ends_here() {
         "and the LD HL,$1234 before that is three"
     );
 }
+
+/// A write to a watched address stops the machine at the instruction that did
+/// it, which is the question a debugger exists to answer: what writes to this?
+///
+/// The other watches are about a kind of thing happening — a screen write, a
+/// port read. This one is about a place, which is usually all that is known
+/// when a variable has just been found by comparing snapshots.
+#[test]
+fn a_write_to_a_watched_address_stops_the_machine() {
+    use zx_rustrum::machine::{Event, Spectrum, Stop};
+
+    let mut spec = Spectrum::new();
+    // LD A,$07 / LD ($9000),A / LD ($9001),A, then spin.
+    for (at, byte) in [
+        (0x8000u16, 0x3Eu8),
+        (0x8001, 0x07),
+        (0x8002, 0x32),
+        (0x8003, 0x00),
+        (0x8004, 0x90),
+        (0x8005, 0x32),
+        (0x8006, 0x01),
+        (0x8007, 0x90),
+        (0x8008, 0xC3),
+        (0x8009, 0x08),
+        (0x800A, 0x80),
+    ] {
+        spec.bus.poke(at, byte);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.bus.breaks.write_range = Some((0x9001, 0x9001));
+
+    let stop = spec.run(10_000);
+    match stop {
+        Stop::Watched(Event::Wrote(addr, value), at) => {
+            assert_eq!(addr, 0x9001, "the address it was told to watch");
+            assert_eq!(value, 0x07, "and what was written");
+            assert_eq!(at, 0x8005, "at the instruction that wrote it");
+        }
+        other => panic!("should have stopped on the write, not {other:?}"),
+    }
+    // The write to $9000 happened first and was not watched, so it did not
+    // stop anything: a watch on one address is not a watch on the page.
+    assert_eq!(spec.bus.peek_raw(0x9000), 0x07);
+
+    // With nothing watched, the same program runs to the end of its budget.
+    let mut spec = Spectrum::new();
+    for (at, byte) in [(0x8000u16, 0x32u8), (0x8001, 0x01), (0x8002, 0x90)] {
+        spec.bus.poke(at, byte);
+    }
+    spec.cpu.pc = 0x8000;
+    assert!(
+        matches!(spec.run(1000), Stop::Budget),
+        "an unwatched write stops nothing"
+    );
+}

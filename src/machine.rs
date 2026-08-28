@@ -1287,6 +1287,14 @@ impl Bus for SpectrumBus {
 
     fn write(&mut self, addr: u16, value: u8) {
         self.access(addr, 3);
+        // A watch on an address costs a comparison on every write, which is
+        // why it is an Option and not a list: None is one test, and nothing
+        // is paid for a watch nobody set.
+        if let Some((low, high)) = self.breaks.write_range {
+            if addr >= low && addr <= high {
+                self.break_hit.get_or_insert(Event::Wrote(addr, value));
+            }
+        }
         let phys = self.phys_index(addr);
         self.tracker.on_write(phys, addr);
         self.observer.on_write(addr, value);
@@ -1456,12 +1464,18 @@ pub struct Breaks {
     pub port_in: bool,
     /// Any OUT at all.
     pub port_out: bool,
+    /// A write anywhere in this range of addresses, inclusive. The one watch
+    /// that is about a place rather than a kind of thing: "what writes to the
+    /// lives counter" is the question a debugger is for, and the address is
+    /// usually all that is known.
+    pub write_range: Option<(u16, u16)>,
 }
 
 impl Breaks {
     /// Whether anything at all is being watched.
     pub fn any(&self) -> bool {
-        self.screen
+        self.write_range.is_some()
+            || self.screen
             || self.beeper
             || self.ay
             || self.interrupt
@@ -1513,6 +1527,8 @@ pub enum Event {
     In(u16),
     /// Wrote to a port, and what.
     Out(u16, u8),
+    /// Wrote to a watched address, and what was written.
+    Wrote(u16, u8),
 }
 
 impl Event {
@@ -1520,6 +1536,7 @@ impl Event {
     pub fn describe(&self) -> String {
         match self {
             Event::Screen(addr) => format!("Wrote to the screen at ${addr:04X}"),
+            Event::Wrote(addr, value) => format!("Wrote ${value:02X} to ${addr:04X}"),
             Event::Beeper => "Toggled the beeper".to_string(),
             Event::Ay => "Used the sound chip".to_string(),
             Event::Interrupt => "Took the frame interrupt".to_string(),

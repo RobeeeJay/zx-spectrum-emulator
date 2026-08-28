@@ -39,7 +39,10 @@ where — which is the memory map before there is one.
 **Running it.** `step` (with `over` for stepping over a `CALL`), `run_frames`,
 `run_tstates`, `run_until`, `watch_events`.
 
-`run_until` is the breakpoint. `watch_events` is the more useful one for
+`run_until` is the breakpoint, and `watch_events`'s `write_to` is the
+watchpoint: stop at whatever writes to an address, which — once
+`changed_since` has found the address — is how the code behind a variable is
+found. `watch_events` is the more useful one for
 finding your way around a program nobody has documented: it stops on *what the
 program did* rather than on where it is — a write to the display file, the
 beeper or the sound chip being touched, the frame interrupt, a call into the

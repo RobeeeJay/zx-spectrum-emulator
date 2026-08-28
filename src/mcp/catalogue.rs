@@ -200,6 +200,14 @@ pub fn tools() -> Json {
                 ),
                 ("port_in", prop("boolean", "any IN")),
                 ("port_out", prop("boolean", "any OUT")),
+                (
+                    "write_to",
+                    address("stop when anything writes to this address; null to stop watching"),
+                ),
+                (
+                    "write_to_end",
+                    address("the far end of a range of addresses to watch"),
+                ),
                 ("run", prop("boolean", "run until one of them happens")),
                 (
                     "max_frames",
