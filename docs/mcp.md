@@ -110,7 +110,12 @@ mean channel by channel — tone, noise, volume, period turned into a pitch.
 `.sna` file. An experiment that goes wrong is undone by putting the machine
 back.
 
-**Writing it down.** `set_comment`, `comments`, `save_comments`. Notes go to
+**Writing it down.** `set_comment`, `comments`, `save_comments`,
+`export_listing`.
+
+`export_listing` writes the whole annotated disassembly to a file — the thing
+being built. What ran while watching is disassembled; what did not is left as
+bytes rather than turned into instructions nobody executed. Notes go to
 `<name>.zxrs.txt` beside the tape or snapshot: plain text, one line an address,
 readable and diffable without the emulator. A guess made by AutoDoc is marked
 as a guess and never overwrites something typed.

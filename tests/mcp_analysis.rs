@@ -737,3 +737,62 @@ fn the_sound_state_is_reported_for_both_ways_of_making_a_noise() {
     );
     assert!(text.contains("channel B: no tone"), "{text}");
 }
+
+/// The deliverable: the whole listing, with what was learned against it, and
+/// the parts that never ran left as bytes.
+#[test]
+fn the_listing_can_be_written_out_with_the_comments_on_it() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    // A table of data after the routine, which nothing executes.
+    for i in 0..16u16 {
+        server.session.spec.bus.poke(0x9010 + i, 0xAA);
+    }
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(20_000))]),
+    )
+    .unwrap();
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$9000")),
+            ("label", Json::str("draw_row")),
+            ("comment", Json::str("fills the top line of the screen")),
+        ]),
+    )
+    .unwrap();
+
+    let path = std::env::temp_dir().join("zxrs-listing.asm");
+    let report = call(
+        &mut server,
+        "export_listing",
+        Json::obj([
+            ("path", Json::str(path.display().to_string())),
+            ("from", Json::str("$9000")),
+            ("to", Json::str("$9020")),
+        ]),
+    )
+    .unwrap();
+    assert!(report.contains("instructions"), "{report}");
+
+    let listing = std::fs::read_to_string(&path).unwrap();
+    assert!(listing.contains("draw_row:"), "{listing}");
+    assert!(
+        listing.contains("; fills the top line"),
+        "the comment should be on the line: {listing}"
+    );
+    assert!(listing.contains("LD HL,$4000"), "{listing}");
+    assert!(
+        listing.contains("DEFB $AA"),
+        "the table never ran, so it should be bytes: {listing}"
+    );
+    assert!(
+        listing.contains("may be data"),
+        "and the header should say what \"run\" means: {listing}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

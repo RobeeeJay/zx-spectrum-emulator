@@ -572,6 +572,18 @@ pub fn tools() -> Json {
                 ("to", address("highest address (default $FFFF)")),
             ],
         ),
+        schema_tool(
+            "export_listing",
+            "Write the whole annotated disassembly to a file: every label and comment \
+             against the code, and the parts that were never executed left as bytes rather \
+             than turned into instructions nobody ran. This is the thing being built.",
+            [
+                ("path", prop("string", "where to write it")),
+                ("from", address("lowest address (default $4000)")),
+                ("to", address("highest address (default $FFFF)")),
+            ],
+            &["path"],
+        ),
         tool(
             "save_comments",
             "Write the notes to their file beside the tape or snapshot — plain text, one \
