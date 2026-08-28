@@ -31,7 +31,7 @@ pub const MAX_READ: usize = 4096;
 /// How long a run tool will let the machine go before saying so, in frames.
 /// Twenty seconds of emulated time: enough to load a level, short enough that
 /// a program stuck in a loop comes back rather than hanging the conversation.
-const RUN_LIMIT_FRAMES: u32 = 1000;
+pub const RUN_LIMIT_FRAMES: u32 = 1000;
 
 /// What a tool gives back: text, or a picture with something to read beside
 /// it. MCP carries an image as base64 in a content block of its own, which is
@@ -98,6 +98,9 @@ pub struct Session {
     /// Fingerprints of known routines, so a ROM routine copied into RAM is
     /// still recognised where it lands.
     pub signatures: crate::autodoc::Signatures,
+    /// What it would take to undo the last few stepped instructions, oldest
+    /// first. Only what step_forward stepped: running does not keep them.
+    pub history: Vec<crate::machine::Undo>,
     /// What is loaded, for machine_info to say.
     pub loaded: Option<String>,
     /// Whether a real ROM has been put in. A machine that has just been made
@@ -127,6 +130,7 @@ impl Session {
             states: BTreeMap::new(),
             memories: BTreeMap::new(),
             rzx: None,
+            history: Vec::new(),
             symbols: crate::autodoc::Symbols::default(),
             signatures: crate::autodoc::Signatures::empty(),
             rom_dirs: crate::resources::search_dirs(),
@@ -162,11 +166,14 @@ impl Session {
             "play_recording" => self.play_recording(args),
             "tape_blocks" => crate::mcp::deck::tape_blocks(self, args),
             "loader" => crate::mcp::deck::loader(self, args),
-            "step" => self.step(args),
-            "run_frames" => self.run_frames(args),
-            "run_tstates" => self.run_tstates(args),
-            "run_until" => self.run_until(args),
-            "watch_events" => self.watch_events(args),
+            "step" => crate::mcp::control::step(self, args),
+            "step_forward" => crate::mcp::control::step_recording(self, args),
+            "step_back" => crate::mcp::control::step_back(self, args),
+            "paging" => crate::mcp::control::paging(self, args),
+            "run_frames" => crate::mcp::control::run_frames(self, args),
+            "run_tstates" => crate::mcp::control::run_tstates(self, args),
+            "run_until" => crate::mcp::control::run_until(self, args),
+            "watch_events" => crate::mcp::control::watch_events(self, args),
             "press_keys" => crate::mcp::input::press_keys(self, args),
             "type_text" => crate::mcp::input::type_text(self, args),
             "registers" => Ok(self.registers()),
@@ -182,6 +189,8 @@ impl Session {
             "routine" => crate::mcp::analysis::routine(self, args),
             "call_graph" => crate::mcp::analysis::call_graph(self, args),
             "code_map" => crate::mcp::analysis::code_map(self, args),
+            "blocks" => crate::mcp::analysis::blocks(self, args),
+            "profile" => crate::mcp::analysis::profile(self, args),
             "xrefs" => crate::mcp::analysis::xrefs(self, args),
             "memory_activity" => crate::mcp::activity::memory_activity(self, args),
             "frame_timing" => crate::mcp::analysis::frame_timing(self, args),
@@ -483,195 +492,6 @@ impl Session {
     }
 
     // ---- running -----------------------------------------------------------
-
-    fn step(&mut self, args: &Json) -> Result<String, String> {
-        let count = count(args, "count", 1)?.min(10_000);
-        let over = flag(args, "over", false);
-        let mut lines = Vec::new();
-        for _ in 0..count {
-            let pc = self.spec.cpu.pc;
-            let insn = crate::disasm::disasm(&|a| self.spec.bus.peek_raw(a), pc);
-            if over && self.spec.is_step_over_target(pc) {
-                let after = pc.wrapping_add(insn.len as u16);
-                let stop = self.run_to(&[after], RUN_LIMIT_FRAMES)?;
-                lines.push(format!("${pc:04X}  {:<20} (over)", insn.text));
-                if !matches!(stop, Stop::Breakpoint(_)) {
-                    lines.push(format!("  did not come back: {}", describe_stop(stop)));
-                    break;
-                }
-            } else {
-                lines.push(format!("${pc:04X}  {}", insn.text));
-                self.spec.step_instruction();
-            }
-        }
-        lines.push(self.registers());
-        Ok(lines.join("\n"))
-    }
-
-    fn run_frames(&mut self, args: &Json) -> Result<String, String> {
-        let frames = count(args, "frames", 1)?.min(RUN_LIMIT_FRAMES * 10);
-        let before = self.spec.bus.frame;
-        let mut stopped = None;
-        for _ in 0..frames {
-            let stop = self.spec.run(FRAME_T);
-            if !matches!(stop, Stop::Budget) {
-                stopped = Some(stop);
-                break;
-            }
-        }
-        Ok(self.after_running(self.spec.bus.frame - before, stopped))
-    }
-
-    fn run_tstates(&mut self, args: &Json) -> Result<String, String> {
-        let want = count(args, "tstates", 1)?;
-        let before = self.spec.bus.total_t();
-        let mut left = want;
-        let mut stopped = None;
-        while left > 0 {
-            let slice = left.min(FRAME_T);
-            let stop = self.spec.run(slice);
-            let done = (self.spec.bus.total_t() - before) as u32;
-            if !matches!(stop, Stop::Budget) {
-                stopped = Some(stop);
-                break;
-            }
-            left = want.saturating_sub(done);
-        }
-        let ran = self.spec.bus.total_t() - before;
-        let mut out = format!("Ran {ran} T-states. {}", self.registers());
-        if let Some(stop) = stopped {
-            out.push_str(&format!("\nStopped: {}", describe_stop(stop)));
-        }
-        Ok(out)
-    }
-
-    fn run_until(&mut self, args: &Json) -> Result<String, String> {
-        let mut wanted = Vec::new();
-        if let Some(one) = args.get("address") {
-            wanted.push(addr_of(one)?);
-        }
-        if let Some(list) = args.get("addresses").and_then(|a| a.as_array()) {
-            for item in list {
-                wanted.push(addr_of(item)?);
-            }
-        }
-        if wanted.is_empty() {
-            return Err("run_until needs an address, or addresses".into());
-        }
-        let limit = count(args, "max_frames", RUN_LIMIT_FRAMES)?;
-        let before = self.spec.bus.frame;
-        let stop = self.run_to(&wanted, limit)?;
-        Ok(self.after_running(self.spec.bus.frame - before, Some(stop)))
-    }
-
-    /// Run with temporary breakpoints on `wanted`, putting back whatever
-    /// breakpoints were there before.
-    fn run_to(&mut self, wanted: &[u16], limit_frames: u32) -> Result<Stop, String> {
-        let kept = std::mem::take(&mut self.spec.breakpoints);
-        self.spec.breakpoints = wanted.to_vec();
-        let mut stop = Stop::Budget;
-        for _ in 0..limit_frames {
-            stop = self.spec.run(FRAME_T);
-            if !matches!(stop, Stop::Budget) {
-                break;
-            }
-        }
-        self.spec.breakpoints = kept;
-        Ok(stop)
-    }
-
-    fn watch_events(&mut self, args: &Json) -> Result<String, String> {
-        let breaks = &mut self.spec.bus.breaks;
-        for (key, field) in [
-            ("screen", 0),
-            ("beeper", 1),
-            ("ay", 2),
-            ("interrupt", 3),
-            ("rom", 4),
-            ("port_in", 5),
-            ("port_out", 6),
-        ] {
-            if let Some(on) = args.get(key).and_then(|v| v.as_bool()) {
-                match field {
-                    0 => breaks.screen = on,
-                    1 => breaks.beeper = on,
-                    2 => breaks.ay = on,
-                    3 => breaks.interrupt = on,
-                    4 => breaks.rom = on,
-                    5 => breaks.port_in = on,
-                    _ => breaks.port_out = on,
-                }
-            }
-        }
-        // A write to an address, or to a range of them. The one watch that is
-        // about a place rather than a kind of thing.
-        if let Some(value) = args.get("write_to") {
-            if value.is_null() {
-                self.spec.bus.breaks.write_range = None;
-            } else {
-                let low = addr_of(value)?;
-                let high = match args.get("write_to_end") {
-                    Some(end) => addr_of(end)?,
-                    None => low,
-                };
-                self.spec.bus.breaks.write_range = Some((low.min(high), low.max(high)));
-            }
-        }
-
-        let breaks = self.spec.bus.breaks;
-        let mut on: Vec<String> = Vec::new();
-        if let Some((low, high)) = breaks.write_range {
-            on.push(if low == high {
-                format!("writes to ${low:04X}")
-            } else {
-                format!("writes to ${low:04X}-${high:04X}")
-            });
-        }
-        for (name, set) in [
-            ("screen", breaks.screen),
-            ("beeper", breaks.beeper),
-            ("ay", breaks.ay),
-            ("interrupt", breaks.interrupt),
-            ("rom", breaks.rom),
-            ("port_in", breaks.port_in),
-            ("port_out", breaks.port_out),
-        ] {
-            if set {
-                on.push(name.to_string());
-            }
-        }
-        let watching = if on.is_empty() {
-            "nothing".to_string()
-        } else {
-            on.join(", ")
-        };
-        if flag(args, "run", false) {
-            let frames = count(args, "max_frames", RUN_LIMIT_FRAMES)?;
-            let mut stop = Stop::Budget;
-            for _ in 0..frames {
-                stop = self.spec.run(FRAME_T);
-                if !matches!(stop, Stop::Budget) {
-                    break;
-                }
-            }
-            return Ok(format!(
-                "Watching {watching}. Stopped: {}\n{}",
-                describe_stop(stop),
-                self.registers()
-            ));
-        }
-        Ok(format!(
-            "Watching {watching}. Add run: true to run until one of them happens."
-        ))
-    }
-
-    fn after_running(&self, frames: u64, stop: Option<Stop>) -> String {
-        let mut out = format!("Ran {frames} frames. {}", self.registers());
-        if let Some(stop) = stop {
-            out.push_str(&format!("\nStopped: {}", describe_stop(stop)));
-        }
-        out
-    }
 
     // ---- state -------------------------------------------------------------
 

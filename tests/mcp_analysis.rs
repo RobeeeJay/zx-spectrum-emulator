@@ -796,3 +796,65 @@ fn the_listing_can_be_written_out_with_the_comments_on_it() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// Blocks: what is code and what is data, kept in the notes so a listing keeps
+/// its shape between sessions.
+#[test]
+fn blocks_can_be_worked_out_and_written_down() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+
+    let text = call(&mut server, "blocks", Json::obj([])).unwrap();
+    assert!(text.contains("No blocks"), "{text}");
+
+    // Marked by hand.
+    call(
+        &mut server,
+        "blocks",
+        Json::obj([
+            ("from", Json::str("$9010")),
+            ("to", Json::str("$901F")),
+            ("kind", Json::str("data")),
+        ]),
+    )
+    .unwrap();
+    let text = call(&mut server, "blocks", Json::obj([])).unwrap();
+    assert!(text.contains("$9010-$901F  DATA"), "{text}");
+
+    // And worked out from what ran, keeping what was written down.
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(20_000))]),
+    )
+    .unwrap();
+    call(
+        &mut server,
+        "blocks",
+        Json::obj([("work_out", Json::Bool(true))]),
+    )
+    .unwrap();
+    let text = call(&mut server, "blocks", Json::obj([])).unwrap();
+    assert!(text.contains("CODE"), "the code that ran: {text}");
+    assert!(
+        text.contains("$9010-$901F  DATA"),
+        "and what was written down is kept: {text}"
+    );
+}
+
+/// Where the time goes, which is not the same as what is called most often.
+#[test]
+fn the_profiler_says_where_the_time_went() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    let text = call(
+        &mut server,
+        "profile",
+        Json::obj([("frames", Json::num(2))]),
+    )
+    .unwrap();
+    assert!(text.contains("Where the time went"), "{text}");
+    assert!(text.contains("$9000"), "the routine doing the work: {text}");
+    assert!(text.contains('%'), "with its share of the time: {text}");
+}

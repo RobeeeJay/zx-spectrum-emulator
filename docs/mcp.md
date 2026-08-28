@@ -84,7 +84,7 @@ quietly.
 theory (freeze the counter and see what stops moving), not for patching a file.
 
 **Watching it.** `watch_routines`, then `routines`, `routine`, `call_graph`,
-`code_map`, `xrefs`, `autodoc`.
+`code_map`, `xrefs`, `blocks`, `profile`, `frame_timing`, `autodoc`.
 
 `xrefs` answers "what refers to this address" two ways at once, and labels
 which is which: what the machine was *watched* doing is fact, and what the
@@ -158,7 +158,6 @@ the same bargain as `src/svg.rs`.
 The emulator can do these and the server does not offer them yet, which is
 worth knowing before assuming they are missing from the emulator too:
 
-- the profiler (`profiler.rs`): where the time goes;
 - Race the Beam (`race.rs`): replaying a frame instruction by instruction to
   see the picture being built;
 - the timeline (`timeline.rs`): a turn of the loop drawn against the frames it

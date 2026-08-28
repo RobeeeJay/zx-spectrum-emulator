@@ -269,6 +269,54 @@ pub fn tools() -> Json {
             &["text"],
         ),
         tool(
+            "step_forward",
+            "Step, keeping what it would take to undo it. Twenty of these can be taken back \
+             with step_back — which is what you want a moment after an instruction has done \
+             something you did not expect.",
+            [("count", prop("integer", "how many (default 1)"))],
+        ),
+        tool(
+            "step_back",
+            "Undo instructions stepped with step_forward, newest first. Running does not \
+             keep what it would take: the writes of a whole frame cost more than the frame.",
+            [("count", prop("integer", "how many to undo (default 1)"))],
+        ),
+        tool(
+            "paging",
+            "Which ROM and RAM bank a 128K has paged in, and switching them. A disassembly \
+             that does not say which bank was at $C000 is a disassembly of somewhere else.",
+            [(
+                "page_register",
+                prop("integer", "a byte to write to port $7FFD"),
+            )],
+        ),
+        tool(
+            "blocks",
+            "The runs a listing is divided into — code here, data there — kept in the notes \
+             beside the labels. With work_out it takes them from what has run, keeping \
+             anything already written down.",
+            [
+                ("work_out", prop("boolean", "take them from what has run")),
+                ("from", address("the start of a block to mark by hand")),
+                ("to", address("its last byte")),
+                ("kind", prop("string", "code or data")),
+            ],
+        ),
+        tool(
+            "profile",
+            "Where the time goes, which is not the same question as what runs most often: a \
+             routine called twice a frame that takes half of it matters more than one called \
+             two hundred times that does not. Runs the machine for a while with the profiler \
+             on and reports the ranking.",
+            [
+                ("frames", prop("integer", "how long to watch (default 50)")),
+                (
+                    "limit",
+                    prop("integer", "how many routines to list (default 20)"),
+                ),
+            ],
+        ),
+        tool(
             "registers",
             "Every register, the flags spelled out, and where the machine is in the frame.",
             [],

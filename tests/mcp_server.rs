@@ -880,3 +880,84 @@ fn the_machine_stops_at_whatever_writes_to_a_watched_address() {
     );
     assert!(server.session.spec.bus.breaks.write_range.is_none());
 }
+
+/// Stepping forward keeping the undo, and going back over it — the thing you
+/// want a moment after an instruction has done something unexpected.
+#[test]
+fn stepped_instructions_can_be_taken_back() {
+    let mut server = Server::new();
+    // LD A,$05 / LD ($9000),A / INC A
+    for (at, byte) in [
+        (0x8000u16, 0x3Eu8),
+        (0x8001, 0x05),
+        (0x8002, 0x32),
+        (0x8003, 0x00),
+        (0x8004, 0x90),
+        (0x8005, 0x3C),
+    ] {
+        server.session.spec.bus.poke(at, byte);
+    }
+    server.session.spec.bus.poke(0x9000, 0xEE);
+    server.session.spec.cpu.pc = 0x8000;
+
+    call(
+        &mut server,
+        "step_forward",
+        Json::obj([("count", Json::num(3))]),
+    )
+    .unwrap();
+    assert_eq!(server.session.spec.cpu.pc, 0x8006);
+    assert_eq!(server.session.spec.cpu.a, 6);
+    assert_eq!(server.session.spec.bus.peek_raw(0x9000), 0x05);
+
+    let text = call(
+        &mut server,
+        "step_back",
+        Json::obj([("count", Json::num(2))]),
+    )
+    .unwrap();
+    assert!(text.contains("Went back 2"), "{text}");
+    assert_eq!(server.session.spec.cpu.pc, 0x8002, "back to the store");
+    assert_eq!(
+        server.session.spec.bus.peek_raw(0x9000),
+        0xEE,
+        "and the write is undone"
+    );
+
+    // Running does not keep the undo, and says so rather than pretending.
+    let mut server = Server::new();
+    let why = call(&mut server, "step_back", Json::obj([])).unwrap_err();
+    assert!(why.contains("nothing to go back over"), "{why}");
+}
+
+/// A 128K's paging, which a disassembly is meaningless without.
+#[test]
+fn the_paging_can_be_read_and_changed_on_a_128k() {
+    let mut server = Server::new();
+    let why = call(&mut server, "paging", Json::obj([])).unwrap_err();
+    assert!(why.contains("no paging"), "a 48K has none: {why}");
+
+    let Ok(rom) = std::fs::read("roms/128.rom") else {
+        eprintln!("need roms/128.rom; skipping the rest");
+        return;
+    };
+    server
+        .session
+        .spec
+        .set_model(zx_rustrum::machine::Model::Spectrum128, &rom);
+    server.session.rom_loaded = true;
+
+    let text = call(&mut server, "paging", Json::obj([])).unwrap();
+    assert!(text.contains("RAM bank"), "{text}");
+
+    // Bank 3 at $C000, and the second ROM.
+    let text = call(
+        &mut server,
+        "paging",
+        Json::obj([("page_register", Json::num(0x13))]),
+    )
+    .unwrap();
+    assert!(text.contains("RAM bank 3"), "{text}");
+    assert!(text.contains("ROM 1"), "{text}");
+    assert_eq!(server.session.spec.bus.page_reg & 7, 3);
+}

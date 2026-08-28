@@ -820,3 +820,116 @@ pub fn export_listing(session: &mut Session, args: &Json) -> Result<String, Stri
          instructions nobody executed.",
     ))
 }
+
+/// The blocks a listing is divided into: what is code and what is data.
+///
+/// Worked out from what ran, and kept in the same notes file as the labels, so
+/// a listing keeps its shape between sessions. `blocks::work_out` reads the
+/// observer; anything already written down is kept, since a person who has
+/// looked at the bytes knows better than a run that has not reached them.
+pub fn blocks(session: &mut Session, args: &Json) -> Result<String, String> {
+    if flag(args, "work_out", false) {
+        let found = crate::blocks::work_out(&session.spec.bus.observer);
+        let merged = crate::blocks::merge(session.notes.blocks(), &found);
+        let added = merged.len().saturating_sub(session.notes.blocks().len());
+        session.notes.set_blocks(merged);
+        return Ok(format!(
+            "Worked out {} blocks from what has run; {added} of them are new. \
+             What was already written down was kept.",
+            found.len()
+        ));
+    }
+    if let (Some(from), Some(to)) = (args.get("from"), args.get("to")) {
+        let from = crate::mcp::tools::addr_of(from)?;
+        let to = crate::mcp::tools::addr_of(to)?;
+        let kind = match crate::mcp::tools::text(args, "kind")
+            .unwrap_or_else(|_| "code".into())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "code" => crate::blocks::Kind::Code,
+            "data" => crate::blocks::Kind::Data,
+            other => return Err(format!("a block is code or data, not {other:?}")),
+        };
+        let mut blocks = session.notes.blocks().to_vec();
+        blocks.push(crate::blocks::Block { from, to, kind });
+        blocks.sort();
+        session.notes.set_blocks(blocks);
+        return Ok(format!("${from:04X}-${to:04X} marked as {}.", kind.label()));
+    }
+    let blocks = session.notes.blocks();
+    if blocks.is_empty() {
+        return Ok(
+            "No blocks written down. Pass work_out: true to take them from what has run, \
+             or from and to with kind to mark one by hand."
+                .into(),
+        );
+    }
+    let mut out = format!("{} blocks:\n", blocks.len());
+    for block in blocks.iter().take(100) {
+        out.push_str(&format!(
+            "  ${:04X}-${:04X}  {:<5} {} bytes\n",
+            block.from,
+            block.to,
+            block.kind.label(),
+            block.length()
+        ));
+    }
+    Ok(out)
+}
+
+/// Where the time goes, which is a different question from what runs most
+/// often: a routine called twice a frame that takes half of it matters more
+/// than one called two hundred times that does not.
+pub fn profile(session: &mut Session, args: &Json) -> Result<String, String> {
+    let frames = count(args, "frames", 50)?.min(3000);
+    let cpu_hz = session.spec.bus.model.cpu_hz();
+    let now = session.spec.bus.total_t();
+    session.spec.profiler.start(now, cpu_hz);
+    for _ in 0..frames {
+        session.spec.run(crate::machine::FRAME_T);
+    }
+    let now = session.spec.bus.total_t();
+    session.spec.profiler.stop(now);
+
+    let run = session
+        .spec
+        .profiler
+        .runs
+        .last()
+        .ok_or("the profiler recorded nothing")?;
+    let metric = crate::profiler::Metric::SelfTime;
+    let ranked = run.ranked(metric);
+    let total = run.total(metric).max(1);
+    if ranked.is_empty() {
+        return Ok(format!(
+            "Nothing was profiled over {frames} frames. The profiler follows calls, so a \
+             program whose main loop was never itself called has nothing to attribute."
+        ));
+    }
+    let mut out = format!(
+        "Where the time went over {frames} frames ({:.2}s of the machine's own time), by \
+         time in the routine itself rather than in what it called:\n",
+        run.seconds(run.emulated_t)
+    );
+    for stats in ranked.iter().take(count(args, "limit", 20)? as usize) {
+        let share = stats.time(metric) as f64 / total as f64 * 100.0;
+        out.push_str(&format!(
+            "  ${:04X} {:<16} {share:5.1}%  {:>8} calls  {:.1}ms in itself, {:.1}ms including \
+             what it called\n",
+            stats.entry,
+            session.notes.label(stats.entry),
+            stats.calls,
+            run.seconds(stats.self_t) * 1000.0,
+            run.seconds(stats.incl_t) * 1000.0,
+        ));
+    }
+    if run.unfinished > 0 {
+        out.push_str(&format!(
+            "{} routines had not returned when the run ended; their time is counted where \
+             they were.\n",
+            run.unfinished
+        ));
+    }
+    Ok(out)
+}

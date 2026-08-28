@@ -7,6 +7,7 @@
 pub mod activity;
 pub mod analysis;
 pub mod catalogue;
+pub mod control;
 pub mod deck;
 pub mod input;
 pub mod json;
