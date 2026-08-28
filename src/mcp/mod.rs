@@ -14,6 +14,7 @@ pub mod looking;
 pub mod memory;
 pub mod names;
 pub mod picture;
+pub mod sound;
 pub mod tools;
 
 pub use tools::Session;

@@ -697,3 +697,43 @@ fn a_routine_is_placed_in_the_frame_it_ran_in() {
         "it writes to the screen, so it should say what that means: {text}"
     );
 }
+
+/// What the machine is playing, and with what. A 48K has only the beeper; a
+/// 128K has a chip whose registers say what is sounding.
+#[test]
+fn the_sound_state_is_reported_for_both_ways_of_making_a_noise() {
+    let mut server = Server::new();
+    let text = call(&mut server, "sound_state", Json::obj([])).unwrap();
+    assert!(text.contains("Beeper"), "{text}");
+    assert!(
+        text.contains("no sound chip"),
+        "a 48K has none, and should say so: {text}"
+    );
+
+    // On a 128K the registers are read back and turned into something worth
+    // reading: a middle A on channel A, tone on, volume 15.
+    let Ok(rom) = std::fs::read("roms/128.rom") else {
+        eprintln!("need roms/128.rom for the rest; skipping");
+        return;
+    };
+    server
+        .session
+        .spec
+        .set_model(zx_rustrum::machine::Model::Spectrum128, &rom);
+    server.session.rom_loaded = true;
+    let ay = &mut server.session.spec.bus.audio.ay;
+    ay.regs[0] = 0xFD; // period 253, about 440Hz
+    ay.regs[1] = 0x00;
+    ay.regs[7] = 0b0011_1110; // tone on A only, no noise
+    ay.regs[8] = 15;
+
+    let text = call(&mut server, "sound_state", Json::obj([])).unwrap();
+    assert!(text.contains("AY-3-8912"), "{text}");
+    assert!(text.contains("channel A: tone"), "{text}");
+    assert!(text.contains("volume 15"), "{text}");
+    assert!(
+        text.contains("437 Hz") || text.contains("438 Hz") || text.contains("440 Hz"),
+        "the period should be turned into a pitch: {text}"
+    );
+    assert!(text.contains("channel B: no tone"), "{text}");
+}

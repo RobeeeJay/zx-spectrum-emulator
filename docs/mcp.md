@@ -100,6 +100,12 @@ The variable hunt: `save_state`, lose a life, `changed_since` — the counter is
 among the handful of addresses that come back. The display file is left out
 unless asked for, since it changes every frame and would bury the answer.
 
+**Hearing it.** `sound_state`.
+
+The beeper bit of port $FE, and on a 128K the AY's registers with what they
+mean channel by channel — tone, noise, volume, period turned into a pitch.
+`watch_events` with `beeper` or `ay` finds the routine doing it.
+
 **Keeping it.** `save_state`, `restore_state` — by name in the session, or as a
 `.sna` file. An experiment that goes wrong is undone by putting the machine
 back.
@@ -149,4 +155,4 @@ worth knowing before assuming they are missing from the emulator too:
   see the picture being built;
 - the timeline (`timeline.rs`): a turn of the loop drawn against the frames it
   ran in;
-- the ZX81, and the 128K's AY registers;
+- the ZX81;

@@ -185,6 +185,7 @@ impl Session {
             "xrefs" => crate::mcp::analysis::xrefs(self, args),
             "memory_activity" => crate::mcp::activity::memory_activity(self, args),
             "frame_timing" => crate::mcp::analysis::frame_timing(self, args),
+            "sound_state" => crate::mcp::sound::sound_state(self, args),
             "load_symbols" => crate::mcp::names::load_symbols(self, args),
             "symbols" => crate::mcp::names::list_symbols(self, args),
             "identify" => crate::mcp::names::identify(self, args),

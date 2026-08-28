@@ -457,6 +457,14 @@ pub fn tools() -> Json {
             &["address"],
         ),
         tool(
+            "sound_state",
+            "What the machine is making a noise with: the beeper bit of port $FE, and — on a \
+             128K — the AY's fourteen registers with what they mean, channel by channel: \
+             tone, noise, volume, period in Hz. Watch the ay or beeper events to find the \
+             routine doing it.",
+            [],
+        ),
+        tool(
             "frame_timing",
             "Where the beam is, and when in the frame a watched routine ran. On this machine \
              when is half the question: the ULA puts the picture out as it goes, so a write \
