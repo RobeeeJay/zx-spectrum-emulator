@@ -31,7 +31,17 @@ pub fn disassemble(session: &mut Session, args: &Json) -> Result<String, String>
             .iter()
             .map(|b| format!("{b:02X} "))
             .collect::<String>();
-        let label = session.notes.label(at);
+        // A name typed in this session wins; a name from a symbol file fills
+        // in where there is none, which is what makes a ROM call readable.
+        let own = session.notes.label(at);
+        let from_file = session.symbols.get(at);
+        let label = if !own.is_empty() {
+            own.to_string()
+        } else {
+            from_file
+                .map(|(name, _)| name.to_string())
+                .unwrap_or_default()
+        };
         let comment = session.notes.comment(at);
         let executed = session.spec.bus.observer.was_executed(at);
         let data = session.spec.bus.observer.is_data(at);
@@ -41,6 +51,20 @@ pub fn disassemble(session: &mut Session, args: &Json) -> Result<String, String>
         }
         out.push_str(&format!("${at:04X}  {bytes:<12} {:<20}", insn.text));
         let mut notes = Vec::new();
+        // Where the instruction names an address that has a name, say so on
+        // the line: "CALL $0D6B" means nothing, "CALL $0D6B (rom_cls)" does.
+        if comments && insn.len == 3 {
+            let target = u16::from_le_bytes([insn.bytes[1], insn.bytes[2]]);
+            let own = session.notes.label(target);
+            let named = if own.is_empty() {
+                session.symbols.get(target).map(|(n, _)| n.to_string())
+            } else {
+                Some(own.to_string())
+            };
+            if let Some(name) = named {
+                notes.push(format!("-> {name}"));
+            }
+        }
         if executed {
             notes.push("run".to_string());
         } else if data {

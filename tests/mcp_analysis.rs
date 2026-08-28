@@ -455,3 +455,112 @@ fn an_address_with_no_references_says_so() {
     .unwrap();
     assert!(text.contains("nothing in"), "{text}");
 }
+
+/// Names out of a symbol file are what turn "CALL $0D6B" into something worth
+/// reading, and they fill in where nothing has been typed rather than over it.
+#[test]
+fn symbols_from_a_file_name_the_calls() {
+    let dir = std::env::temp_dir().join("zxrs-mcp-symbols");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("symbols.txt");
+    std::fs::write(
+        &path,
+        "# a couple of names\n\
+         9000 fill_screen ; fills the top line\n\
+         0D6B rom_cls ; clears the screen\n",
+    )
+    .unwrap();
+
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    let loaded = call(
+        &mut server,
+        "load_symbols",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    )
+    .unwrap();
+    assert!(loaded.contains('2'), "two names should be read: {loaded}");
+
+    // The call at $8000 names $9000, which now has a name.
+    let listing = call(
+        &mut server,
+        "disassemble",
+        Json::obj([("address", Json::str("$8000")), ("count", Json::num(2))]),
+    )
+    .unwrap();
+    assert!(
+        listing.contains("-> fill_screen"),
+        "the call should say what it calls: {listing}"
+    );
+
+    // And at the routine itself the name is used as its label.
+    let listing = call(
+        &mut server,
+        "disassemble",
+        Json::obj([("address", Json::str("$9000")), ("count", Json::num(1))]),
+    )
+    .unwrap();
+    assert!(listing.contains("fill_screen:"), "{listing}");
+
+    // Something typed here wins over the file.
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$9000")),
+            ("label", Json::str("draw_row")),
+        ]),
+    )
+    .unwrap();
+    let listing = call(
+        &mut server,
+        "disassemble",
+        Json::obj([("address", Json::str("$9000")), ("count", Json::num(1))]),
+    )
+    .unwrap();
+    assert!(listing.contains("draw_row:"), "{listing}");
+    assert!(!listing.contains("fill_screen:"), "{listing}");
+
+    let listed = call(&mut server, "symbols", Json::obj([])).unwrap();
+    assert!(listed.contains("rom_cls"), "{listed}");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A routine copied out of the ROM is recognised where it landed, because the
+/// bytes hash the same wherever they are.
+#[test]
+fn a_rom_routine_copied_into_ram_is_recognised() {
+    let Ok(rom) = std::fs::read("roms/48.rom") else {
+        eprintln!("need roms/48.rom; skipping");
+        return;
+    };
+    let mut server = Server::new();
+    server.session.spec.load_rom(&rom);
+    server.session.rom_loaded = true;
+    call(&mut server, "load_symbols", Json::obj([])).unwrap();
+
+    // Copy the ROM's own CLS into RAM, as a game would.
+    for i in 0..32u16 {
+        let byte = server.session.spec.bus.peek_raw(0x0D6B + i);
+        server.session.spec.bus.poke(0x9000 + i, byte);
+    }
+    let text = call(
+        &mut server,
+        "identify",
+        Json::obj([("address", Json::str("$9000"))]),
+    )
+    .unwrap();
+    assert!(
+        text.contains("copied here"),
+        "it should say it is a copy, and of what: {text}"
+    );
+
+    // And where nothing matches, it says that rather than inventing one.
+    let text = call(
+        &mut server,
+        "identify",
+        Json::obj([("address", Json::str("$A000"))]),
+    )
+    .unwrap();
+    assert!(text.contains("does not match"), "{text}");
+}

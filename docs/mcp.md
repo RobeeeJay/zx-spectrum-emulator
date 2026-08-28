@@ -47,7 +47,15 @@ set to, for one that cannot. `graphics` reads memory as characters and sprites,
 eight bytes each, which is how graphics are found: point it at a candidate
 address and see whether letters, a sprite or rubbish comes out.
 
-**Reading it.** `registers`, `read_memory`, `write_memory`, `disassemble`.
+**Reading it.** `registers`, `read_memory`, `write_memory`, `disassemble`,
+`load_symbols`, `symbols`, `identify`.
+
+`load_symbols` reads the symbol files for the machine out of the preferences
+directory — `tools/rom-symbols.py` and `tools/skool-symbols.py` write them —
+and builds the table of routines recognisable by their first twelve bytes.
+After it, `disassemble` names the address a `CALL` names, and `identify` will
+tell you that the code a game copied to $9000 is the ROM's own CLS. A name
+typed with `set_comment` always wins over one from a file.
 
 Addresses may be numbers or strings: `32768`, `"$8000"`, `"0x8000"`, `"8000h"`.
 A bare string of digits is decimal, deliberately — reading decimal addresses as
@@ -125,6 +133,5 @@ worth knowing before assuming they are missing from the emulator too:
   ran in;
 - the tape deck's own contents — blocks, loaders recognised by
   `flashload::CORES`, where a turbo block starts;
-- ROM symbol files and SkoolKit disassemblies (`autodoc::Symbols`);
 - the ZX81, and the 128K's AY registers;
 - keyboard input, other than the `LOAD ""` that `load_tape` types.

@@ -339,6 +339,34 @@ pub fn tools() -> Json {
                 prop("integer", "shortest data block to report (default 8)"),
             )],
         ),
+        tool(
+            "load_symbols",
+            "Read names for addresses out of a symbol file — a ROM disassembly turned into \
+             one by tools/rom-symbols.py, or a game's by tools/skool-symbols.py — and build \
+             the table of routines recognisable by their first bytes. With no path it reads \
+             the files for this machine from the preferences directory. Names loaded this \
+             way appear in disassemble, and a CALL to a named address says which.",
+            [(
+                "path",
+                prop("string", "a symbol file; the machine's own by default"),
+            )],
+        ),
+        tool(
+            "symbols",
+            "The names that came from a symbol file, in an address range.",
+            [
+                ("from", address("lowest address")),
+                ("to", address("highest address")),
+            ],
+        ),
+        schema_tool(
+            "identify",
+            "What the code at an address is, if its first twelve bytes are a routine that is \
+             known. Games copy ROM routines into RAM and the bytes hash the same wherever \
+             they land, so a copy is named after the original and said to be one.",
+            [("address", address("where the code starts"))],
+            &["address"],
+        ),
         schema_tool(
             "xrefs",
             "Everything that refers to an address, both ways round: which routines were \
