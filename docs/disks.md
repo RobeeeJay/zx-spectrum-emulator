@@ -64,10 +64,16 @@ an empty disk is a bright band at the edge with nothing behind it. The bits are
 drawn as bits, white for a one and black for a nought, clockwise from the top.
 
 Not all of them: a track is nine 512-byte sectors, 36,864 bits, and a ring a
-few hundred pixels round cannot hold them, so one bit is sampled per step
-around the ring. What that shows is the pattern rather than a transcript — a
-track of code looks nothing like a track of $E5, and an unformatted one like
-neither — and the tooltip says so.
+few hundred pixels round cannot hold them. What is drawn is the top bit of
+every nth byte, n being whatever fits the ring at three pixels a bit.
+
+The byte alignment matters more than it sounds. Sampling every nth *bit*
+walks through the bits of a repeating pattern and turns it into noise: a track
+of the formatter's $E5 came out looking exactly like a track of code, which is
+the one thing the picture is for telling apart. Aligned to bytes, a track of
+one repeated byte is one flat colour, so an unwritten disk is a set of clean
+rings and a full one is speckle — and where a game's files stop is visible at
+a glance.
 
 Reads light green over the sector they touched and writes amber, both fading,
 so a load draws itself round the disk as it happens; a ring marks the track the

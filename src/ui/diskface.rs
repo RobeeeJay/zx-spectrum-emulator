@@ -56,18 +56,34 @@ impl Platter {
 /// itself, then the band the tracks are written in, then the hub.
 const EDGE: f32 = 0.98;
 const OUTER: f32 = 0.94;
-const INNER: f32 = 0.34;
+const INNER: f32 = 0.30;
 const HUB: f32 = 0.20;
 const SPINDLE: f32 = 0.07;
 
-/// Which track a radius is in, if any, and how far through the band it is.
-fn track_at(radius: f32, tracks: usize) -> Option<usize> {
+/// How much of a track's width is the gap between it and the next.
+///
+/// Without one the rings run together and the picture is a field of noise
+/// rather than forty tracks. A real disk has a guard band between tracks for
+/// its own reasons, so this is not a lie about the disk either.
+const GUARD: f32 = 0.32;
+
+/// How wide a drawn bit is, in pixels.
+///
+/// One bit per pixel is what makes moiré: 36,864 bits round a ring a few
+/// hundred pixels long beat against the pixels and come out as swirls. A bit
+/// three pixels wide is a bit somebody can see.
+const BIT_PIXELS: f32 = 3.0;
+
+/// Which track a radius is in, and where across that track's own width it
+/// sits — 0 at its outer edge, 1 at its inner one.
+fn track_at(radius: f32, tracks: usize) -> Option<(usize, f32)> {
     if !(INNER..=OUTER).contains(&radius) || tracks == 0 {
         return None;
     }
     // Track 0 is the outermost, as it is on the disk.
-    let through = (OUTER - radius) / (OUTER - INNER);
-    Some(((through * tracks as f32) as usize).min(tracks - 1))
+    let through = (OUTER - radius) / (OUTER - INNER) * tracks as f32;
+    let track = (through as usize).min(tracks - 1);
+    Some((track, through - track as f32))
 }
 
 /// Rasterise the disk: black and white bits in rings, on a dark ground.
@@ -107,7 +123,13 @@ pub fn draw(disk: &Disk, size: usize) -> egui::ColorImage {
             } else {
                 match track_at(radius, tracks) {
                     None => egui::Color32::from_rgb(0x1a, 0x18, 0x18),
-                    Some(track) => {
+                    // The guard band between one track and the next, which a
+                    // real disk has for its own reasons and which is what
+                    // makes forty rings read as forty rings.
+                    Some((_, across)) if across > 1.0 - GUARD => {
+                        egui::Color32::from_rgb(0x14, 0x13, 0x13)
+                    }
+                    Some((track, _)) => {
                         let data = &bits[track];
                         if data.is_empty() {
                             // A track the disk has not got: unformatted, and
@@ -119,10 +141,21 @@ pub fn draw(disk: &Disk, size: usize) -> egui::ColorImage {
                             let angle = dy.atan2(dx) + std::f32::consts::FRAC_PI_2;
                             let turn =
                                 angle.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
-                            let total = data.len() * 8;
-                            let bit = ((turn * total as f32) as usize).min(total - 1);
-                            let byte = data[bit / 8];
-                            if byte & (0x80 >> (bit % 8)) != 0 {
+                            // How many bits this ring has room for at a width
+                            // somebody can see: fewer the further in it is.
+                            let circumference = std::f32::consts::TAU * radius * half;
+                            let steps = (circumference / BIT_PIXELS).clamp(48.0, 2048.0) as usize;
+                            let step = ((turn * steps as f32) as usize).min(steps - 1);
+                            // The same bit of every nth byte, rather than
+                            // every nth bit. A stride that is not a whole
+                            // number of bytes walks through the bits of a
+                            // repeating pattern and turns it into noise: a
+                            // track of the formatter's $E5 came out looking
+                            // exactly like a track of code, which is the one
+                            // thing this picture is for telling apart.
+                            let stride = (data.len() / steps).max(1);
+                            let byte = data[(step * stride).min(data.len() - 1)];
+                            if byte & 0x80 != 0 {
                                 egui::Color32::WHITE
                             } else {
                                 egui::Color32::BLACK
