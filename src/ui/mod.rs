@@ -5,6 +5,7 @@ pub mod callflow;
 pub mod cassette;
 pub mod crt;
 pub mod debugger;
+pub mod disk;
 pub mod keyboard;
 pub mod profiler;
 pub mod ram_map;
@@ -459,6 +460,10 @@ pub struct App {
     pub show_profiler: bool,
     /// The machine's own keyboard, drawn and pressable.
     pub show_keyboard: bool,
+    /// A disk read and waiting to be told how its writes should be treated.
+    pub pending_disk: Option<disk::Pending>,
+    /// How the disk in drive A: was put in, if there is one.
+    pub disk_mounted: Option<disk::Mounted>,
     /// Which keys are down and which are lit, for that window.
     pub keys: crate::keyboard::Keys,
 
@@ -602,6 +607,8 @@ impl App {
             show_tape: false,
             show_profiler: false,
             show_keyboard: false,
+            pending_disk: None,
+            disk_mounted: None,
             keys: crate::keyboard::Keys::default(),
             screen_pixels: vec![0; screen::View::OVERSCAN.buffer_len()],
             screen_tex: None,
@@ -675,6 +682,13 @@ impl App {
             );
             return;
         };
+        // Whatever was in the drive goes with the machine that had it: a
+        // 48K has nowhere to put a disk, and the writes so far are the user's.
+        if self.spec.bus.fdc.drives[0].is_some() {
+            self.save_disk();
+            self.spec.bus.fdc.drives[0] = None;
+            self.disk_mounted = None;
+        }
         self.spec.set_model(model, &rom);
         self.leftover = 0.0;
         self.running = true;
@@ -1035,6 +1049,9 @@ impl App {
             // `.rzx`: the recordings end up greyed out and unselectable. The
             // file is checked when it is opened instead.
             Some(FileKind::Recording) => dialog,
+            // Same reason as the recordings: nothing on this machine claims
+            // `.dsk` either, and a greyed-out disk is worse than no filter.
+            Some(FileKind::Disk) => dialog,
             None => dialog
                 .add_filter(
                     "Tape, snapshot or ROM",
@@ -1501,6 +1518,15 @@ impl App {
                 }
             }
             "rzx" => self.load_recording(path),
+            // A disk only goes into a machine with a drive, so bring one up.
+            "dsk" => {
+                if self.on_zx81() || !self.spec.bus.model.has_disk() {
+                    self.switch_model(Model::Plus3);
+                }
+                if self.spec.bus.model.has_disk() {
+                    self.open_disk(path);
+                }
+            }
             "sna" | "z80" => match snapshot::probe_model(path) {
                 Ok(model) => {
                     self.switch_model(model);
@@ -2864,6 +2890,8 @@ impl App {
                 }
             }
 
+            self.disk_row(ui);
+
             theme::divider(ui);
             theme::group_label(ui, "Record");
             self.rzx_button(ui);
@@ -3465,10 +3493,13 @@ impl eframe::App for App {
         self.draw_main(ui);
     }
 
-    /// Keep the layout for next time.
+    /// Keep the layout for next time, and write anything that has changed.
     fn on_exit(&mut self) {
         self.save_window_state();
         let _ = self.notes.save_if_dirty();
+        // A disk written to during the session, written back before the
+        // window goes: the machine has already been told the write happened.
+        self.save_disk();
     }
 }
 
@@ -3537,6 +3568,8 @@ impl App {
             self.machine_row(ui);
             self.video_row(ui);
         });
+        let ctx = ui.ctx().clone();
+        self.disk_prompt(&ctx);
         egui::Panel::bottom("status").show(ui, |ui| {
             self.controls_row(ui);
             let status = self.status.clone();

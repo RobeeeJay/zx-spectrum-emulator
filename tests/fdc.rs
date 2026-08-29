@@ -339,3 +339,215 @@ fn the_plus3_rom_can_read_a_blank_disk() {
         fdc.last_command.unwrap_or(0)
     );
 }
+
+/// Reading the screen back as text, by matching each character cell against
+/// the ROM's own font. A disk test that cannot read what the machine printed
+/// is a test of what the controller was asked, not of what it answered.
+fn screen_text(spec: &zx_rustrum::machine::Spectrum, rom: &[u8]) -> Vec<String> {
+    // The +3's four ROMs are one file; the 48K BASIC ROM is the last of them,
+    // and its font is where a 48K's is.
+    let font = &rom[0xC000 + 0x3D00..0xC000 + 0x3D00 + 96 * 8];
+    let mut lines = Vec::new();
+    for row in 0..24usize {
+        let mut line = String::new();
+        for col in 0..32usize {
+            let mut cell = [0u8; 8];
+            for (i, byte) in cell.iter_mut().enumerate() {
+                let y = row * 8 + i;
+                // The display file's thirds and rows, which is why this is not
+                // simply row * 32.
+                let addr = 0x4000 + ((y & 0xC0) << 5) + ((y & 0x07) << 8) + ((y & 0x38) << 2) + col;
+                *byte = spec.bus.peek_raw(addr as u16);
+            }
+            let mut found = ' ';
+            for c in 0..96usize {
+                let glyph = &font[c * 8..c * 8 + 8];
+                // Inverse video is the same glyph, so it reads as the same
+                // character: the menu and the report line use it.
+                let inverted: Vec<u8> = glyph.iter().map(|b| !b).collect();
+                if glyph == cell || inverted == cell {
+                    found = (32 + c as u8) as char;
+                    break;
+                }
+            }
+            line.push(found);
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    lines
+}
+
+/// A +3, its own ROM, and a disk: what the machine prints when it is asked to
+/// catalogue a blank one, and what happens when it is asked to save.
+///
+/// This is the test that says the controller works. The others say it answers
+/// the questions they thought to ask.
+#[test]
+fn the_plus3_catalogues_and_writes_to_a_disk() {
+    use zx_rustrum::machine::{Model, Spectrum, FRAME_T};
+
+    let Ok(rom) = std::fs::read("roms/plus3.rom") else {
+        eprintln!("need roms/plus3.rom; skipping");
+        return;
+    };
+    let mut spec = Spectrum::new();
+    spec.set_model(Model::Plus3, &rom);
+    spec.reset();
+    spec.bus.fdc.drives[0] = Some(Drive::new(Disk::blank("test"), None, false));
+
+    let hold = |spec: &mut Spectrum, keys: &[(usize, u8)], frames: u32| {
+        for (row, bit) in keys {
+            spec.bus.keys[*row] &= !(1 << bit);
+        }
+        for _ in 0..frames {
+            spec.run(FRAME_T);
+        }
+        for (row, bit) in keys {
+            spec.bus.keys[*row] |= 1 << bit;
+        }
+        for _ in 0..frames {
+            spec.run(FRAME_T);
+        }
+    };
+    let key_of = |c: char| -> Option<(usize, u8, bool)> {
+        const MATRIX: &[(char, usize, u8)] = &[
+            ('1', 3, 0),
+            ('2', 3, 1),
+            ('3', 3, 2),
+            ('4', 3, 3),
+            ('5', 3, 4),
+            ('6', 4, 4),
+            ('7', 4, 3),
+            ('8', 4, 2),
+            ('9', 4, 1),
+            ('0', 4, 0),
+            ('Q', 2, 0),
+            ('W', 2, 1),
+            ('E', 2, 2),
+            ('R', 2, 3),
+            ('T', 2, 4),
+            ('Y', 5, 4),
+            ('U', 5, 3),
+            ('I', 5, 2),
+            ('O', 5, 1),
+            ('P', 5, 0),
+            ('A', 1, 0),
+            ('S', 1, 1),
+            ('D', 1, 2),
+            ('F', 1, 3),
+            ('G', 1, 4),
+            ('H', 6, 4),
+            ('J', 6, 3),
+            ('K', 6, 2),
+            ('L', 6, 1),
+            ('\n', 6, 0),
+            ('Z', 0, 1),
+            ('X', 0, 2),
+            ('C', 0, 3),
+            ('V', 0, 4),
+            ('B', 7, 4),
+            ('N', 7, 3),
+            ('M', 7, 2),
+            (' ', 7, 0),
+        ];
+        let upper = c.to_ascii_uppercase();
+        if let Some((_, r, b)) = MATRIX.iter().find(|(k, _, _)| *k == upper) {
+            return Some((*r, *b, false));
+        }
+        // What SYMBOL SHIFT gives, for the few this needs.
+        const SYMBOLS: &[(char, usize, u8)] = &[('"', 5, 0), (',', 7, 3)];
+        SYMBOLS
+            .iter()
+            .find(|(k, _, _)| *k == c)
+            .map(|(_, r, b)| (*r, *b, true))
+    };
+    let typed = |spec: &mut Spectrum, text: &str| {
+        for c in text.chars() {
+            let Some((row, bit, shifted)) = key_of(c) else {
+                continue;
+            };
+            if shifted {
+                spec.bus.keys[7] &= !(1 << 1);
+            }
+            hold(spec, &[(row, bit)], 6);
+            if shifted {
+                spec.bus.keys[7] |= 1 << 1;
+            }
+        }
+    };
+
+    // The menu comes up with Loader picked; down one is +3 BASIC.
+    for _ in 0..250 {
+        spec.run(FRAME_T);
+    }
+    let menu = screen_text(&spec, &rom).join("\n");
+    assert!(
+        menu.contains("Drives A: and M: available"),
+        "the ROM should find the drive: {menu}"
+    );
+    hold(&mut spec, &[(0, 0), (4, 4)], 8); // CAPS SHIFT with 6: down
+    hold(&mut spec, &[(6, 0)], 8); // ENTER
+    for _ in 0..120 {
+        spec.run(FRAME_T);
+    }
+
+    typed(&mut spec, "cat\n");
+    for _ in 0..300 {
+        spec.run(FRAME_T);
+    }
+    let listing = screen_text(&spec, &rom).join("\n");
+    assert!(
+        listing.contains("No files found"),
+        "a blank disk holds nothing: {listing}"
+    );
+    assert!(
+        listing.contains("178K free"),
+        "and a +3 data disk has 178K of room on it: {listing}"
+    );
+    assert_eq!(spec.bus.fdc.errors, 0, "and it read it without an error");
+
+    // Now write something. The report line eats the next keypress, so a
+    // throwaway one goes first.
+    let before = spec.bus.fdc.commands;
+    typed(&mut spec, " ");
+    for _ in 0..120 {
+        spec.run(FRAME_T);
+    }
+    typed(&mut spec, "save \"t\" code 30000,10\n");
+    for _ in 0..600 {
+        spec.run(FRAME_T);
+    }
+    let after = screen_text(&spec, &rom).join("\n");
+    assert!(
+        after.contains("0 OK"),
+        "the save should have finished without complaint: {after}"
+    );
+    assert!(
+        spec.bus.fdc.commands > before,
+        "and gone through the controller"
+    );
+    assert_eq!(spec.bus.fdc.errors, 0);
+
+    // What was written is on the disk: +3DOS keeps its directory in the first
+    // sectors of track 0, and the name is in it.
+    let drive = spec.bus.fdc.drives[0].as_ref().unwrap();
+    assert!(drive.disk.dirty, "the disk knows it was written to");
+    let directory: Vec<u8> = drive
+        .disk
+        .track(0, 0)
+        .unwrap()
+        .sectors
+        .iter()
+        .flat_map(|s| s.data.iter().copied())
+        .collect();
+    // A CP/M directory entry is user number, eight bytes of name, three of
+    // type. The name is padded with spaces, so "T" is "T       ".
+    let entry = directory
+        .chunks(32)
+        .find(|entry| entry[0] == 0 && entry[1] == b'T' && entry[2] == b' ');
+    assert!(
+        entry.is_some(),
+        "the file's name should be in the directory: {:02X?}",
+        &directory[..64]
+    );
+}

@@ -124,6 +124,8 @@ pub struct Prefs {
     /// of, and sending somebody back to wherever they last opened a snapshot
     /// is sending them somewhere else entirely.
     pub recording_dir: Option<PathBuf>,
+    /// Where the +3 disks are.
+    pub disk_dir: Option<PathBuf>,
     /// Where each window was when the emulator last closed.
     pub windows: BTreeMap<String, WindowRect>,
     /// Display scale, as a multiple of the Spectrum's own pixels.
@@ -184,6 +186,7 @@ impl Prefs {
                 "tape_dir" => prefs.tape_dir = path,
                 "snapshot_dir" => prefs.snapshot_dir = path,
                 "recording_dir" => prefs.recording_dir = path,
+                "disk_dir" => prefs.disk_dir = path,
                 "display_scale" => prefs.display_scale = value.parse().ok(),
                 "overscan" => prefs.overscan = value.parse().ok(),
                 "open_windows" => {
@@ -227,6 +230,7 @@ impl Prefs {
         line(&mut s, "tape_dir", &self.tape_dir);
         line(&mut s, "snapshot_dir", &self.snapshot_dir);
         line(&mut s, "recording_dir", &self.recording_dir);
+        line(&mut s, "disk_dir", &self.disk_dir);
         if let Some(scale) = self.display_scale {
             s.push_str(&format!("display_scale = \"{scale}\"\n"));
         }
@@ -269,6 +273,7 @@ impl Prefs {
             FileKind::Tape => self.tape_dir = Some(dir),
             FileKind::Snapshot => self.snapshot_dir = Some(dir),
             FileKind::Recording => self.recording_dir = Some(dir),
+            FileKind::Disk => self.disk_dir = Some(dir),
         }
         self.save();
     }
@@ -314,6 +319,7 @@ impl Prefs {
                 .as_ref()
                 .or(self.tape_dir.as_ref())
                 .or(self.snapshot_dir.as_ref()),
+            FileKind::Disk => self.disk_dir.as_ref().or(self.tape_dir.as_ref()),
         }
     }
 }
@@ -326,6 +332,9 @@ pub enum FileKind {
     /// An RZX recording. Kept where its game is rather than with the
     /// snapshots, and remembered separately.
     Recording,
+    /// A +3 disk image. Kept apart from tapes: somebody with disks has a
+    /// directory of them.
+    Disk,
 }
 
 impl FileKind {
@@ -340,6 +349,7 @@ impl FileKind {
             "rom" | "bin" => Some(FileKind::Rom),
             "tzx" | "tap" => Some(FileKind::Tape),
             "sna" | "z80" => Some(FileKind::Snapshot),
+            "dsk" => Some(FileKind::Disk),
             _ => None,
         }
     }

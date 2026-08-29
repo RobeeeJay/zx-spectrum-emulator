@@ -673,6 +673,15 @@ matches the tape byte for byte, and it types `LOAD ""` on the emulated keyboard
 and loads a whole game from a real TZX. Tests that need `roms/48.rom` or
 `tapes/` skip themselves when those are absent.
 
+## Disks
+
+The +3 has a working disk interface: a µPD765A controller and `.dsk` images,
+read-only or writable. Inserting a writable disk asks first whether writes
+should go to a copy, so a game cannot quietly rewrite the image it came from,
+and **New disk…** makes a blank one formatted as the machine's own FORMAT
+formats it. [`docs/disks.md`](docs/disks.md) says what is emulated and what is
+not.
+
 ## Driving it from a program
 
 `cargo run --release --bin mcp` runs the emulator as an

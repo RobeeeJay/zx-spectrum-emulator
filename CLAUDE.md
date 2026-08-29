@@ -337,6 +337,17 @@ carry keys the rubber ones did not; what is drawn for them is the matrix they
 share with the 48K, which is honest about what the machine reads and not a
 picture of their case.
 
+**The +3 has a disk controller now, and no clock.** `src/fdc.rs` is a µPD765A
+as far as +3DOS can tell — the three phases, and the commands the ROM uses —
+and `src/disk.rs` reads and writes DSK files, which hold what the controller
+would have read off the surface rather than a filesystem. Nothing is timed: a
+real controller makes the program wait for the head and the motor, and this one
+answers at once. +3DOS polls rather than counting so it cannot tell, but a
+loader that measures the wait could. A disk is mounted read-only, writing to a
+copy, or writing in place, and the question is asked rather than guessed at:
+a game writes its high scores to the disk it loaded from.
+[`docs/disks.md`](docs/disks.md) has the rest.
+
 **A watch can be on a place as well as on a kind of thing.** `Breaks` carries
 watches for the sorts of thing a program does — a screen write, the beeper, an
 `IN` — and `write_range`, which is a watch on an address. It costs one
