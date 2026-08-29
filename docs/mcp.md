@@ -31,6 +31,13 @@ interesting code is.
 
 **The map, before disassembling.** `memory_activity`, `tape_blocks`, `loader`.
 
+**The +3's drive.** `mount_disk`, `new_disk`, `eject_disk`, `disk_info`,
+`disk_speed`, `disk_catalogue`, `read_sector`, `disk_activity`. A disk is
+mounted read-only unless asked otherwise, and a writable mount says where the
+writes go — `copy_to` writes the image to a new file first. `read_sector` reads
+the image rather than driving the drive, so it works whatever the machine is
+doing. See [`disks.md`](disks.md).
+
 `memory_activity` is the access map: reads, writes and whether anything ran
 there, per 256-byte page, with a guess at what each page is for and whether a
 back buffer has been detected. `tape_blocks` decodes the headers — what loads

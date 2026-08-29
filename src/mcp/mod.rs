@@ -9,6 +9,7 @@ pub mod analysis;
 pub mod catalogue;
 pub mod control;
 pub mod deck;
+pub mod disk;
 pub mod input;
 pub mod json;
 pub mod looking;

@@ -152,6 +152,94 @@ pub fn tools() -> Json {
                 prop("integer", "how many blocks to list (default 60)"),
             )],
         ),
+        schema_tool(
+            "mount_disk",
+            "Put a .dsk in the +3's drive. Read-only unless told otherwise: a game writes \
+             its high scores to the disk it loaded from, and doing that to somebody's file \
+             uninvited is not on. writable sends writes to the file itself; copy_to writes \
+             the image to a new file first and sends them there, leaving the original as it \
+             was.",
+            [
+                ("path", prop("string", "the disk image")),
+                (
+                    "writable",
+                    prop("boolean", "let writes go to this file (default false)"),
+                ),
+                (
+                    "copy_to",
+                    prop("string", "copy it here first, and write to the copy"),
+                ),
+            ],
+            &["path"],
+        ),
+        tool(
+            "new_disk",
+            "A blank disk, formatted as the machine's own FORMAT formats one — forty tracks \
+             of nine 512-byte sectors numbered from $C1, filled with $E5, which is what an \
+             empty CP/M directory entry starts with. Writable. Without a path it exists \
+             only in the drive.",
+            [("path", prop("string", "where to keep it"))],
+        ),
+        tool(
+            "eject_disk",
+            "Take the disk out, writing it back first if it has been changed and has \
+             somewhere to go.",
+            [],
+        ),
+        tool(
+            "disk_info",
+            "What is in the drive: its size and format, whether it can be written to and \
+             whether it has been, where the head is, whether the motor is turning, and \
+             which speed the drive is running at.",
+            [],
+        ),
+        schema_tool(
+            "disk_speed",
+            "How the drive behaves about time. \"normal\" makes the machine wait as a real \
+             drive does — a second for the motor, a step a track for the head, a sector \
+             coming round every twenty-second of a second — so a load takes the time it \
+             took. \"fastload\" answers at once.",
+            [("speed", prop("string", "normal or fastload"))],
+            &["speed"],
+        ),
+        tool(
+            "disk_catalogue",
+            "What is on the disk, as CAT prints it: the CP/M directory at the front, with \
+             each file's size and whether it is read-only or hidden. The hidden ones do not \
+             appear in the machine's own CAT and are usually where a game keeps its code.",
+            [],
+        ),
+        schema_tool(
+            "read_sector",
+            "A sector off the disk, by track and sector number — the number in its address \
+             mark, which is what the controller matches on, not where it sits on the track. \
+             This reads the image rather than driving the drive, so it works whatever the \
+             machine is doing.",
+            [
+                ("track", prop("integer", "which track")),
+                ("side", prop("integer", "which side (default 0)")),
+                (
+                    "sector",
+                    address("the sector's number, $C1 and up on a +3 disk"),
+                ),
+                (
+                    "offset",
+                    prop("integer", "where in the sector to start (default 0)"),
+                ),
+                (
+                    "length",
+                    prop("integer", "how many bytes (default the whole sector)"),
+                ),
+            ],
+            &["track"],
+        ),
+        tool(
+            "disk_activity",
+            "Which sectors the machine has read and written lately, brightest first. The \
+             map fades over a couple of seconds, so this is what a game is loading now \
+             rather than everything it has ever loaded.",
+            [],
+        ),
         tool(
             "loader",
             "Which loader the machine is sitting in, read off the sampling loop it is \

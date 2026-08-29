@@ -927,3 +927,104 @@ fn a_recording_can_be_played_and_sought() {
     .unwrap();
     assert_eq!(server.session.rzx.as_ref().unwrap().frame, 12);
 }
+
+/// The +3's drive through the server: what goes in, what is on it, and what
+/// the machine has been reading.
+#[test]
+fn a_disk_can_be_mounted_read_and_catalogued() {
+    let Ok(rom) = std::fs::read("roms/plus3.rom") else {
+        eprintln!("need roms/plus3.rom; skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join("zxrs-mcp-disk");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.dsk");
+
+    let mut server = Server::new();
+    server
+        .session
+        .spec
+        .set_model(zx_rustrum::machine::Model::Plus3, &rom);
+    server.session.rom_loaded = true;
+
+    // A blank disk, written where it was asked for.
+    let text = call(
+        &mut server,
+        "new_disk",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    )
+    .unwrap();
+    assert!(text.contains("40 tracks"), "{text}");
+    assert!(path.exists());
+
+    // What is on it, and what it says about itself.
+    let cat = call(&mut server, "disk_catalogue", Json::obj([])).unwrap();
+    assert!(cat.contains("No files"), "{cat}");
+    assert!(cat.contains("free"), "{cat}");
+    let info = call(&mut server, "disk_info", Json::obj([])).unwrap();
+    assert!(info.contains("data format"), "{info}");
+    assert!(info.contains("writable"), "{info}");
+
+    // Mounting the same file again read-only is the default, and says so.
+    let text = call(
+        &mut server,
+        "mount_disk",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    )
+    .unwrap();
+    assert!(
+        text.contains("Read-only"),
+        "a disk is not made writable without being asked: {text}"
+    );
+
+    // A sector, by the number in its address mark.
+    let sector = call(
+        &mut server,
+        "read_sector",
+        Json::obj([("track", Json::num(0)), ("sector", Json::str("$C1"))]),
+    )
+    .unwrap();
+    assert!(sector.contains("sector $C1"), "{sector}");
+    assert!(
+        sector.contains("E5 E5 E5"),
+        "a blank disk is full of $E5: {sector}"
+    );
+
+    // A sector that is not there says what is.
+    let why = call(
+        &mut server,
+        "read_sector",
+        Json::obj([("track", Json::num(0)), ("sector", Json::str("$77"))]),
+    )
+    .unwrap_err();
+    assert!(why.contains("$C1"), "it should list what is there: {why}");
+
+    // The speeds.
+    let text = call(
+        &mut server,
+        "disk_speed",
+        Json::obj([("speed", Json::str("normal"))]),
+    )
+    .unwrap();
+    assert!(text.contains("Normal"), "{text}");
+    assert_eq!(
+        server.session.spec.bus.fdc.speed,
+        zx_rustrum::fdc::Speed::Normal
+    );
+
+    // Nothing has been read yet, and it says so rather than showing an empty
+    // table that reads like an answer.
+    let activity = call(&mut server, "disk_activity", Json::obj([])).unwrap();
+    assert!(activity.contains("Nothing has been read"), "{activity}");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A machine with no drive says so rather than pretending to have one.
+#[test]
+fn a_machine_without_a_drive_refuses_a_disk() {
+    let mut server = Server::new();
+    let why = call(&mut server, "new_disk", Json::obj([])).unwrap_err();
+    assert!(why.contains("no disk drive"), "{why}");
+    assert!(why.contains("set_machine"), "and how to get one: {why}");
+}

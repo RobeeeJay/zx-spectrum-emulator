@@ -6,11 +6,8 @@ does not.
 
 ## Putting one in
 
-The **Disk** section of the toolbar appears on a +3 and nowhere else, because
-no other machine here has a drive.
-
-**Insert…** reads a `.dsk` and then asks a question before the machine can have
-it:
+**File ▸ Load disk…** reads a `.dsk` and then asks a question before the
+machine can have it:
 
 - **Read-only** — the controller reports the disk write-protected. The file is
   never opened for writing.
@@ -26,13 +23,49 @@ rewritten. The copy is made when the disk goes in rather than at the first
 write, because a copy that does not exist until something changes is a copy
 nobody can find.
 
-**New disk…** asks for a filename and makes a blank one, formatted the way the
-machine's own FORMAT formats a disk, and puts it in **writable** — somebody who
-has just made a disk means to write to it.
+**File ▸ Create blank disk…** asks for a filename and makes a blank one,
+formatted the way the machine's own FORMAT formats a disk, and puts it in
+**writable** — somebody who has just made a disk means to write to it. Either
+one brings up a +3 if the machine running has no drive, and opens the disk
+window.
 
 A disk that has been written to is saved when it is ejected, when the machine
 is changed, and when the emulator closes. The window says which file is in the
 drive, how it was mounted, and whether it has changed.
+
+## The window
+
+Fixed to the tape window's width, and the same three parts under the controls.
+
+**The drive**, as it looks from the front: the slot with the disk in it, the
+eject button, and the green light above them. The light means what the one on a
+real +3 means — lit while something is being read or written, a dim glow while
+the motor turns with nothing to do, dark otherwise. Whether there is a disk in
+is the slot, not the light.
+
+**Two speeds.** *Normal* is the waits a real drive makes the program sit
+through: about a second for the motor to come up to speed, a step of the head
+per track with a settle after it, and a sector coming round under the head
+every twenty-second of a second. *Fastload* is no waits at all — every answer
+ready the moment it is asked for, which is how a disk behaved here before there
+was a choice. The controller has no clock of its own: it is handed the
+machine's time on every port access, which is the only moment the time can
+matter.
+
+**The sector map**, where the tape window has its oscilloscope: a row per
+track, a cell per sector. How bright a cell is underneath is how much of the
+sector is not the formatter's filler, so an untouched disk still shows its
+shape — the directory at the front, the data behind it, the empty tracks at the
+end. Reads light green over that and writes amber, and both fade, so a load
+draws itself down the disk as it happens. A line marks the track the head is
+on.
+
+**The catalogue**, where the tape window lists blocks: the CP/M directory read
+as CAT reads it, with each file's size and whether it is read-only or hidden.
+The machine's own CAT does not print the hidden ones; this does, marked,
+because on a game disk that is usually where the game is. The extents of one
+file are not added up — the last extent already says how long the file is, and
+adding them made a 32K file 48K.
 
 ## What a DSK file is
 
@@ -96,9 +129,21 @@ the ROM's own font, because a disk test that cannot read what the machine
 printed is a test of what the controller was asked rather than of what it
 answered.
 
+## From a program
+
+The MCP server has the drive too: `mount_disk` (read-only unless asked, with
+`copy_to` for writing to a copy), `new_disk`, `eject_disk`, `disk_info`,
+`disk_speed`, `disk_catalogue`, `read_sector` — which reads the image rather
+than driving the drive, so it works whatever the machine is doing — and
+`disk_activity`, which is the sector map as a list.
+
 ## Not done
 
 - The second drive (`B:`) exists in the controller and nothing mounts one.
+- Normal speed is the drive's own waits and not the disk's rotation: a sector
+  costs the time one takes to come round, rather than the time until *that*
+  sector comes round, so a program timing the gaps between sectors would see
+  them evenly spaced.
 - No timing, as above.
 - Nothing writes the extended format, so a disk with unusual tracks read in and
   written out comes back regular.
