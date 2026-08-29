@@ -231,25 +231,48 @@ fn ejecting_writes_the_disk_back() {
     assert_eq!(written.track(0, 0).unwrap().sectors[0].data[0], 0x44);
 }
 
-/// The Disk section is only on a machine that has a drive.
+/// The disk window is offered on a machine with a drive and nowhere else.
 #[test]
-fn the_disk_controls_are_only_on_a_machine_with_a_drive() {
+fn the_disk_window_is_only_offered_on_a_machine_with_a_drive() {
     let mut app = test_app();
     app.switch_model(Model::Spectrum48);
     let mut h = harness_for(app);
     h.run_steps(3);
     assert!(
-        h.query_by_label("Insert…").is_none(),
+        h.query_by_label("Disk").is_none(),
         "a 48K has no disk drive"
     );
 
     h.state_mut().switch_model(Model::Plus3);
     h.run_steps(3);
     assert!(
-        h.query_by_label("Insert…").is_some(),
-        "a +3 has one, and the buttons appear with it"
+        h.query_by_label("Disk").is_some(),
+        "a +3 has one, and the window can be opened"
     );
-    assert!(h.query_by_label("New disk…").is_some());
+}
+
+/// Loading a disk and making one are in the File menu, where the other things
+/// that come off the disc are.
+#[test]
+fn the_file_menu_offers_a_disk() {
+    let mut h = harness_for(test_app());
+    h.run_steps(3);
+    h.get_by_label("File").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Load disk…").is_some());
+    assert!(h.query_by_label("Create blank disk…").is_some());
+}
+
+/// Putting a disk in opens the window that shows the drive: that is the moment
+/// somebody wants to watch it.
+#[test]
+fn a_disk_going_in_opens_the_window() {
+    let mut app = test_app();
+    assert!(!app.show_disk);
+    let path = a_disk_file("opens.dsk");
+    app.open_disk(&path);
+    app.mount_pending(Mounted::ReadOnly, None);
+    assert!(app.show_disk, "the window opens with the disk");
 }
 
 /// Cancelling puts nothing in the drive and forgets the disk.
@@ -288,5 +311,111 @@ fn changing_machine_writes_the_disk_back_and_empties_the_drive() {
         written.track(2, 0).unwrap().sectors[1].data[3],
         0x55,
         "and what was written is on the disk"
+    );
+}
+
+/// The window draws the drive, its light, the disk's sectors and what is on
+/// it. Drawn by hand rather than out of widgets, so what the test can see is
+/// the shapes and the text.
+#[test]
+fn the_window_shows_the_drive_the_sectors_and_the_catalogue() {
+    let mut app = test_app();
+    let path = scratch("window.dsk");
+    app.new_disk(&path);
+    // A file in the directory, so there is a catalogue to draw.
+    {
+        let disk = &mut app.spec.bus.fdc.drives[0].as_mut().unwrap().disk;
+        let directory = &mut disk.track_mut(0, 0).unwrap().sectors[0].data;
+        let entry = &mut directory[..32];
+        entry.fill(0);
+        entry[1..9].copy_from_slice(b"MYGAME  ");
+        entry[9..12].copy_from_slice(b"BAS");
+        entry[15] = 24; // 3K
+    }
+    app.show_disk = true;
+
+    let mut h = harness_for(app);
+    h.run_steps(3);
+
+    // The controls.
+    assert!(h.query_by_label("Normal").is_some(), "the speeds are there");
+    assert!(h.query_by_label("Fastload").is_some());
+    assert!(h.query_by_label("Eject").is_some());
+    // The catalogue, where the tape window lists blocks.
+    assert!(h.query_by_label("MYGAME.BAS").is_some(), "the file");
+    assert!(
+        h.get_all_by_label_contains("3K").next().is_some(),
+        "and how big it is"
+    );
+    assert!(
+        h.get_all_by_label_contains("free").next().is_some(),
+        "and what is left"
+    );
+}
+
+/// The speeds are what they say: Normal makes the machine wait for the drive,
+/// Fastload does not.
+#[test]
+fn the_speed_buttons_choose_how_the_drive_behaves() {
+    use zx_rustrum::fdc::Speed;
+
+    let mut app = test_app();
+    let path = scratch("speed.dsk");
+    app.new_disk(&path);
+    app.show_disk = true;
+    assert_eq!(
+        app.spec.bus.fdc.speed,
+        Speed::Fastload,
+        "a drive with no waits, until somebody asks for them"
+    );
+
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    h.get_by_label("Normal").click();
+    h.run_steps(2);
+    assert_eq!(h.state().spec.bus.fdc.speed, Speed::Normal);
+
+    h.get_by_label("Fastload").click();
+    h.run_steps(2);
+    assert_eq!(h.state().spec.bus.fdc.speed, Speed::Fastload);
+}
+
+/// With no disk in the drive the window says so rather than drawing an empty
+/// grid that looks like a disk of nothing.
+#[test]
+fn an_empty_drive_says_so() {
+    let mut app = test_app();
+    app.show_disk = true;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    assert!(
+        h.get_all_by_label_contains("No disk in the drive")
+            .next()
+            .is_some(),
+        "it should say the drive is empty"
+    );
+}
+
+/// A disk that is not in one of the machine's formats has no catalogue, and
+/// the window says why rather than printing rubbish out of its sectors.
+#[test]
+fn a_disk_in_another_format_says_why_there_is_no_catalogue() {
+    let mut app = test_app();
+    let path = scratch("foreign.dsk");
+    app.new_disk(&path);
+    {
+        let disk = &mut app.spec.bus.fdc.drives[0].as_mut().unwrap().disk;
+        for sector in &mut disk.track_mut(0, 0).unwrap().sectors {
+            sector.r = 0x01;
+        }
+    }
+    app.show_disk = true;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    assert!(
+        h.get_all_by_label_contains("Not a +3 format disk")
+            .next()
+            .is_some(),
+        "it should say what it cannot read"
     );
 }

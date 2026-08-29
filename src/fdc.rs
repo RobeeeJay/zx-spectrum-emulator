@@ -14,6 +14,37 @@
 
 use crate::disk::Disk;
 
+/// How the drive behaves about time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Speed {
+    /// The waits a real drive makes the program sit through: the motor coming
+    /// up to speed, the head stepping from track to track, and the sector
+    /// coming round under it. A game that loads in eleven seconds on a real +3
+    /// loads in eleven seconds here.
+    Normal,
+    /// No waits at all: every answer is ready the moment it is asked for.
+    /// A disk load takes as long as the ROM's own code takes to run.
+    #[default]
+    Fastload,
+}
+
+/// What the waits are, in T-states of a 3.5469MHz +3.
+///
+/// A three-inch drive turns at 300rpm, so a revolution is 200ms and one of the
+/// nine sectors comes round every 22ms. The motor takes about a second to come
+/// up to speed from stopped, and the head steps at the rate the program asked
+/// for in SPECIFY — 3ms a track by default, which is what +3DOS sets.
+pub mod delay {
+    /// A second, near enough, for the motor to reach speed.
+    pub const MOTOR_UP: u64 = 3_546_900;
+    /// One sector coming round under the head.
+    pub const SECTOR: u64 = 3_546_900 / 45;
+    /// One track of head movement.
+    pub const STEP: u64 = 3_546_900 / 333;
+    /// Settling after the head has finished moving.
+    pub const SETTLE: u64 = 3_546_900 / 66;
+}
+
 /// Main status register bits, as the datasheet names them.
 pub const RQM: u8 = 0x80;
 pub const DIO: u8 = 0x40;
@@ -65,6 +96,26 @@ pub struct Fdc {
     pub drives: [Option<Drive>; 2],
     /// Whether the motor is turning, from bit 3 of port $1FFD.
     pub motor: bool,
+    /// Whether the drive makes the program wait, and for how long.
+    pub speed: Speed,
+    /// The machine's clock, as the bus last told it, and the T-state before
+    /// which the controller has nothing to say. The chip has no clock of its
+    /// own here: it is handed the time on every port access, which is the only
+    /// moment it can matter.
+    pub now: u64,
+    busy_until: u64,
+    /// When the motor was last switched on, so the spin-up wait is only paid
+    /// once rather than on every command.
+    motor_since: Option<u64>,
+    /// What the drive has been doing lately, per sector, for the window to
+    /// draw: 0..=255, refreshed on access and faded every frame.
+    pub reads: std::collections::BTreeMap<(u8, u8, u8), u8>,
+    pub writes: std::collections::BTreeMap<(u8, u8, u8), u8>,
+    /// The last sector touched, and whether it was written: what the light on
+    /// the front of the drive is showing.
+    pub last_access: Option<(u8, u8, u8, bool)>,
+    /// T-state of that access, so the light goes out again.
+    pub last_access_at: u64,
     /// Commands completed, and how many of them ended abnormally. Kept
     /// because "did the machine actually talk to the disk" is otherwise
     /// invisible from outside, and it is the first thing worth knowing when a
@@ -111,6 +162,14 @@ impl Fdc {
         Fdc {
             drives: [None, None],
             motor: false,
+            speed: Speed::default(),
+            now: 0,
+            busy_until: 0,
+            motor_since: None,
+            reads: std::collections::BTreeMap::new(),
+            writes: std::collections::BTreeMap::new(),
+            last_access: None,
+            last_access_at: 0,
             commands: 0,
             errors: 0,
             last_command: None,
@@ -131,9 +190,50 @@ impl Fdc {
         }
     }
 
+    /// Tell the controller what time it is. The bus does this on every port
+    /// access, which is the only moment the time can matter.
+    pub fn at(&mut self, now: u64) {
+        self.now = now;
+        if self.motor {
+            self.motor_since.get_or_insert(now);
+        } else {
+            self.motor_since = None;
+        }
+    }
+
+    /// Whether the drive is still working on the last thing it was asked.
+    ///
+    /// At Fastload nothing is ever busy. At Normal the program polls the
+    /// status register until the wait is over, which is what it does on a real
+    /// machine and why a disk load takes the time it takes.
+    pub fn busy(&self) -> bool {
+        self.speed == Speed::Normal && self.now < self.busy_until
+    }
+
+    /// Make the program wait, from now.
+    fn wait(&mut self, t: u64) {
+        if self.speed == Speed::Normal {
+            self.busy_until = self.now.max(self.busy_until) + t;
+        }
+    }
+
+    /// What is left of the motor coming up to speed, if it was started
+    /// recently. Paid once rather than on every command.
+    fn spin_up(&self) -> u64 {
+        match self.motor_since {
+            Some(since) => delay::MOTOR_UP.saturating_sub(self.now.saturating_sub(since)),
+            None => 0,
+        }
+    }
+
     /// The status register the program polls: whether the controller wants a
     /// byte, which way the data is going, and whether it is busy.
     pub fn status(&self) -> u8 {
+        // Still working: busy, and not asking for anything. The program polls
+        // this until the drive has caught up.
+        if self.busy() {
+            return CB;
+        }
         match self.phase {
             Phase::Command => RQM | if self.command.is_empty() { 0 } else { CB },
             Phase::Reading => RQM | DIO | EXM | CB,
@@ -207,6 +307,47 @@ impl Fdc {
             }
             _ => 0,
         }
+    }
+
+    /// Note that a sector was read or written, for the drive light and the
+    /// map of what the program has been touching.
+    fn touched(&mut self, r: u8, written: bool) {
+        let track = self.pcn[self.unit.min(1)];
+        let key = (track, self.head, r);
+        let heat = if written {
+            &mut self.writes
+        } else {
+            &mut self.reads
+        };
+        heat.insert(key, 255);
+        self.last_access = Some((track, self.head, r, written));
+        self.last_access_at = self.now;
+    }
+
+    /// Fade the map, once a frame. What was touched a moment ago is bright and
+    /// what was touched a while back is dim, which is what makes a load look
+    /// like a load rather than like a list of sectors.
+    pub fn fade(&mut self) {
+        const STEP: u8 = 6;
+        for heat in [&mut self.reads, &mut self.writes] {
+            heat.retain(|_, v| {
+                *v = v.saturating_sub(STEP);
+                *v > 0
+            });
+        }
+    }
+
+    /// Where the head is on a drive, which is the track the next read comes
+    /// from.
+    pub fn head_at(&self, unit: usize) -> u8 {
+        self.pcn[unit.min(1)]
+    }
+
+    /// Whether the light on the front of the drive is lit: something has been
+    /// read or written in the last little while.
+    pub fn light(&self) -> bool {
+        const LIT: u64 = 3_546_900 / 20;
+        self.last_access.is_some() && self.now.saturating_sub(self.last_access_at) < LIT
     }
 
     /// How many parameter bytes each command takes, and whether it is one this
@@ -327,6 +468,9 @@ impl Fdc {
 
     fn recalibrate(&mut self) {
         self.unit_and_head();
+        // Stepping out to track 0 from wherever the head is.
+        let moved = self.pcn[self.unit.min(1)] as u64;
+        self.wait(moved * delay::STEP + delay::SETTLE);
         self.pcn[self.unit.min(1)] = 0;
         // Seek End, and Equipment Check when there is no disk to find track 0
         // on: that is how the ROM knows the drive is empty.
@@ -338,6 +482,9 @@ impl Fdc {
     fn seek(&mut self) {
         self.unit_and_head();
         let to = self.command.get(2).copied().unwrap_or(0);
+        let from = self.pcn[self.unit.min(1)];
+        let moved = to.abs_diff(from) as u64;
+        self.wait(moved * delay::STEP + if moved > 0 { delay::SETTLE } else { 0 });
         self.pcn[self.unit.min(1)] = to;
         let end = if self.ready(self.unit) { 0x20 } else { 0x60 };
         self.seek_done = Some(self.st0(end));
@@ -399,6 +546,11 @@ impl Fdc {
     fn start_read(&mut self) {
         let (c, h, r, _n, eot) = self.transfer_parameters();
         self.last_sector = eot;
+        self.touched(r, false);
+        // The sector has to come round under the head, and the motor has to be
+        // up to speed before any of it can be read.
+        let wait = self.spin_up() + delay::SECTOR;
+        self.wait(wait);
         match self.sector_data(c, h, r) {
             Some(data) => {
                 self.buffer = data;
@@ -477,6 +629,9 @@ impl Fdc {
             self.transfer_result(0x02, 0, c, h, r, n);
             return;
         }
+        self.touched(r, true);
+        let wait = self.spin_up() + delay::SECTOR;
+        self.wait(wait);
         let length = self
             .sector_data(c, h, r)
             .map(|d| d.len())

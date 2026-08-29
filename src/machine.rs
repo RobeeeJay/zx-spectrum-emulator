@@ -1234,6 +1234,7 @@ impl SpectrumBus {
     pub fn frame_visuals(&mut self) {
         self.tracker.fade();
         self.tracker.tick_detector();
+        self.fdc.fade();
     }
 }
 
@@ -1406,11 +1407,15 @@ impl Bus for SpectrumBus {
             // $1FFD: the +2A/+3's second paging port.
             if self.model.has_plus3_paging() && port & 0xf002 == 0x1000 {
                 self.write_paging_1ffd(value);
+                let now = self.total_t();
                 self.fdc.motor = self.disk_motor();
+                self.fdc.at(now);
             }
             // $3FFD: the controller's data register. The status register at
             // $2FFD is read-only, so nothing is written there.
             if self.model.has_disk() && port & 0xf002 == 0x3000 {
+                let now = self.total_t();
+                self.fdc.at(now);
                 self.fdc.write(value);
             }
             // $FFFD: AY register select, $BFFD: AY data.
@@ -2060,9 +2065,13 @@ impl SpectrumBus {
         // The disk controller: $2FFD is its status register and $3FFD its
         // data register. Both are read; only the data register is written.
         if self.model.has_disk() && port & 0xf002 == 0x2000 {
+            let now = self.total_t();
+            self.fdc.at(now);
             return self.fdc.status();
         }
         if self.model.has_disk() && port & 0xf002 == 0x3000 {
+            let now = self.total_t();
+            self.fdc.at(now);
             return self.fdc.read();
         }
         // AY register read: $FFFD.

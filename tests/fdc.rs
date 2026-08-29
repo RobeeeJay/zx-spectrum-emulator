@@ -551,3 +551,137 @@ fn the_plus3_catalogues_and_writes_to_a_disk() {
         &directory[..64]
     );
 }
+
+/// At Normal speed the drive makes the program wait, as a real one does: the
+/// motor has to come up to speed and the sector has to come round under the
+/// head. At Fastload nothing waits at all.
+#[test]
+fn normal_speed_makes_the_program_wait_and_fastload_does_not() {
+    use zx_rustrum::fdc::{delay, Speed};
+
+    let read = |speed: Speed| -> (bool, u64) {
+        let mut fdc = with_a_disk();
+        fdc.speed = speed;
+        // The motor has just been switched on, as the ROM does before a read.
+        fdc.at(0);
+        for byte in [0x46u8, 0x00, 0, 0, 0xC1, 2, 0xC1, 0x2A, 0xFF] {
+            fdc.write(byte);
+        }
+        // How long the program has to poll before the controller answers.
+        let mut waited = 0u64;
+        while fdc.busy() && waited < delay::MOTOR_UP * 2 {
+            waited += 1000;
+            fdc.at(waited);
+        }
+        (fdc.status() & DIO != 0, waited)
+    };
+
+    let (answered, waited) = read(Speed::Fastload);
+    assert!(answered, "Fastload should have the data ready");
+    assert_eq!(waited, 0, "and not have waited at all");
+
+    let (answered, waited) = read(Speed::Normal);
+    assert!(answered, "Normal should answer in the end");
+    assert!(
+        waited >= delay::MOTOR_UP,
+        "after the motor has come up to speed: {waited} T-states"
+    );
+    assert!(
+        waited < delay::MOTOR_UP * 2,
+        "and not for ever: {waited} T-states"
+    );
+}
+
+/// Seeking across the disk takes longer than seeking next door, because the
+/// head has further to go.
+#[test]
+fn a_long_seek_takes_longer_than_a_short_one() {
+    use zx_rustrum::fdc::Speed;
+
+    let seek_to = |track: u8| -> u64 {
+        let mut fdc = with_a_disk();
+        fdc.speed = Speed::Normal;
+        // Long enough ago that the motor is up to speed and not in the way.
+        fdc.motor = false;
+        fdc.at(0);
+        fdc.motor = true;
+        fdc.at(10_000_000);
+        command(&mut fdc, &[0x0F, 0x00, track]);
+        let mut waited = 10_000_000u64;
+        while fdc.busy() && waited < 20_000_000 {
+            waited += 100;
+            fdc.at(waited);
+        }
+        waited - 10_000_000
+    };
+
+    let near = seek_to(1);
+    let far = seek_to(39);
+    assert!(near > 0, "even one track takes a moment: {near}");
+    assert!(
+        far > near * 5,
+        "and thirty-nine take much longer: {far} against {near}"
+    );
+}
+
+/// The light on the front of the drive is on while it is being read, and goes
+/// out afterwards.
+#[test]
+fn the_drive_light_shows_what_the_drive_is_doing() {
+    let mut fdc = with_a_disk();
+    fdc.at(1_000_000);
+    assert!(!fdc.light(), "nothing has happened yet");
+
+    for byte in [0x46u8, 0x00, 0, 0, 0xC1, 2, 0xC1, 0x2A, 0xFF] {
+        fdc.write(byte);
+    }
+    assert!(fdc.light(), "a read lights it");
+
+    // A twentieth of a second later it is out again.
+    fdc.at(1_000_000 + 3_546_900 / 10);
+    assert!(!fdc.light(), "and it goes out when nothing is happening");
+}
+
+/// What has been read and written is remembered per sector, so the window can
+/// draw it, and it fades.
+#[test]
+fn the_sectors_touched_are_remembered_and_fade() {
+    let mut fdc = with_a_disk();
+    fdc.at(0);
+    for byte in [0x46u8, 0x00, 0, 0, 0xC1, 2, 0xC1, 0x2A, 0xFF] {
+        fdc.write(byte);
+    }
+    assert_eq!(
+        fdc.reads.get(&(0, 0, 0xC1)).copied(),
+        Some(255),
+        "the sector just read is at full brightness"
+    );
+    assert!(fdc.writes.is_empty(), "and nothing has been written");
+
+    // Finish the read: the controller is handing data back until it has been
+    // taken, and a command written into that is thrown away.
+    while fdc.status() & DIO != 0 {
+        fdc.read();
+    }
+
+    // A write to another sector, which is remembered apart from the reads.
+    for byte in [0x45u8, 0x00, 0, 0, 0xC2, 2, 0xC2, 0x2A, 0xFF] {
+        fdc.write(byte);
+    }
+    for i in 0..512 {
+        fdc.write(i as u8);
+    }
+    assert_eq!(fdc.writes.get(&(0, 0, 0xC2)).copied(), Some(255));
+
+    // And it fades, or a disk read an hour ago would look like one happening
+    // now.
+    for _ in 0..10 {
+        fdc.fade();
+    }
+    let after = fdc.reads.get(&(0, 0, 0xC1)).copied().unwrap_or(0);
+    assert!(after > 0 && after < 255, "faded, not gone: {after}");
+    for _ in 0..100 {
+        fdc.fade();
+    }
+    assert!(fdc.reads.is_empty(), "and gone in the end");
+}

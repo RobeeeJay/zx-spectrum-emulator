@@ -6,6 +6,7 @@ pub mod cassette;
 pub mod crt;
 pub mod debugger;
 pub mod disk;
+pub mod diskwin;
 pub mod keyboard;
 pub mod profiler;
 pub mod ram_map;
@@ -460,6 +461,8 @@ pub struct App {
     pub show_profiler: bool,
     /// The machine's own keyboard, drawn and pressable.
     pub show_keyboard: bool,
+    /// The +3's drive, drawn.
+    pub show_disk: bool,
     /// A disk read and waiting to be told how its writes should be treated.
     pub pending_disk: Option<disk::Pending>,
     /// How the disk in drive A: was put in, if there is one.
@@ -607,6 +610,7 @@ impl App {
             show_tape: false,
             show_profiler: false,
             show_keyboard: false,
+            show_disk: false,
             pending_disk: None,
             disk_mounted: None,
             keys: crate::keyboard::Keys::default(),
@@ -869,6 +873,9 @@ impl App {
             theme::toggle(ui, &mut self.show_callflow, "Call flow");
             theme::toggle(ui, &mut self.show_profiler, "Profiler");
             theme::toggle(ui, &mut self.show_keyboard, "Keyboard");
+            if self.spec.bus.model.has_disk() && !self.on_zx81() {
+                theme::toggle(ui, &mut self.show_disk, "Disk");
+            }
         });
     }
 
@@ -1592,7 +1599,10 @@ impl App {
     /// and neither has anything to gain from being dragged wider.
     pub fn fix_width_of(name: &str) -> Option<f32> {
         match name {
-            "tape" | "ram_map" => Some(cassette::WINDOW_W),
+            // The disk window is built around a picture of the drive, which is
+            // as wide as it is; the tape window's width suits it and two
+            // windows of one width sit together without a ragged edge.
+            "tape" | "ram_map" | "disk" => Some(cassette::WINDOW_W),
             _ => None,
         }
     }
@@ -1670,8 +1680,8 @@ impl App {
             Some(r) => ([r.x, r.y], [r.w, r.h]),
             None => (default_pos, default_size),
         };
-        if name == "tape" {
-            size[0] = cassette::WINDOW_W;
+        if let Some(w) = Self::fix_width_of(name) {
+            size[0] = w;
         }
         builder.with_position(pos).with_inner_size(size)
     }
@@ -1828,6 +1838,7 @@ impl App {
             self.show_callflow = is_open("callflow");
             self.show_profiler = is_open("profiler");
             self.show_keyboard = is_open("keyboard");
+            self.show_disk = is_open("disk");
         }
     }
 
@@ -1843,6 +1854,7 @@ impl App {
             ("callflow", self.show_callflow),
             ("profiler", self.show_profiler),
             ("keyboard", self.show_keyboard),
+            ("disk", self.show_disk),
         ]
         .into_iter()
         .filter(|(_, open)| *open)
@@ -2795,6 +2807,16 @@ impl App {
                     }
                     ui.close();
                 }
+                if ui.button("Load disk…").clicked() {
+                    if let Some(path) = self.pick_file(Some(FileKind::Disk)) {
+                        self.load_path(&path);
+                    }
+                    ui.close();
+                }
+                if ui.button("Create blank disk…").clicked() {
+                    self.create_blank_disk();
+                    ui.close();
+                }
                 if ui.button("Load recording…").clicked() {
                     if let Some(path) = self.pick_file(Some(FileKind::Recording)) {
                         self.load_path(&path);
@@ -2889,8 +2911,6 @@ impl App {
                     }
                 }
             }
-
-            self.disk_row(ui);
 
             theme::divider(ui);
             theme::group_label(ui, "Record");
@@ -3695,6 +3715,7 @@ impl App {
             ("sprites", self.show_sprites),
             ("callflow", self.show_callflow),
             ("keyboard", self.show_keyboard),
+            ("disk", self.show_disk),
         ] {
             if !shown {
                 self.placed.remove(name);
@@ -3871,6 +3892,31 @@ impl App {
                 },
             );
             self.show_sprites = open;
+        }
+
+        if self.show_disk && diskwin::available(self) {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("disk"),
+                self.restore_window(
+                    "disk",
+                    ViewportBuilder::default().with_title("Disk"),
+                    [980.0, 80.0],
+                    [cassette::WINDOW_W, 720.0],
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("disk", &ctx, [980.0, 80.0], [cassette::WINDOW_W, 720.0]) {
+                        self.remember_window("disk", &ctx);
+                    }
+                    self.fix_width(&ctx, cassette::WINDOW_W);
+                    egui::CentralPanel::default().show(ui, |ui| diskwin::ui(self, ui));
+                },
+            );
+            self.show_disk = open;
         }
 
         if self.show_keyboard {

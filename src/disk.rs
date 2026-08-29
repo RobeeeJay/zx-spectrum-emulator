@@ -297,3 +297,136 @@ impl Disk {
         )
     }
 }
+
+/// One file in the disk's catalogue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    /// How big it is, in kilobytes, as the machine's own CAT reports it:
+    /// rounded up to the kilobyte blocks it occupies.
+    pub kilobytes: u32,
+    /// Whether it is marked read-only, and whether it is hidden from CAT.
+    pub read_only: bool,
+    pub system: bool,
+}
+
+/// What format the disk is in, as +3DOS tells: the sector numbers say it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Format {
+    /// Sectors numbered from $C1: the disk FORMAT makes, all forty tracks
+    /// available and the directory at the front.
+    Data,
+    /// Sectors numbered from $41: the disk the machine was sold with, whose
+    /// first track is reserved for CP/M.
+    System,
+    /// Something else — an Amstrad disk, or a game that formatted its own
+    /// tracks. There is no catalogue to read.
+    Other,
+}
+
+impl Disk {
+    /// Which of the two formats the machine knows this is, if either.
+    pub fn format(&self) -> Format {
+        match self
+            .track(0, 0)
+            .and_then(|t| t.sectors.first())
+            .map(|s| s.r)
+        {
+            Some(0xC1) => Format::Data,
+            Some(0x41) => Format::System,
+            _ => Format::Other,
+        }
+    }
+
+    /// The catalogue, as CAT would print it.
+    ///
+    /// +3DOS keeps a CP/M directory: sixty-four entries of thirty-two bytes at
+    /// the front of the disk, each a user number, a name, a type, and which
+    /// kilobyte blocks it occupies. A file longer than sixteen blocks has more
+    /// than one entry — the extent number says which — so the entries are
+    /// added up by name rather than listed one for one.
+    ///
+    /// $E5 in the first byte is a deleted or never-used entry, which is why a
+    /// disk formatted with $E5 catalogues as empty.
+    pub fn catalogue(&self) -> Option<Vec<Entry>> {
+        let reserved = match self.format() {
+            Format::Data => 0u8,
+            Format::System => 1,
+            Format::Other => return None,
+        };
+        let track = self.track(reserved, 0)?;
+        let bytes: Vec<u8> = track
+            .sectors
+            .iter()
+            .take(4)
+            .flat_map(|s| s.data.iter().copied())
+            .collect();
+
+        let mut files: Vec<Entry> = Vec::new();
+        for entry in bytes.chunks(32) {
+            if entry.len() < 32 || entry[0] != 0 {
+                // Only user 0, which is where +3DOS puts everything; $E5 is an
+                // empty slot.
+                continue;
+            }
+            let name: String = entry[1..9]
+                .iter()
+                .map(|b| (b & 0x7F) as char)
+                .collect::<String>()
+                .trim_end()
+                .to_string();
+            let extension: String = entry[9..12]
+                .iter()
+                .map(|b| (b & 0x7F) as char)
+                .collect::<String>()
+                .trim_end()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let full = if extension.is_empty() {
+                name.clone()
+            } else {
+                format!("{name}.{extension}")
+            };
+            // The high bits of the type are the flags: read-only, and hidden
+            // from the catalogue.
+            let read_only = entry[9] & 0x80 != 0;
+            let system = entry[10] & 0x80 != 0;
+            // How far into the file this extent reaches, in 128-byte records:
+            // the extent number counts the 16K before it, and the record count
+            // is what this one holds. The extents of one file are not added
+            // up — the last one already says how long the file is, and adding
+            // them made a 32K file 48K.
+            let extent = (entry[12] as u32 & 0x1F) + (entry[14] as u32 & 0x3F) * 32;
+            let records = extent * 128 + entry[15] as u32;
+            let kilobytes = records.div_ceil(8);
+            match files.iter_mut().find(|f| f.name == full) {
+                Some(existing) => existing.kilobytes = existing.kilobytes.max(kilobytes),
+                None => files.push(Entry {
+                    name: full,
+                    kilobytes,
+                    read_only,
+                    system,
+                }),
+            }
+        }
+        files.sort_by(|a, b| a.name.cmp(&b.name));
+        Some(files)
+    }
+
+    /// How much room is left, in kilobytes: the blocks nothing has claimed.
+    pub fn free_kilobytes(&self) -> Option<u32> {
+        let files = self.catalogue()?;
+        let used: u32 = files.iter().map(|f| f.kilobytes).sum();
+        let reserved = match self.format() {
+            Format::Data => 0,
+            Format::System => 1,
+            Format::Other => return None,
+        };
+        // The whole disk, less the reserved track and the two blocks the
+        // directory itself takes.
+        let total = (self.tracks_per_side as u32 - reserved) * self.sides as u32 * 9 * 512 / 1024;
+        Some(total.saturating_sub(used + 2))
+    }
+}

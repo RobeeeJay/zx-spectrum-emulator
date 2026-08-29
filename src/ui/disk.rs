@@ -101,6 +101,9 @@ impl App {
             .unwrap_or_default();
         self.spec.bus.fdc.drives[0] = Some(Drive::new(pending.disk, path, protected));
         self.disk_mounted = Some(how);
+        // The window that shows the drive, since a disk going in is the moment
+        // somebody wants to watch it.
+        self.show_disk = true;
         self.set_status(format!("{name} — {}", how.label()), false);
     }
 
@@ -116,6 +119,7 @@ impl App {
         let what = disk.describe();
         self.spec.bus.fdc.drives[0] = Some(Drive::new(disk, Some(path.to_path_buf()), false));
         self.disk_mounted = Some(Mounted::InPlace);
+        self.show_disk = true;
         self.pending_disk = None;
         self.set_status(
             format!("{} — a blank disk, {what}, writable", path.display()),
@@ -160,67 +164,24 @@ impl App {
         }
     }
 
-    /// The Disk section of the toolbar. Only on a machine that has a drive.
-    pub fn disk_row(&mut self, ui: &mut egui::Ui) {
-        if !self.spec.bus.model.has_disk() || self.on_zx81() {
+    /// Make a blank disk, from the File menu: ask where it goes, bring up a
+    /// machine that has a drive if the one running has not, and put it in.
+    pub fn create_blank_disk(&mut self) {
+        let Some(path) = self.pick_new_disk() else {
+            return;
+        };
+        if self.on_zx81() || !self.spec.bus.model.has_disk() {
+            self.switch_model(crate::machine::Model::Plus3);
+        }
+        if !self.spec.bus.model.has_disk() {
             return;
         }
-        theme::divider(ui);
-        theme::group_label(ui, "Disk");
-
-        if ui
-            .button("Insert…")
-            .on_hover_text("Put a .dsk in drive A:")
-            .clicked()
-        {
-            if let Some(path) = self.pick_file(Some(FileKind::Disk)) {
-                self.open_disk(&path);
-            }
-        }
-        if ui
-            .button("New disk…")
-            .on_hover_text(
-                "Make a blank disk, formatted as the +3's own FORMAT formats one, \
-                 and put it in. It is writable: a disk you have just made is one \
-                 you mean to write to.",
-            )
-            .clicked()
-        {
-            if let Some(path) = self.pick_new_disk() {
-                self.new_disk(&path);
-            }
-        }
-
-        match (&self.spec.bus.fdc.drives[0], self.disk_mounted) {
-            (Some(drive), Some(how)) => {
-                let name = drive
-                    .path
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "a disk".into());
-                let changed = if drive.disk.dirty { " • changed" } else { "" };
-                ui.label(
-                    egui::RichText::new(format!("{name} ({}){changed}", how.label()))
-                        .small()
-                        .color(theme::DIM),
-                );
-                if ui
-                    .button("Eject")
-                    .on_hover_text("Write it back if it has changed, and take it out")
-                    .clicked()
-                {
-                    self.eject_disk();
-                }
-            }
-            _ => {
-                ui.label(egui::RichText::new("no disk").small().color(theme::DIM));
-            }
-        }
+        self.new_disk(&path);
+        self.show_disk = true;
     }
 
     /// Where a new blank disk should go.
-    fn pick_new_disk(&self) -> Option<std::path::PathBuf> {
+    pub fn pick_new_disk(&self) -> Option<std::path::PathBuf> {
         let dialog = rfd::FileDialog::new().set_file_name("new disk.dsk");
         let dialog = match self.prefs.dir_for(FileKind::Disk) {
             Some(dir) if dir.is_dir() => dialog.set_directory(dir),

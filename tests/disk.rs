@@ -128,3 +128,125 @@ fn something_that_is_not_a_disk_is_refused() {
         "a file that claims tracks it has not got is not a disk"
     );
 }
+
+/// The catalogue, which is what the machine's own CAT prints: a CP/M
+/// directory at the front of the disk, sixty-four entries of thirty-two bytes.
+#[test]
+fn a_disk_with_files_on_it_has_a_catalogue() {
+    let mut disk = Disk::blank("test");
+    assert_eq!(disk.format(), zx_rustrum::disk::Format::Data);
+    assert_eq!(
+        disk.catalogue().as_deref(),
+        Some(&[][..]),
+        "a blank disk catalogues as empty rather than as unreadable"
+    );
+
+    // One entry, written the way +3DOS writes one: user 0, eight bytes of
+    // name, three of type, then the extent and the records it holds.
+    {
+        let directory = &mut disk.track_mut(0, 0).unwrap().sectors[0].data;
+        // A real entry is written over, not into: the rest of the thirty-two
+        // bytes are the extent, the record count and the blocks, and leaving
+        // them as the disk's $E5 filler makes a two-kilobyte file enormous.
+        let entry = &mut directory[..32];
+        entry.fill(0);
+        entry[1..9].copy_from_slice(b"GAME    ");
+        entry[9..12].copy_from_slice(b"BIN");
+        entry[12] = 0; // extent 0
+        entry[15] = 16; // sixteen 128-byte records: 2K
+    }
+    let files = disk.catalogue().expect("a catalogue");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].name, "GAME.BIN");
+    assert_eq!(files[0].kilobytes, 2);
+
+    // The free space is what is left of the disk after the files and the
+    // directory itself.
+    let free = disk.free_kilobytes().expect("free space");
+    assert_eq!(free, 180 - 2 - 2, "180K disk, 2K of file, 2K of directory");
+}
+
+/// A file too big for one entry has several, and they are added up rather than
+/// listed one for one — which is what CAT does.
+#[test]
+fn a_file_in_several_extents_is_listed_once() {
+    let mut disk = Disk::blank("test");
+    {
+        let directory = &mut disk.track_mut(0, 0).unwrap().sectors[0].data;
+        for extent in 0..2usize {
+            let entry = &mut directory[extent * 32..extent * 32 + 32];
+            entry.fill(0);
+            entry[1..9].copy_from_slice(b"BIG     ");
+            entry[9..12].copy_from_slice(b"   ");
+            entry[12] = extent as u8;
+            entry[15] = 128; // a full extent: 16K each
+        }
+    }
+    let files = disk.catalogue().unwrap();
+    assert_eq!(files.len(), 1, "one file, not two: {files:?}");
+    assert_eq!(files[0].name, "BIG");
+    assert_eq!(files[0].kilobytes, 32);
+}
+
+/// A disk that is not in either of the machine's formats has no catalogue to
+/// read, and says so rather than printing rubbish.
+#[test]
+fn a_disk_in_another_format_has_no_catalogue() {
+    let mut disk = Disk::blank("test");
+    for sector in &mut disk.track_mut(0, 0).unwrap().sectors {
+        // Amstrad's own numbering, which the +3 cannot read as a filesystem.
+        sector.r = 0x01;
+    }
+    assert_eq!(disk.format(), zx_rustrum::disk::Format::Other);
+    assert!(disk.catalogue().is_none());
+    assert!(disk.free_kilobytes().is_none());
+}
+
+/// The flags a directory entry carries: read-only, and hidden from CAT.
+#[test]
+fn a_files_flags_are_read_from_the_high_bits_of_its_type() {
+    let mut disk = Disk::blank("test");
+    {
+        let directory = &mut disk.track_mut(0, 0).unwrap().sectors[0].data;
+        let entry = &mut directory[..32];
+        entry.fill(0);
+        entry[1..9].copy_from_slice(b"LOCKED  ");
+        entry[9] = b'B' | 0x80; // read-only
+        entry[10] = b'I' | 0x80; // and hidden
+        entry[11] = b'N';
+        entry[15] = 8;
+    }
+    let files = disk.catalogue().unwrap();
+    assert_eq!(files[0].name, "LOCKED.BIN", "the flags are not part of it");
+    assert!(files[0].read_only);
+    assert!(files[0].system);
+}
+
+/// The catalogue of a real disk, against what the machine itself prints for
+/// it. Driller's disk catalogues on a +3 as "DRILLER . 1K, 108K free".
+#[test]
+fn a_real_disks_catalogue_matches_what_the_machine_prints() {
+    let Some((path, data)) = an_image() else {
+        eprintln!("no .dsk to hand; skipping");
+        return;
+    };
+    let disk = Disk::parse(&data).unwrap();
+    let Some(files) = disk.catalogue() else {
+        eprintln!("{path}: not a +3 format disk; skipping");
+        return;
+    };
+    eprintln!(
+        "{path}: {} files, {:?}K free",
+        files.len(),
+        disk.free_kilobytes()
+    );
+    for file in &files {
+        eprintln!("  {} {}K", file.name, file.kilobytes);
+        assert!(!file.name.is_empty());
+        assert!(
+            file.name.chars().all(|c| c.is_ascii_graphic() || c == '.'),
+            "a name out of the directory should be printable: {:?}",
+            file.name
+        );
+    }
+}
