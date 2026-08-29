@@ -112,18 +112,23 @@ fn drive(app: &mut App, ui: &mut egui::Ui) {
             egui::vec2(26.0, disk.height() - 6.0),
         );
         painter.rect_filled(shutter, 1.0, theme::DIM);
+        // Written on the disk by the same hand that labelled the cassette, and
+        // in white: the disk is dark plastic and dark ink on it cannot be read.
         let label = app.spec.bus.fdc.drives[0]
             .as_ref()
             .and_then(|d| d.path.as_ref())
-            .and_then(|p| p.file_stem())
-            .map(|n| n.to_string_lossy().to_string())
+            .map(|p| crate::ui::cassette::written_name(&p.to_string_lossy()))
             .unwrap_or_else(|| "disk".into());
-        painter.text(
-            disk.left_center() + egui::vec2(8.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(11.0),
-            theme::CASE_DARK,
+        crate::ui::cassette::written_on(
+            &painter,
+            egui::pos2(
+                disk.center().x - 14.0,
+                disk.center().y + disk.height() * 0.32,
+            ),
+            disk.width() - 44.0,
+            disk.height() * 0.8,
+            &label,
+            theme::WHITE,
         );
     }
 

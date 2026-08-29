@@ -277,20 +277,46 @@ pub fn overall_progress(tape: &crate::tape::Tape) -> f32 {
 /// The tape's name, written across the ruled lines. Long names are set smaller
 /// rather than allowed to run off the label.
 fn title(painter: &egui::Painter, rect: Rect, scale: f32, name: &str) {
-    if name.is_empty() {
+    let baseline = rect.min + Vec2::new((RULE_X.0 + RULE_X.1) / 2.0, RULE_Y[2]) * scale;
+    let room = (RULE_X.1 - RULE_X.0) * scale * 0.94;
+    // Biro blue, which is what somebody labelling a tape had to hand.
+    written_on(
+        painter,
+        baseline,
+        room,
+        26.0 * scale,
+        name,
+        Color32::from_rgb(31, 63, 143),
+    );
+}
+
+/// Somebody's handwriting on a label: centred over a point, sitting on it as
+/// on a ruled line, and set smaller rather than allowed to run off the edge.
+///
+/// The disk window writes on a disk with it, so a tape and a disk are labelled
+/// by the same hand. What makes it look written rather than printed is the
+/// proportional face against the machine's own square lettering, and that it
+/// is sized to the label rather than to a grid.
+pub fn written_on(
+    painter: &egui::Painter,
+    baseline: Pos2,
+    room: f32,
+    largest: f32,
+    text: &str,
+    ink: Color32,
+) {
+    if text.is_empty() {
         return;
     }
-    let room = (RULE_X.1 - RULE_X.0) * scale * 0.94;
-    let mut size = 26.0 * scale;
-    let ink = Color32::from_rgb(31, 63, 143);
+    let mut size = largest;
+    let smallest = (largest * 0.35).max(7.0);
     for _ in 0..8 {
-        let galley = painter.layout_no_wrap(name.to_string(), FontId::proportional(size), ink);
-        if galley.rect.width() <= room || size <= 9.0 * scale {
-            let centre = rect.min + Vec2::new((RULE_X.0 + RULE_X.1) / 2.0, RULE_Y[2]) * scale;
+        let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(size), ink);
+        if galley.rect.width() <= room || size <= smallest {
             painter.galley(
                 Pos2::new(
-                    centre.x - galley.rect.width() / 2.0,
-                    centre.y - galley.rect.height(),
+                    baseline.x - galley.rect.width() / 2.0,
+                    baseline.y - galley.rect.height(),
                 ),
                 galley,
                 ink,

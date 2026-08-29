@@ -1,6 +1,7 @@
 //! Putting a disk in the +3 from the window: read-only, a copy, or the file
 //! itself — and the question that decides which.
 
+use eframe::egui;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use zx_rustrum::disk::Disk;
@@ -585,4 +586,54 @@ fn a_zip_with_no_disk_says_so() {
     app.open_disk(&path);
     assert!(app.pending_disk.is_none());
     assert!(app.status.contains("no disk image"), "{}", app.status);
+}
+
+/// The disk in the drive is labelled the way the cassette is: the file's name
+/// without its extension, in the same hand, and in white — the disk is dark
+/// plastic and dark ink on it cannot be read.
+#[test]
+fn the_disk_is_labelled_in_the_same_hand_as_the_cassette() {
+    let mut app = test_app();
+    let path = scratch("Chuckie Egg.dsk");
+    app.new_disk(&path);
+    app.show_disk = true;
+
+    let mut h = harness_for(app);
+    h.run_steps(3);
+
+    // What is drawn, rather than what was asked for: the label is painted
+    // shapes, so the text goes into the frame's galleys.
+    let shapes = h.output().shapes.clone();
+    let mut written: Vec<(String, egui::Color32)> = Vec::new();
+    fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::epaint::Shape::Text(text) => {
+                out.push((text.galley.text().to_string(), text.fallback_color))
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    for clipped in &shapes {
+        walk(&clipped.shape, &mut written);
+    }
+
+    let label = written
+        .iter()
+        .find(|(text, _)| text == "Chuckie Egg")
+        .unwrap_or_else(|| {
+            panic!(
+                "the disk should carry its name without the extension; what was written was {:?}",
+                written.iter().map(|(t, _)| t).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(
+        label.1,
+        zx_rustrum::ui::theme::WHITE,
+        "and in white, since the disk is dark"
+    );
 }
