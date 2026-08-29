@@ -14,8 +14,24 @@ use crate::mcp::tools::{addr_of, count, flag, text, Session};
 pub fn mount_disk(session: &mut Session, args: &Json) -> Result<String, String> {
     let path = std::path::PathBuf::from(text(args, "path")?);
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // A zip with a disk in it is a disk, which is how a download of a game
+    // usually arrives. Nothing is written back into an archive, so a disk out
+    // of one is read-only unless copy_to says where a writable copy goes.
+    let from_archive = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    let (inner, bytes) = if from_archive {
+        crate::zip::first_with_extension(&bytes, &["dsk"])
+            .ok_or_else(|| format!("{} holds no disk image", path.display()))?
+    } else {
+        (path.display().to_string(), bytes)
+    };
     let disk = Disk::parse(&bytes)?;
-    let what = disk.describe();
+    let what = if from_archive {
+        format!("{inner} from {}: {}", path.display(), disk.describe())
+    } else {
+        disk.describe()
+    };
 
     if !session.spec.bus.model.has_disk() {
         return Err(format!(
@@ -33,6 +49,13 @@ pub fn mount_disk(session: &mut Session, args: &Json) -> Result<String, String> 
         (_, Some(to)) => {
             std::fs::write(to, disk.to_bytes()).map_err(|e| format!("{to}: {e}"))?;
             (Some(std::path::PathBuf::from(to)), false)
+        }
+        (true, None) if from_archive => {
+            return Err(format!(
+                "{} is an archive, and a disk cannot be written back into one. Give \
+                 copy_to a filename and the writes will go there.",
+                path.display()
+            ))
         }
         (true, None) => (Some(path.clone()), false),
         (false, None) => (Some(path.clone()), true),

@@ -6,8 +6,9 @@ does not.
 
 ## Putting one in
 
-**File ▸ Load disk…** reads a `.dsk` and then asks a question before the
-machine can have it:
+**File ▸ Load disk…** reads a `.dsk` — or a `.zip` with one inside, which is
+how a download usually arrives — and then asks a question before the machine
+can have it:
 
 - **Read-only** — the controller reports the disk write-protected. The file is
   never opened for writing.
@@ -15,6 +16,11 @@ machine can have it:
   to the copy. The original is left exactly as it was.
 - **Write to this file** — writes go back to the image it came from, as they
   would to a real disk.
+
+A disk that came out of a zip is offered read-only or a copy, and nothing else:
+an archive is not a place to keep a changing disk, and writing one back into it
+would mean rewriting the archive around it. The copy goes beside the zip under
+the name the disk had inside.
 
 Writable is not the default, and the question is not skipped. A game writes its
 high scores to the disk it loaded from, and the first time that happens should

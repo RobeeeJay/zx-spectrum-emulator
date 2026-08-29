@@ -419,3 +419,170 @@ fn a_disk_in_another_format_says_why_there_is_no_catalogue() {
         "it should say what it cannot read"
     );
 }
+
+/// A disk inside a zip: that is how a download of a game usually arrives.
+///
+/// The archive builder is the same one `tests/zip.rs` uses — bytes written by
+/// hand, so what is tested is the reader rather than whatever wrote them.
+fn archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut directory: Vec<u8> = Vec::new();
+    for (name, data) in files {
+        let at = out.len();
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[20, 0, 0, 0]);
+        out.extend_from_slice(&0u16.to_le_bytes()); // stored
+        out.extend_from_slice(&[0; 4]);
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+
+        directory.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        directory.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&[0; 4]);
+        directory.extend_from_slice(&0u32.to_le_bytes());
+        directory.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        directory.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        directory.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        directory.extend_from_slice(&[0; 8]);
+        directory.extend_from_slice(&[0; 4]);
+        directory.extend_from_slice(&(at as u32).to_le_bytes());
+        directory.extend_from_slice(name.as_bytes());
+    }
+    let directory_at = out.len();
+    let count = files.len() as u16;
+    out.extend_from_slice(&directory);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(directory_at as u32).to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+/// A zip holding a disk mounts the disk.
+#[test]
+fn a_disk_inside_a_zip_can_be_mounted() {
+    let mut app = test_app();
+    let mut disk = Disk::blank("in a zip");
+    disk.track_mut(0, 0).unwrap().sectors[0].data[0] = 0x77;
+    let path = scratch("game.zip");
+    std::fs::write(
+        &path,
+        archive(&[
+            ("readme.txt", b"about the game"),
+            ("GAME.DSK", &disk.to_bytes()),
+        ]),
+    )
+    .unwrap();
+
+    app.open_disk(&path);
+    let pending = app.pending_disk.as_ref().expect("a disk out of the zip");
+    assert_eq!(
+        pending.source,
+        zx_rustrum::ui::disk::Source::InArchive {
+            archive: path.clone(),
+            inner: "GAME.DSK".into(),
+        }
+    );
+    assert_eq!(
+        pending.disk.track(0, 0).unwrap().sectors[0].data[0],
+        0x77,
+        "and it is the disk that was in there"
+    );
+
+    // Read-only mounts it as it is.
+    app.mount_pending(Mounted::ReadOnly, None);
+    let drive = app.spec.bus.fdc.drives[0].as_ref().expect("a disk");
+    assert!(drive.write_protected);
+    assert_eq!(drive.disk.track(0, 0).unwrap().sectors[0].data[0], 0x77);
+}
+
+/// A disk out of a zip cannot be written back into it, and the copy goes
+/// beside the archive under the name it had inside.
+#[test]
+fn a_disk_out_of_a_zip_is_copied_rather_than_written_back() {
+    let mut app = test_app();
+    let disk = Disk::blank("zipped");
+    let path = scratch("writable.zip");
+    let copy = scratch("INSIDE.dsk");
+    std::fs::write(&path, archive(&[("INSIDE.DSK", &disk.to_bytes())])).unwrap();
+
+    app.open_disk(&path);
+    let pending = app.pending_disk.as_ref().unwrap();
+    assert!(
+        !pending.source.writable_in_place(),
+        "there is nowhere in an archive to write a disk back to"
+    );
+    assert_eq!(
+        pending.source.copy_name(),
+        copy,
+        "a copy goes beside the archive, named as it was inside"
+    );
+
+    // Asking for it anyway is refused, and the disk stays waiting rather than
+    // being dropped.
+    app.mount_pending(Mounted::InPlace, None);
+    assert!(app.pending_disk.is_some(), "still waiting to be told");
+    assert!(app.spec.bus.fdc.drives[0].is_none());
+    assert!(
+        app.status.contains("cannot be written back"),
+        "{}",
+        app.status
+    );
+
+    // A copy works, and the writes go to it.
+    app.mount_pending(Mounted::Copy, None);
+    assert!(copy.exists(), "the copy is made");
+    let drive = app.spec.bus.fdc.drives[0].as_ref().unwrap();
+    assert!(!drive.write_protected);
+    assert_eq!(drive.path.as_deref(), Some(copy.as_path()));
+    let _ = std::fs::remove_file(&copy);
+}
+
+/// The question a zipped disk asks has no "write to this file" on it, since
+/// there is no file to write to.
+#[test]
+fn the_question_for_a_zipped_disk_offers_only_a_copy() {
+    let mut app = test_app();
+    let disk = Disk::blank("zipped");
+    let path = scratch("asks.zip");
+    std::fs::write(&path, archive(&[("ASKS.DSK", &disk.to_bytes())])).unwrap();
+    app.open_disk(&path);
+
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    assert!(h.query_by_label("Read-only").is_some());
+    assert!(h
+        .get_all_by_label_contains("Write to a copy")
+        .next()
+        .is_some());
+    assert!(
+        h.query_by_label("Write to this file").is_none(),
+        "there is nowhere to write it back to"
+    );
+    assert!(
+        h.get_all_by_label_contains("came out of a zip")
+            .next()
+            .is_some(),
+        "and it should say why"
+    );
+}
+
+/// A zip with no disk in it says so rather than mounting nothing.
+#[test]
+fn a_zip_with_no_disk_says_so() {
+    let mut app = test_app();
+    let path = scratch("empty.zip");
+    std::fs::write(&path, archive(&[("readme.txt", b"nothing to load")])).unwrap();
+    app.open_disk(&path);
+    assert!(app.pending_disk.is_none());
+    assert!(app.status.contains("no disk image"), "{}", app.status);
+}

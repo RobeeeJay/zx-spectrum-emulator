@@ -154,13 +154,17 @@ pub fn tools() -> Json {
         ),
         schema_tool(
             "mount_disk",
-            "Put a .dsk in the +3's drive. Read-only unless told otherwise: a game writes \
+            "Put a .dsk — or a .zip with one inside — in the +3's drive. Read-only unless \
+             told otherwise: a game writes \
              its high scores to the disk it loaded from, and doing that to somebody's file \
              uninvited is not on. writable sends writes to the file itself; copy_to writes \
              the image to a new file first and sends them there, leaving the original as it \
              was.",
             [
-                ("path", prop("string", "the disk image")),
+                (
+                    "path",
+                    prop("string", "the disk image, or a zip holding one"),
+                ),
                 (
                     "writable",
                     prop("boolean", "let writes go to this file (default false)"),

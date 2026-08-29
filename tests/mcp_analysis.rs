@@ -1028,3 +1028,109 @@ fn a_machine_without_a_drive_refuses_a_disk() {
     assert!(why.contains("no disk drive"), "{why}");
     assert!(why.contains("set_machine"), "and how to get one: {why}");
 }
+
+/// A disk inside a zip, through the server: mounted like any other, and never
+/// written back into the archive.
+#[test]
+fn a_disk_in_a_zip_can_be_mounted_from_the_server() {
+    let Ok(rom) = std::fs::read("roms/plus3.rom") else {
+        eprintln!("need roms/plus3.rom; skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join("zxrs-mcp-disk-zip");
+    std::fs::create_dir_all(&dir).unwrap();
+    let zip = dir.join("game.zip");
+    let copy = dir.join("copy.dsk");
+    let _ = std::fs::remove_file(&copy);
+
+    // A zip with a disk in it, built by hand.
+    let disk = zx_rustrum::disk::Disk::blank("zipped");
+    let bytes = disk.to_bytes();
+    let mut out: Vec<u8> = Vec::new();
+    let mut directory: Vec<u8> = Vec::new();
+    let name = "GAME.DSK";
+    out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[20, 0, 0, 0]);
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(name.as_bytes());
+    out.extend_from_slice(&bytes);
+    directory.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+    directory.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+    directory.extend_from_slice(&0u16.to_le_bytes());
+    directory.extend_from_slice(&[0; 4]);
+    directory.extend_from_slice(&0u32.to_le_bytes());
+    directory.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    directory.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    directory.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    directory.extend_from_slice(&[0; 8]);
+    directory.extend_from_slice(&[0; 4]);
+    directory.extend_from_slice(&0u32.to_le_bytes());
+    directory.extend_from_slice(name.as_bytes());
+    let directory_at = out.len();
+    out.extend_from_slice(&directory);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(directory_at as u32).to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    std::fs::write(&zip, &out).unwrap();
+
+    let mut server = Server::new();
+    server
+        .session
+        .spec
+        .set_model(zx_rustrum::machine::Model::Plus3, &rom);
+    server.session.rom_loaded = true;
+
+    let text = call(
+        &mut server,
+        "mount_disk",
+        Json::obj([("path", Json::str(zip.display().to_string()))]),
+    )
+    .unwrap();
+    assert!(
+        text.contains("GAME.DSK"),
+        "it says what it took out: {text}"
+    );
+    assert!(text.contains("Read-only"), "{text}");
+    assert!(server.session.spec.bus.fdc.drives[0].is_some());
+
+    // Writable without saying where is refused: there is nowhere in an
+    // archive to put the writes.
+    let why = call(
+        &mut server,
+        "mount_disk",
+        Json::obj([
+            ("path", Json::str(zip.display().to_string())),
+            ("writable", Json::Bool(true)),
+        ]),
+    )
+    .unwrap_err();
+    assert!(
+        why.contains("copy_to"),
+        "and says what to do instead: {why}"
+    );
+
+    // With somewhere to put them, it works.
+    let text = call(
+        &mut server,
+        "mount_disk",
+        Json::obj([
+            ("path", Json::str(zip.display().to_string())),
+            ("copy_to", Json::str(copy.display().to_string())),
+        ]),
+    )
+    .unwrap();
+    assert!(text.contains("Writable"), "{text}");
+    assert!(copy.exists());
+    let _ = std::fs::remove_file(&copy);
+    let _ = std::fs::remove_file(&zip);
+}

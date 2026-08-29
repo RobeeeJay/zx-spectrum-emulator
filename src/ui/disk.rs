@@ -22,9 +22,75 @@ use crate::prefs::FileKind;
 use crate::ui::theme;
 use crate::ui::App;
 
+/// Where a disk came from. A disk inside a zip cannot be written back into
+/// it — an archive is not a place to keep a changing disk — so one that came
+/// out of an archive is offered read-only or a copy, and nothing else.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    File(std::path::PathBuf),
+    InArchive {
+        archive: std::path::PathBuf,
+        inner: String,
+    },
+}
+
+impl Source {
+    /// What to call it on the screen.
+    pub fn name(&self) -> String {
+        match self {
+            Source::File(path) => path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string()),
+            Source::InArchive { archive, inner } => format!(
+                "{inner} (in {})",
+                archive
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            ),
+        }
+    }
+
+    /// Whether writes could go back to where it came from.
+    pub fn writable_in_place(&self) -> bool {
+        matches!(self, Source::File(_))
+    }
+
+    /// Where a copy of it should go: beside the file, or beside the archive
+    /// under the name it had inside it.
+    pub fn copy_name(&self) -> std::path::PathBuf {
+        match self {
+            Source::File(path) => copy_name(path),
+            Source::InArchive { archive, inner } => {
+                let dir = archive.parent().unwrap_or(std::path::Path::new("."));
+                let stem = std::path::Path::new(inner)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "disk".into());
+                let mut candidate = dir.join(format!("{stem}.dsk"));
+                let mut n = 2;
+                while candidate.exists() {
+                    candidate = dir.join(format!("{stem} ({n}).dsk"));
+                    n += 1;
+                }
+                candidate
+            }
+        }
+    }
+
+    /// The file it came out of, which is what the window names.
+    pub fn path(&self) -> &std::path::Path {
+        match self {
+            Source::File(path) => path,
+            Source::InArchive { archive, .. } => archive,
+        }
+    }
+}
+
 /// What a disk waiting to go in is waiting for.
 pub struct Pending {
-    pub path: std::path::PathBuf,
+    pub source: Source,
     pub disk: Disk,
 }
 
@@ -58,16 +124,36 @@ impl App {
             Ok(bytes) => bytes,
             Err(e) => return self.set_status(format!("{}: {e}", path.display()), true),
         };
-        match Disk::parse(&bytes) {
+        // A zip with a disk in it is a disk: that is how a download of a game
+        // usually arrives.
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+        {
+            let Some((inner, inner_bytes)) = crate::zip::first_with_extension(&bytes, &["dsk"])
+            else {
+                return self.set_status(format!("{} holds no disk image", path.display()), true);
+            };
+            let source = Source::InArchive {
+                archive: path.to_path_buf(),
+                inner,
+            };
+            return self.open_disk_bytes(source, &inner_bytes);
+        }
+        self.open_disk_bytes(Source::File(path.to_path_buf()), &bytes);
+    }
+
+    /// The same, for a disk already read out of somewhere.
+    pub fn open_disk_bytes(&mut self, source: Source, bytes: &[u8]) {
+        let name = source.name();
+        let path = source.path().to_path_buf();
+        match Disk::parse(bytes) {
             Ok(disk) => {
-                self.prefs.remember_file(FileKind::Disk, path);
-                self.set_status(format!("{} — {}", path.display(), disk.describe()), false);
-                self.pending_disk = Some(Pending {
-                    path: path.to_path_buf(),
-                    disk,
-                });
+                self.prefs.remember_file(FileKind::Disk, &path);
+                self.set_status(format!("{name} — {}", disk.describe()), false);
+                self.pending_disk = Some(Pending { source, disk });
             }
-            Err(e) => self.set_status(format!("{}: {e}", path.display()), true),
+            Err(e) => self.set_status(format!("{name}: {e}"), true),
         }
     }
 
@@ -76,13 +162,27 @@ impl App {
         let Some(pending) = self.pending_disk.take() else {
             return;
         };
+        // Read-only remembers where it came from so the window can say so, and
+        // nothing is ever written there. Writing in place is only offered for a
+        // disk that came out of a file of its own.
+        let origin = Some(pending.source.path().to_path_buf());
         let (path, protected) = match how {
-            Mounted::ReadOnly => (Some(pending.path.clone()), true),
-            Mounted::InPlace => (Some(pending.path.clone()), false),
+            Mounted::ReadOnly => (origin, true),
+            Mounted::InPlace if !pending.source.writable_in_place() => {
+                self.set_status(
+                    "A disk inside a zip cannot be written back into it: write to a copy \
+                     instead."
+                        .into(),
+                    true,
+                );
+                self.pending_disk = Some(pending);
+                return;
+            }
+            Mounted::InPlace => (origin, false),
             Mounted::Copy => {
                 let to = match copy_to {
                     Some(to) => to,
-                    None => copy_name(&pending.path),
+                    None => pending.source.copy_name(),
                 };
                 // Written now rather than at the first write: a copy that does
                 // not exist until something changes is a copy somebody cannot
@@ -197,13 +297,10 @@ impl App {
         let Some(pending) = &self.pending_disk else {
             return;
         };
-        let name = pending
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| pending.path.display().to_string());
+        let name = pending.source.name();
+        let in_archive = !pending.source.writable_in_place();
         let what = pending.disk.describe();
-        let suggested = copy_name(&pending.path);
+        let suggested = pending.source.copy_name();
         let copy_label = suggested
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -261,7 +358,16 @@ impl App {
                         chosen = Some((Mounted::Copy, Some(to)));
                     }
                 }
-                if ui
+                if in_archive {
+                    ui.label(
+                        egui::RichText::new(
+                            "It came out of a zip, so there is nowhere to write it back to: \
+                             a copy, or nothing.",
+                        )
+                        .small()
+                        .color(theme::DIM),
+                    );
+                } else if ui
                     .button("Write to this file")
                     .on_hover_text("Writes go to the disk image itself, as they would to a disk")
                     .clicked()

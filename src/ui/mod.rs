@@ -1109,7 +1109,7 @@ impl App {
                 return self.set_status(format!("Could not read {}: {e}", path.display()), true)
             }
         };
-        let wanted = ["tzx", "tap", "p", "81", "p81", "rzx", "sna", "z80"];
+        let wanted = ["tzx", "tap", "p", "81", "p81", "rzx", "sna", "z80", "dsk"];
         let Some((name, bytes)) = crate::zip::first_with_extension(&data, &wanted) else {
             return self.set_status(
                 format!(
@@ -1128,6 +1128,20 @@ impl App {
             .to_ascii_lowercase();
         match ext.as_str() {
             "rzx" => self.load_recording_bytes(path, &bytes),
+            // A disk goes into a machine with a drive, whether it arrived on
+            // its own or inside an archive.
+            "dsk" => {
+                if self.on_zx81() || !self.spec.bus.model.has_disk() {
+                    self.switch_model(Model::Plus3);
+                }
+                if self.spec.bus.model.has_disk() {
+                    let source = disk::Source::InArchive {
+                        archive: path.to_path_buf(),
+                        inner: name.clone(),
+                    };
+                    self.open_disk_bytes(source, &bytes);
+                }
+            }
             "sna" | "z80" => match snapshot::probe_model_bytes(&ext, &bytes) {
                 Ok(model) => {
                     self.switch_model(model);

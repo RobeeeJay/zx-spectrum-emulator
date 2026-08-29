@@ -32,9 +32,10 @@ interesting code is.
 **The map, before disassembling.** `memory_activity`, `tape_blocks`, `loader`.
 
 **The +3's drive.** `mount_disk`, `new_disk`, `eject_disk`, `disk_info`,
-`disk_speed`, `disk_catalogue`, `read_sector`, `disk_activity`. A disk is
+`disk_speed`, `disk_catalogue`, `read_sector`, `disk_activity`. `mount_disk` takes a `.dsk` or a `.zip` with one inside. A disk is
 mounted read-only unless asked otherwise, and a writable mount says where the
-writes go — `copy_to` writes the image to a new file first. `read_sector` reads
+writes go — `copy_to` writes the image to a new file first, and is the only way
+to write a disk that came out of an archive. `read_sector` reads
 the image rather than driving the drive, so it works whatever the machine is
 doing. See [`disks.md`](disks.md).
 
