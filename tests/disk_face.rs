@@ -2,7 +2,7 @@
 //! sector sits on the picture.
 
 use eframe::egui;
-use zx_rustrum::disk::{Disk, FILLER};
+use zx_rustrum::disk::Disk;
 use zx_rustrum::ui::diskface::{draw, sector_wedge};
 
 /// Where in the picture a colour is, in the terms the drawing thinks in.
