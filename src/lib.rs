@@ -11,6 +11,8 @@ pub mod crt;
 pub mod demo_rom;
 pub mod detect;
 pub mod disasm;
+pub mod disk;
+pub mod fdc;
 pub mod flashload;
 pub mod flow;
 pub mod keyboard;

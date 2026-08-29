@@ -168,6 +168,10 @@ pub struct SpectrumBus {
     pub page_reg: u8,
     /// Last value written to port $1FFD (+2A/+3 only).
     pub page_reg_1ffd: u8,
+    /// The +3's disk controller. Present on every model, since a bus that
+    /// changes shape with the machine is a bus that has to be rebuilt to swap
+    /// one; the ports are only decoded on a machine that has the hardware.
+    pub fdc: crate::fdc::Fdc,
     /// Once the 128K locks paging, only a reset can undo it.
     pub paging_locked: bool,
     /// Later 48K machines run the display one T-state later relative to the
@@ -330,6 +334,7 @@ impl SpectrumBus {
             ram: vec![0; 8 * 0x4000],
             page_reg: 0,
             page_reg_1ffd: 0,
+            fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
             slots: [Slot::Rom(0), Slot::Ram(5), Slot::Ram(2), Slot::Ram(0)],
@@ -476,7 +481,8 @@ impl SpectrumBus {
         self.model.has_plus3_paging() && self.page_reg_1ffd & 0x01 != 0
     }
 
-    /// +3 disk motor bit, decoded but not acted on: there is no FDC.
+    /// +3 disk motor bit. The controller is told, because a drive whose motor
+    /// is off is not ready and that is how +3DOS knows to wait.
     pub fn disk_motor(&self) -> bool {
         self.model.has_disk() && self.page_reg_1ffd & 0x08 != 0
     }
@@ -1400,6 +1406,12 @@ impl Bus for SpectrumBus {
             // $1FFD: the +2A/+3's second paging port.
             if self.model.has_plus3_paging() && port & 0xf002 == 0x1000 {
                 self.write_paging_1ffd(value);
+                self.fdc.motor = self.disk_motor();
+            }
+            // $3FFD: the controller's data register. The status register at
+            // $2FFD is read-only, so nothing is written there.
+            if self.model.has_disk() && port & 0xf002 == 0x3000 {
+                self.fdc.write(value);
             }
             // $FFFD: AY register select, $BFFD: AY data.
             if port & 0xc002 == 0xc000 {
@@ -2044,6 +2056,14 @@ impl SpectrumBus {
                 self.break_hit.get_or_insert(Event::Ay);
             }
             return byte;
+        }
+        // The disk controller: $2FFD is its status register and $3FFD its
+        // data register. Both are read; only the data register is written.
+        if self.model.has_disk() && port & 0xf002 == 0x2000 {
+            return self.fdc.status();
+        }
+        if self.model.has_disk() && port & 0xf002 == 0x3000 {
+            return self.fdc.read();
         }
         // AY register read: $FFFD.
         if self.model.has_ay() && port & 0xc002 == 0xc000 {
