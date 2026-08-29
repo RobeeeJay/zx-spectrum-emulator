@@ -673,6 +673,9 @@ impl Fdc {
                 }
             }
             drive.disk.dirty |= wrote;
+            if wrote {
+                drive.disk.revision += 1;
+            }
         }
         if r < self.last_sector {
             let next = r + 1;
@@ -748,6 +751,7 @@ impl Fdc {
                 }),
             }
             drive.disk.dirty = true;
+            drive.disk.revision += 1;
         }
         self.buffer.clear();
         self.transfer_result(0, 0, track_no, head, 1, n);

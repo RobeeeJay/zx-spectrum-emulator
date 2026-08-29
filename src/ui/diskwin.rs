@@ -20,7 +20,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     drive(app, ui);
     ui.add_space(8.0);
-    sector_map(app, ui);
+    platter(app, ui);
     ui.add_space(8.0);
     catalogue(app, ui);
 }
@@ -176,14 +176,14 @@ fn drive(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-/// The disk as a grid: a row per track, a cell per sector, with what has been
-/// read and written lit over what is underneath.
+/// The disk as a disk: rings of tracks with the bits on them, and what the
+/// machine has been reading and writing lit over the top.
 ///
-/// Underneath is the disk itself — how full the sector is — so an untouched
-/// disk still shows its shape: the directory at the front, the data behind it,
-/// and the empty tracks at the end. Reads light green and writes amber, and
-/// both fade, so a load draws itself down the disk as it happens.
-fn sector_map(app: &mut App, ui: &mut egui::Ui) {
+/// Track 0 is the outermost ring, where it is on a real disk — which is why an
+/// empty disk has a bright band at the edge, the directory, and nothing behind
+/// it. Reads light green and writes amber over the sector they touched, and
+/// both fade, so a load draws itself round the disk as it happens.
+fn platter(app: &mut App, ui: &mut egui::Ui) {
     let Some(drive) = app.spec.bus.fdc.drives[0].as_ref() else {
         ui.label(
             egui::RichText::new("No disk in the drive.")
@@ -193,7 +193,7 @@ fn sector_map(app: &mut App, ui: &mut egui::Ui) {
         return;
     };
     let tracks = drive.disk.tracks_per_side.max(1) as usize;
-    let across = drive
+    let sectors = drive
         .disk
         .tracks
         .iter()
@@ -202,81 +202,114 @@ fn sector_map(app: &mut App, ui: &mut egui::Ui) {
         .unwrap_or(9)
         .max(1);
 
-    let width = ui.available_width();
-    let cell = (width - 30.0) / across as f32;
-    let height = cell * tracks as f32 * 0.55;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let side = ui.available_width().min(360.0);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), side), egui::Sense::hover());
+    let square = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
+
+    // The bits, rasterised once and kept until the disk changes.
+    let pixels = (side * ui.ctx().pixels_per_point()).round().max(64.0) as usize;
+    let texture = {
+        let disk = &app.spec.bus.fdc.drives[0]
+            .as_ref()
+            .expect("just checked")
+            .disk;
+        app.platter
+            .texture(ui.ctx(), disk, pixels.min(1024))
+            .clone()
+    };
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, theme::LCD_BG);
+    painter.image(
+        texture.id(),
+        square,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
 
-    let row_h = rect.height() / tracks as f32;
-    for track_no in 0..tracks {
-        let Some(track) = drive.disk.track(track_no as u8, 0) else {
-            continue;
-        };
-        for (i, sector) in track.sectors.iter().enumerate() {
-            let at = egui::pos2(
-                rect.left() + 26.0 + i as f32 * cell,
-                rect.top() + track_no as f32 * row_h,
-            );
-            let cell_rect =
-                egui::Rect::from_min_size(at, egui::vec2(cell - 1.0, (row_h - 1.0).max(1.0)));
-            // What is underneath: how much of the sector is not the filler
-            // byte, which is what an empty sector is made of.
-            let used = sector
-                .data
-                .iter()
-                .filter(|b| **b != crate::disk::FILLER)
-                .count();
-            let fullness = used as f32 / sector.data.len().max(1) as f32;
-            let base = theme::LCD_GRID.gamma_multiply(0.4 + fullness * 1.6);
-            painter.rect_filled(cell_rect, 1.0, base);
-
-            let key = (track_no as u8, 0u8, sector.r);
-            let read = app.spec.bus.fdc.reads.get(&key).copied().unwrap_or(0);
-            let written = app.spec.bus.fdc.writes.get(&key).copied().unwrap_or(0);
-            // A write is worth more than a read: it changed the disk.
-            if written > 0 {
-                painter.rect_filled(
-                    cell_rect,
-                    1.0,
-                    theme::AMBER.gamma_multiply(written as f32 / 255.0),
-                );
-            } else if read > 0 {
-                painter.rect_filled(
-                    cell_rect,
-                    1.0,
-                    theme::LCD_FG.gamma_multiply(read as f32 / 255.0),
-                );
-            }
+    let centre = square.center();
+    let half = square.width() / 2.0;
+    // A wedge of the disk, drawn as a filled polygon: the two radii and the
+    // arc between them, which at this size is a handful of points.
+    let wedge = |track: usize, sector: usize, colour: egui::Color32| {
+        let (angles, radii) = crate::ui::diskface::sector_wedge(tracks, track, sector, sectors);
+        let steps = 6;
+        let mut points = Vec::with_capacity(steps * 2 + 2);
+        for i in 0..=steps {
+            let a = angles.start + (angles.end - angles.start) * i as f32 / steps as f32;
+            points.push(centre + egui::vec2(a.cos(), a.sin()) * radii.end * half);
         }
-        // The track number, every tenth.
-        if track_no % 10 == 0 {
-            painter.text(
-                egui::pos2(rect.left() + 4.0, rect.top() + track_no as f32 * row_h),
-                egui::Align2::LEFT_TOP,
-                format!("{track_no}"),
-                egui::FontId::monospace(9.0),
-                theme::DIM,
-            );
+        for i in (0..=steps).rev() {
+            let a = angles.start + (angles.end - angles.start) * i as f32 / steps as f32;
+            points.push(centre + egui::vec2(a.cos(), a.sin()) * radii.start * half);
+        }
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            colour,
+            egui::Stroke::NONE,
+        ));
+    };
+
+    // What has been touched lately. A write counts for more than a read: it
+    // changed the disk.
+    let fdc = &app.spec.bus.fdc;
+    let sector_index = |track: u8, r: u8| -> Option<usize> {
+        fdc.drives[0]
+            .as_ref()?
+            .disk
+            .track(track, 0)?
+            .sectors
+            .iter()
+            .position(|s| s.r == r)
+    };
+    let mut lit: Vec<(usize, usize, egui::Color32)> = Vec::new();
+    for ((track, side_no, r), heat) in &fdc.reads {
+        if *side_no != 0 {
+            continue;
+        }
+        if let Some(index) = sector_index(*track, *r) {
+            lit.push((
+                *track as usize,
+                index,
+                theme::LCD_FG.gamma_multiply(*heat as f32 / 255.0 * 0.85),
+            ));
         }
     }
-    // Where the head is, since that is the row the next read comes from.
-    let head = app.spec.bus.fdc.head_at(0) as f32;
-    if (head as usize) < tracks {
-        let y = rect.top() + head * row_h + row_h / 2.0;
-        painter.line_segment(
-            [
-                egui::pos2(rect.left() + 20.0, y),
-                egui::pos2(rect.right(), y),
-            ],
-            egui::Stroke::new(1.0, theme::AMBER.gamma_multiply(0.5)),
+    for ((track, side_no, r), heat) in &fdc.writes {
+        if *side_no != 0 {
+            continue;
+        }
+        if let Some(index) = sector_index(*track, *r) {
+            lit.push((
+                *track as usize,
+                index,
+                theme::AMBER.gamma_multiply(*heat as f32 / 255.0 * 0.9),
+            ));
+        }
+    }
+    for (track, sector, colour) in lit {
+        wedge(track, sector, colour);
+    }
+
+    // Where the head is: the track it is over, all the way round.
+    let head = app.spec.bus.fdc.head_at(0) as usize;
+    if head < tracks {
+        let (_, radii) = crate::ui::diskface::sector_wedge(tracks, head, 0, sectors);
+        let middle = (radii.start + radii.end) / 2.0 * half;
+        painter.circle_stroke(
+            centre,
+            middle,
+            egui::Stroke::new(
+                1.0,
+                theme::AMBER.gamma_multiply(if app.spec.bus.fdc.motor { 0.55 } else { 0.3 }),
+            ),
         );
     }
+
     response.on_hover_text(
-        "A row per track, a cell per sector. How bright a cell is underneath is how much \
-         of it is not empty; green is a sector just read, amber one just written, and both \
-         fade.",
+        "The disk as it is written: a ring per track with track 0 outermost, and the bits \
+         of each track round it — white for a one, black for a nought, one bit sampled per \
+         step round the ring rather than all 36,864 of them. Green is a sector just read, \
+         amber one just written, and the ring is where the head is.",
     );
 }
 

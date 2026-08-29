@@ -58,13 +58,24 @@ was a choice. The controller has no clock of its own: it is handed the
 machine's time on every port access, which is the only moment the time can
 matter.
 
-**The sector map**, where the tape window has its oscilloscope: a row per
-track, a cell per sector. How bright a cell is underneath is how much of the
-sector is not the formatter's filler, so an untouched disk still shows its
-shape — the directory at the front, the data behind it, the empty tracks at the
-end. Reads light green over that and writes amber, and both fade, so a load
-draws itself down the disk as it happens. A line marks the track the head is
-on.
+**The disk**, where the tape window has its oscilloscope: drawn as a disk, a
+ring per track with track 0 outermost — where it is on a real one, which is why
+an empty disk is a bright band at the edge with nothing behind it. The bits are
+drawn as bits, white for a one and black for a nought, clockwise from the top.
+
+Not all of them: a track is nine 512-byte sectors, 36,864 bits, and a ring a
+few hundred pixels round cannot hold them, so one bit is sampled per step
+around the ring. What that shows is the pattern rather than a transcript — a
+track of code looks nothing like a track of $E5, and an unformatted one like
+neither — and the tooltip says so.
+
+Reads light green over the sector they touched and writes amber, both fading,
+so a load draws itself round the disk as it happens; a ring marks the track the
+head is on. The picture is rasterised into a texture and kept until the disk
+changes, because fifty thousand line segments a frame is not a thing to ask of
+a window that is also running a Spectrum. What says the disk has changed is a
+revision number bumped when a sector is written, rather than a comparison of a
+hundred and eighty kilobytes.
 
 **The catalogue**, where the tape window lists blocks: the CP/M directory read
 as CAT reads it, with each file's size and whether it is read-only or hidden.

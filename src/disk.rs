@@ -79,6 +79,9 @@ pub struct Disk {
     pub tracks: Vec<Track>,
     /// Whether anything has been written since it was mounted or last saved.
     pub dirty: bool,
+    /// Bumped whenever a sector changes, so anything drawing the disk knows
+    /// its picture is out of date without comparing every byte.
+    pub revision: u64,
 }
 
 impl Disk {
@@ -113,6 +116,7 @@ impl Disk {
             sides: 1,
             tracks,
             dirty: false,
+            revision: 0,
         }
     }
 
@@ -225,6 +229,7 @@ impl Disk {
             sides,
             tracks,
             dirty: false,
+            revision: 0,
         })
     }
 

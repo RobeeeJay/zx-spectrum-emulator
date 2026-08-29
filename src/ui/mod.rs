@@ -6,6 +6,7 @@ pub mod cassette;
 pub mod crt;
 pub mod debugger;
 pub mod disk;
+pub mod diskface;
 pub mod diskwin;
 pub mod keyboard;
 pub mod profiler;
@@ -463,6 +464,9 @@ pub struct App {
     pub show_keyboard: bool,
     /// The +3's drive, drawn.
     pub show_disk: bool,
+    /// The disk drawn as a disk, kept between frames: rasterising forty rings
+    /// of bits is not a thing to do sixty times a second.
+    pub platter: diskface::Platter,
     /// A disk read and waiting to be told how its writes should be treated.
     pub pending_disk: Option<disk::Pending>,
     /// How the disk in drive A: was put in, if there is one.
@@ -611,6 +615,7 @@ impl App {
             show_profiler: false,
             show_keyboard: false,
             show_disk: false,
+            platter: diskface::Platter::default(),
             pending_disk: None,
             disk_mounted: None,
             keys: crate::keyboard::Keys::default(),
