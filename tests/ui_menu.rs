@@ -554,3 +554,41 @@ fn the_record_section_holds_both_recorders() {
         "and nothing to stop"
     );
 }
+
+/// After a reset the machine ignores the keyboard for a second or so, and the
+/// status line says why rather than leaving it looking like a hang.
+///
+/// The 48K ROM checks every byte of RAM before it does anything else, with
+/// interrupts disabled — and the keyboard is read by the interrupt. Measured
+/// at 85 frames: nothing is being ignored, there is nothing to ignore it yet.
+#[test]
+fn a_reset_says_why_the_keyboard_is_deaf_for_a_moment() {
+    let mut h = harness();
+    h.run_steps(3);
+    h.state_mut().speed = 1.0;
+    // The toolbar's Reset, rather than the menu's: there are two of them and
+    // they say the same thing.
+    h.get_all_by_label("Reset").last().unwrap().click();
+    h.run_steps(3);
+
+    let status = h.state().status.clone();
+    assert!(status.contains("Reset"), "{status}");
+    assert!(
+        status.contains("checks the RAM"),
+        "it should say what the machine is doing: {status}"
+    );
+    assert!(
+        status.contains("1.7s"),
+        "and roughly how long that takes: {status}"
+    );
+
+    // At half speed it takes twice as long, and says so.
+    h.state_mut().speed = 0.5;
+    h.get_all_by_label("Reset").last().unwrap().click();
+    h.run_steps(3);
+    assert!(
+        h.state().status.contains("3.4s"),
+        "at half speed the wait doubles: {}",
+        h.state().status
+    );
+}

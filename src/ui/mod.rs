@@ -1890,6 +1890,21 @@ impl App {
         }
     }
 
+    /// What to say after a reset.
+    ///
+    /// The keyboard is dead for a second or so afterwards and it is worth
+    /// saying why: the ROM checks every byte of RAM before it does anything
+    /// else, with interrupts off, and the keyboard is read by the interrupt.
+    /// Nothing is being ignored — there is nothing to ignore it yet.
+    fn starting_up(&self) -> String {
+        let frames = 85.0 / self.speed.max(0.01);
+        format!(
+            "Reset ({}) — the ROM checks the RAM before it reads the keyboard, about {:.1}s",
+            self.spec.bus.model.name(),
+            frames / 50.0
+        )
+    }
+
     /// True when the ZX81 is the machine in use.
     pub fn on_zx81(&self) -> bool {
         self.zx81.is_some()
@@ -2874,7 +2889,7 @@ impl App {
                 ui.separator();
                 if ui.button("Reset").clicked() {
                     self.spec.reset();
-                    self.status = "Reset".into();
+                    self.set_status(self.starting_up(), false);
                     ui.close();
                 }
             });
@@ -2926,7 +2941,8 @@ impl App {
                     }
                     None => {
                         self.spec.reset();
-                        self.set_status(format!("Reset ({})", self.spec.bus.model.name()), false);
+                        let what = self.starting_up();
+                        self.set_status(what, false);
                     }
                 }
             }

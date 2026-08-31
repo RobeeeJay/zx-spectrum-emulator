@@ -350,6 +350,14 @@ speeds — the waits a real one makes, or none — and its window draws the fron
 of the drive, a map of what has been read and written per sector, and the
 catalogue. [`docs/disks.md`](docs/disks.md) has the rest.
 
+**The machine is deaf for a second after a reset, and that is the ROM.** The
+48K ROM checks every byte of RAM before it does anything else, with interrupts
+disabled — and the keyboard is read by the interrupt handler, so nothing is
+scanned until it finishes. Measured at 85 frames, and it scales with the
+emulator's speed: half speed, twice the wait. The status line says so rather
+than leaving it looking like a hang; nothing about it is worth "fixing", since
+the fix would be lying about the machine.
+
 **A watch can be on a place as well as on a kind of thing.** `Breaks` carries
 watches for the sorts of thing a program does — a screen write, the beeper, an
 `IN` — and `write_range`, which is a watch on an address. It costs one
