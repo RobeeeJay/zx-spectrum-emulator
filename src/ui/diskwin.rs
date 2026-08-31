@@ -331,24 +331,42 @@ fn catalogue(app: &mut App, ui: &mut egui::Ui) {
         return;
     };
     let format = drive.disk.format();
-    match format {
-        Format::Other => {
-            ui.label(
-                egui::RichText::new(
-                    "Not a +3 format disk — its sectors are numbered some other way, so \
-                     there is no catalogue to read. The sector map above is what there is.",
-                )
-                .small()
-                .color(theme::DIM),
-            );
-            return;
-        }
-        Format::System => {
-            theme::group_label(ui, "Catalogue (system format)");
-        }
-        Format::Data => {
-            theme::group_label(ui, "Catalogue");
-        }
+    if format == Format::Other {
+        ui.label(
+            egui::RichText::new(
+                "Not a +3 format disk — its sectors are numbered some other way and it \
+                 carries no specification, so there is no catalogue to read. The picture \
+                 above is what there is.",
+            )
+            .small()
+            .color(theme::DIM),
+        );
+        return;
+    }
+    theme::group_label(ui, "Catalogue");
+    ui.label(
+        egui::RichText::new(format.describe())
+            .small()
+            .color(theme::DIM),
+    );
+    // Whose files these are. A CPC disk mounts, catalogues and reads perfectly
+    // well on a +3 and then does not load, which looks like a broken emulator
+    // unless somebody says otherwise.
+    if let Some(made_for) = drive.disk.made_for() {
+        let (text, colour) = match made_for {
+            crate::disk::MadeFor::Spectrum => {
+                ("+3DOS headers — a Spectrum disk".to_string(), theme::DIM)
+            }
+            crate::disk::MadeFor::Amstrad => (
+                "AMSDOS headers — an Amstrad CPC disk, which a +3 cannot load".to_string(),
+                theme::AMBER,
+            ),
+            crate::disk::MadeFor::Headerless => (
+                "no header on the first file — a loader reading its own data".to_string(),
+                theme::DIM,
+            ),
+        };
+        ui.label(egui::RichText::new(text).small().color(colour));
     }
     let Some(files) = drive.disk.catalogue() else {
         return;

@@ -117,6 +117,37 @@ directory entry starts with, so a disk full of it catalogues as empty rather
 than as full of rubbish. A blank disk reads as `No files found` and `178K
 free`, which is what the machine says about one it formatted itself.
 
+## Which disk is this?
+
+Three questions the window and `disk_info` answer, because the difference
+between them is the difference between a disk that will not load and an
+emulator that will not load it.
+
+**What format is it in?** The two the machine makes are told by their sector
+numbering — from `$C1` for the data format its FORMAT writes, from `$41` for
+the system format it was sold with. Anything else says what it is in the first
+sector of track 0: a ten-byte specification giving the tracks, sides, sectors,
+reserved tracks, block size and how much of the disk the directory takes. That
+is how a 720K disk works on a machine whose own FORMAT only makes 180K ones,
+and reading it is what lets the catalogue be shown for one.
+
+CP/M counts in tracks of its own, and on a double-sided disk each side is one
+of them: unit 0 is track 0 side 0, unit 1 is track 0 side 1, unit 2 is track 1
+side 0. The reserved count is in those units too. Skipping a whole physical
+track instead put the directory of a 720K disk on the wrong side and read
+somebody else's data as filenames.
+
+**Whose files are on it?** A +3DOS file begins with the eight letters of
+`PLUS3DOS`; an AMSDOS file begins with a header whose first sixty-seven bytes
+add up to the checksum at byte 67. The +3 and the Amstrad CPC use the same
+disks, the same controller and the same filesystem, so a CPC disk mounts,
+catalogues and reads perfectly well on a +3 — and then does not load, because
+the files in it are for another machine. The window says so in amber rather
+than leaving somebody to wonder.
+
+A file with neither header is a game's own loader reading its own data, which
+is not a fault either.
+
 ## The controller
 
 `src/fdc.rs` is a µPD765A as far as +3DOS can tell. Every command goes through

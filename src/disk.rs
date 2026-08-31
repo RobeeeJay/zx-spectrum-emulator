@@ -315,7 +315,28 @@ pub struct Entry {
     pub system: bool,
 }
 
-/// What format the disk is in, as +3DOS tells: the sector numbers say it.
+/// What a disk's geometry is, once something has said so.
+///
+/// The two formats the machine makes are implied by their sector numbering;
+/// anything else has to be written down, and +3DOS writes it in the first
+/// sector of the first track. That is how a 720K disk works on a machine whose
+/// own FORMAT only makes 180K ones.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Spec {
+    pub tracks: u8,
+    pub sides: u8,
+    pub sectors: u8,
+    /// Size code: 512 bytes is 2.
+    pub sector_size: u8,
+    /// Tracks at the front the filesystem does not use.
+    pub reserved: u8,
+    /// The allocation unit, in bytes.
+    pub block_size: u32,
+    /// How many of those the directory takes.
+    pub directory_blocks: u8,
+}
+
+/// What format the disk is in, as +3DOS tells.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Format {
     /// Sectors numbered from $C1: the disk FORMAT makes, all forty tracks
@@ -324,22 +345,149 @@ pub enum Format {
     /// Sectors numbered from $41: the disk the machine was sold with, whose
     /// first track is reserved for CP/M.
     System,
-    /// Something else — an Amstrad disk, or a game that formatted its own
-    /// tracks. There is no catalogue to read.
+    /// A disk carrying its own specification in track 0, sector 1 — which is
+    /// how anything that is not one of those two says what it is.
+    Specified(Spec),
+    /// Something else. There is no catalogue to read.
     Other,
 }
 
+impl Format {
+    /// The geometry, whichever way it was arrived at.
+    pub fn spec(&self, disk: &Disk) -> Option<Spec> {
+        match self {
+            Format::Data => Some(Spec {
+                tracks: disk.tracks_per_side,
+                sides: disk.sides,
+                sectors: SECTORS,
+                sector_size: 2,
+                reserved: 0,
+                block_size: 1024,
+                directory_blocks: 2,
+            }),
+            Format::System => Some(Spec {
+                tracks: disk.tracks_per_side,
+                sides: disk.sides,
+                sectors: SECTORS,
+                sector_size: 2,
+                reserved: 1,
+                block_size: 1024,
+                directory_blocks: 2,
+            }),
+            Format::Specified(spec) => Some(*spec),
+            Format::Other => None,
+        }
+    }
+
+    /// What to call it.
+    pub fn describe(&self) -> String {
+        match self {
+            Format::Data => "+3 data format, sectors from $C1".into(),
+            Format::System => "+3 system format, sectors from $41, first track reserved".into(),
+            Format::Specified(spec) => format!(
+                "a disk with its own specification: {} tracks, {} side{}, {} sectors a track, \
+                 {} reserved, {}K blocks",
+                spec.tracks,
+                spec.sides,
+                if spec.sides == 1 { "" } else { "s" },
+                spec.sectors,
+                spec.reserved,
+                spec.block_size / 1024
+            ),
+            Format::Other => "not a +3 format — its sectors are numbered some other way".into(),
+        }
+    }
+}
+
+/// Which machine's files are on a disk, as far as their headers say.
+///
+/// The +3 and the Amstrad CPC use the same disks, the same controller and the
+/// same filesystem, so a CPC disk mounts, catalogues and reads perfectly well
+/// on a +3 — and then does not load, because the files in it are for another
+/// machine. Telling somebody that is worth more than letting them wonder
+/// whether the emulator is broken.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MadeFor {
+    /// A +3DOS header: the eight letters of "PLUS3DOS" and a soft end-of-file.
+    Spectrum,
+    /// An AMSDOS header: a name, a type, lengths, and a checksum of the first
+    /// sixty-seven bytes that has to add up.
+    Amstrad,
+    /// Neither, which is what a file saved without a header looks like — a
+    /// game's own loader reading its own data.
+    Headerless,
+}
+
 impl Disk {
-    /// Which of the two formats the machine knows this is, if either.
+    /// The bytes of one of the disk's kilobyte blocks, as CP/M counts them:
+    /// two sectors, after whatever tracks the format reserves.
+    pub fn block(&self, index: u16) -> Option<Vec<u8>> {
+        let spec = self.format().spec(self)?;
+        let sector_bytes = 128u32 << spec.sector_size.min(6);
+        let per_block = (spec.block_size / sector_bytes).max(1);
+        let per_track = spec.sectors as u32;
+        let mut out = Vec::with_capacity(spec.block_size as usize);
+        for part in 0..per_block {
+            let logical = index as u32 * per_block + part;
+            // CP/M counts in tracks of its own, and on a double-sided disk a
+            // side is one of them: unit 0 is track 0 side 0, unit 1 is track 0
+            // side 1, unit 2 is track 1 side 0. The reserved count is in those
+            // units too — skipping a whole physical track instead put the
+            // directory of a 720K disk on the wrong side, and read somebody
+            // else's data as filenames.
+            let sides = spec.sides.max(1) as u32;
+            let unit = spec.reserved as u32 + logical / per_track;
+            let track = unit / sides;
+            let side = (unit % sides) as u8;
+            let sector = self
+                .track(track as u8, side)?
+                .sectors
+                .get((logical % per_track) as usize)?;
+            out.extend_from_slice(&sector.data);
+        }
+        Some(out)
+    }
+
+    /// Whose files these are, from the header on the first one.
+    ///
+    /// One file is enough: a disk does not mix them, and the first is the one
+    /// a loader would go for.
+    pub fn made_for(&self) -> Option<MadeFor> {
+        let files = self.catalogue()?;
+        let _ = files.first()?;
+        // The directory entry's first block, which is where the file starts.
+        let directory = self.directory()?;
+        let entry = directory
+            .chunks(32)
+            .find(|entry| entry.len() == 32 && entry[0] == 0 && entry[12] == 0)?;
+        let block = u16::from(entry[16]);
+        let head = self.block(block)?;
+        if head.starts_with(b"PLUS3DOS") {
+            return Some(MadeFor::Spectrum);
+        }
+        // AMSDOS: the first sixty-seven bytes add up to the word at 67, and
+        // nothing else is that lucky by accident.
+        if head.len() >= 69 {
+            let sum: u32 = head[..67].iter().map(|b| *b as u32).sum();
+            let stored = u16::from_le_bytes([head[67], head[68]]) as u32;
+            if sum == stored && stored != 0 {
+                return Some(MadeFor::Amstrad);
+            }
+        }
+        Some(MadeFor::Headerless)
+    }
+
+    /// Which format this is: one of the two the machine makes, or whatever the
+    /// disk says of itself.
     pub fn format(&self) -> Format {
-        match self
-            .track(0, 0)
-            .and_then(|t| t.sectors.first())
-            .map(|s| s.r)
-        {
+        let first = self.track(0, 0).and_then(|t| t.sectors.first());
+        match first.map(|s| s.r) {
             Some(0xC1) => Format::Data,
             Some(0x41) => Format::System,
-            _ => Format::Other,
+            _ => match first.and_then(|s| specification(&s.data)) {
+                Some(spec) => Format::Specified(spec),
+                None => Format::Other,
+            },
         }
     }
 
@@ -354,18 +502,7 @@ impl Disk {
     /// $E5 in the first byte is a deleted or never-used entry, which is why a
     /// disk formatted with $E5 catalogues as empty.
     pub fn catalogue(&self) -> Option<Vec<Entry>> {
-        let reserved = match self.format() {
-            Format::Data => 0u8,
-            Format::System => 1,
-            Format::Other => return None,
-        };
-        let track = self.track(reserved, 0)?;
-        let bytes: Vec<u8> = track
-            .sectors
-            .iter()
-            .take(4)
-            .flat_map(|s| s.data.iter().copied())
-            .collect();
+        let bytes = self.directory()?;
 
         let mut files: Vec<Entry> = Vec::new();
         for entry in bytes.chunks(32) {
@@ -422,16 +559,75 @@ impl Disk {
 
     /// How much room is left, in kilobytes: the blocks nothing has claimed.
     pub fn free_kilobytes(&self) -> Option<u32> {
+        let spec = self.format().spec(self)?;
         let files = self.catalogue()?;
         let used: u32 = files.iter().map(|f| f.kilobytes).sum();
-        let reserved = match self.format() {
-            Format::Data => 0,
-            Format::System => 1,
-            Format::Other => return None,
-        };
-        // The whole disk, less the reserved track and the two blocks the
-        // directory itself takes.
-        let total = (self.tracks_per_side as u32 - reserved) * self.sides as u32 * 9 * 512 / 1024;
-        Some(total.saturating_sub(used + 2))
+        let sector_bytes = 128u32 << spec.sector_size.min(6);
+        // The whole disk, less the tracks the format reserves and the blocks
+        // the directory itself takes.
+        let total = (spec.tracks as u32 - spec.reserved as u32)
+            * spec.sides.max(1) as u32
+            * spec.sectors as u32
+            * sector_bytes
+            / 1024;
+        let directory = spec.directory_blocks as u32 * spec.block_size / 1024;
+        Some(total.saturating_sub(used + directory))
     }
+
+    /// The directory: the blocks at the front of the disk that hold the
+    /// catalogue, however many of them this format has.
+    fn directory(&self) -> Option<Vec<u8>> {
+        let spec = self.format().spec(self)?;
+        let mut out = Vec::new();
+        for block in 0..spec.directory_blocks as u16 {
+            out.extend_from_slice(&self.block(block)?);
+        }
+        Some(out)
+    }
+}
+
+/// The disk specification +3DOS writes in the first sector of track 0.
+///
+/// Ten bytes: what sort of disk it is, how many tracks and sectors, how many
+/// tracks are reserved, how big an allocation block is and how much of the
+/// disk the directory takes. A disk without one is one of the two formats the
+/// machine makes, told apart by their sector numbering.
+///
+/// Every field is checked against what a disk could actually be. The first
+/// sector of a data-format disk is $E5 all through, which would otherwise read
+/// as a specification for a disk of two hundred and twenty-nine tracks.
+fn specification(sector: &[u8]) -> Option<Spec> {
+    if sector.len() < 10 {
+        return None;
+    }
+    let kind = sector[0];
+    let sides = match sector[1] & 0x03 {
+        0 => 1,
+        _ => 2,
+    };
+    let tracks = sector[2];
+    let sectors = sector[3];
+    let sector_size = sector[4];
+    let reserved = sector[5];
+    let block_shift = sector[6];
+    let directory_blocks = sector[7];
+    let plausible = kind <= 3
+        && (1..=100).contains(&tracks)
+        && (1..=32).contains(&sectors)
+        && sector_size <= 6
+        && reserved < tracks
+        && (3..=7).contains(&block_shift)
+        && (1..=64).contains(&directory_blocks);
+    if !plausible {
+        return None;
+    }
+    Some(Spec {
+        tracks,
+        sides,
+        sectors,
+        sector_size,
+        reserved,
+        block_size: 128u32 << block_shift,
+        directory_blocks,
+    })
 }

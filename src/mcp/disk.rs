@@ -5,7 +5,7 @@
 //! sector by sector. What is not here is a way to mount a disk writable
 //! without saying so — every writable mount names where the writes go.
 
-use crate::disk::{Disk, Format};
+use crate::disk::Disk;
 use crate::fdc::{Drive, Speed};
 use crate::mcp::json::Json;
 use crate::mcp::tools::{addr_of, count, flag, text, Session};
@@ -136,11 +136,7 @@ pub fn disk_info(session: &mut Session, _args: &Json) -> Result<String, String> 
             .map(|p| format!("{}\n", p.display()))
             .unwrap_or_default(),
         drive.disk.describe(),
-        match drive.disk.format() {
-            Format::Data => "+3 data format, sectors from $C1",
-            Format::System => "+3 system format, sectors from $41, first track reserved",
-            Format::Other => "not a +3 format — its sectors are numbered some other way",
-        },
+        drive.disk.format().describe(),
         if drive.write_protected {
             "read-only"
         } else {
@@ -155,6 +151,20 @@ pub fn disk_info(session: &mut Session, _args: &Json) -> Result<String, String> 
         fdc.reads.len(),
         fdc.writes.len()
     ));
+    match drive.disk.made_for() {
+        Some(crate::disk::MadeFor::Spectrum) => {
+            out.push_str("The files on it have +3DOS headers: a Spectrum disk.\n")
+        }
+        Some(crate::disk::MadeFor::Amstrad) => out.push_str(
+            "The files on it have AMSDOS headers: this is an Amstrad CPC disk. The two \
+             machines use the same disks, the same controller and the same filesystem, so \
+             it mounts and catalogues perfectly well here — and a +3 cannot load it.\n",
+        ),
+        Some(crate::disk::MadeFor::Headerless) => {
+            out.push_str("The first file has no header, which is what a game's own loader reads.\n")
+        }
+        None => {}
+    }
     if drive.disk.dirty {
         out.push_str("It has been written to since it was mounted.\n");
     }
