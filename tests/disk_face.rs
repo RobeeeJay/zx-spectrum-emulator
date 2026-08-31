@@ -374,3 +374,43 @@ fn the_sectors_of_a_track_are_drawn_apart() {
         "nine sectors with a gap after each is eighteen changes round the track: {changes}"
     );
 }
+
+/// What is under a point on the picture: the inverse of the drawing, so the
+/// window can say which track and sector the pointer is over.
+#[test]
+fn a_point_on_the_picture_names_a_track_and_sector() {
+    use zx_rustrum::ui::diskface::at_point;
+
+    let half = 200.0;
+    // Straight up, in the outermost track: track 0, and the first sector,
+    // which starts at the top.
+    let (_, radii) = sector_wedge(40, 0, 0, 9);
+    let middle = (radii.start + radii.end) / 2.0 * half;
+    let hit = at_point(egui::vec2(0.0, -middle), half, 40, 9).expect("a track");
+    assert_eq!(hit.track, 0);
+    assert_eq!(hit.sector, Some(0), "the first sector starts at the top");
+
+    // A quarter of the way round clockwise is sector 2 of nine.
+    let hit = at_point(egui::vec2(middle, 0.0), half, 40, 9).expect("a track");
+    assert_eq!(hit.track, 0);
+    assert_eq!(hit.sector, Some(2));
+
+    // Further in is a later track, and the innermost is track 39.
+    let (_, inner) = sector_wedge(40, 39, 0, 9);
+    let deep = (inner.start + inner.end) / 2.0 * half;
+    let hit = at_point(egui::vec2(0.0, -deep), half, 40, 9).expect("a track");
+    assert_eq!(hit.track, 39);
+
+    // The hub is not a track, and neither is anything outside the disk.
+    assert!(at_point(egui::vec2(0.0, -10.0), half, 40, 9).is_none());
+    assert!(at_point(egui::vec2(0.0, -half * 1.5), half, 40, 9).is_none());
+
+    // And in the gap after a sector there is a track but no sector: saying
+    // "sector 1" for a point in the space after it would be a small lie in
+    // the one place somebody is looking for an exact answer.
+    let (angles, _) = sector_wedge(40, 0, 0, 9);
+    let just_past = angles.end + 0.01;
+    let at = egui::vec2(just_past.cos(), just_past.sin()) * middle;
+    let hit = at_point(at, half, 40, 9).expect("a track");
+    assert_eq!(hit.sector, None);
+}

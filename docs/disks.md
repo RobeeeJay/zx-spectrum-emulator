@@ -79,6 +79,11 @@ one repeated byte is one flat colour, so an unwritten disk is a set of clean
 rings and a full one is speckle — and where a game's files stop is visible at
 a glance.
 
+Hovering it names what is under the pointer — the track, the sector's number as
+its address mark gives it, how big it is, which file lives there if the disk
+has a catalogue that says, and whether it has just been read or written. In the
+gap between two sectors it says so rather than rounding to the nearer one.
+
 Reads light green over the sector they touched and writes amber, both fading,
 so a load draws itself round the disk as it happens; a ring marks the track the
 head is on. A highlight is a band that follows the track round, drawn as a

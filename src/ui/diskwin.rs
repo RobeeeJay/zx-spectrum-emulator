@@ -317,12 +317,85 @@ fn platter(app: &mut App, ui: &mut egui::Ui) {
         );
     }
 
-    response.on_hover_text(
-        "The disk as it is written: a ring per track with track 0 outermost, and the bits \
-         of each track round it — white for a one, black for a nought, one bit sampled per \
-         step round the ring rather than all 36,864 of them. Green is a sector just read, \
-         amber one just written, and the ring is where the head is.",
+    // What the pointer is over: the track and sector under it, drawn round and
+    // named underneath. The picture is a map of the disk, and a map nobody can
+    // read a position off is half a map.
+    let hovered = response
+        .hover_pos()
+        .and_then(|at| crate::ui::diskface::at_point(at - centre, half, tracks, sectors));
+    if let Some(hit) = hovered {
+        if let Some(index) = hit.sector {
+            let (angles, radii) =
+                crate::ui::diskface::sector_wedge(tracks, hit.track, index, sectors);
+            let steps = 12;
+            let mut points: Vec<egui::Pos2> = (0..=steps)
+                .map(|i| {
+                    let a = angles.start + (angles.end - angles.start) * i as f32 / steps as f32;
+                    centre + egui::vec2(a.cos(), a.sin()) * radii.end * half
+                })
+                .collect();
+            points.extend((0..=steps).rev().map(|i| {
+                let a = angles.start + (angles.end - angles.start) * i as f32 / steps as f32;
+                centre + egui::vec2(a.cos(), a.sin()) * radii.start * half
+            }));
+            points.push(points[0]);
+            painter.add(egui::Shape::line(
+                points,
+                egui::Stroke::new(1.0, theme::INK.gamma_multiply(0.8)),
+            ));
+        }
+    }
+    ui.label(
+        egui::RichText::new(match hovered {
+            Some(hit) => under_the_pointer(app, hit),
+            None => "A ring per track, track 0 outermost; white is a one and black a nought, \
+                     one bit of every few bytes. Green is a sector just read, amber one just \
+                     written."
+                .to_string(),
+        })
+        .small()
+        .color(theme::DIM),
     );
+}
+
+/// What to say about the sector the pointer is over.
+fn under_the_pointer(app: &App, hit: crate::ui::diskface::Hit) -> String {
+    let Some(drive) = app.spec.bus.fdc.drives[0].as_ref() else {
+        return String::new();
+    };
+    let Some(sector) = hit.sector else {
+        return format!("track {} — between two sectors", hit.track);
+    };
+    let Some(track) = drive.disk.track(hit.track as u8, 0) else {
+        return format!("track {} — the disk has no track there", hit.track);
+    };
+    let Some(found) = track.sectors.get(sector) else {
+        return format!("track {}, sector {sector} — nothing there", hit.track);
+    };
+    let mut out = format!(
+        "track {}, sector ${:02X} ({} bytes)",
+        hit.track,
+        found.r,
+        found.data.len()
+    );
+    // What lives there, if the disk has a filesystem that says.
+    if let Some(file) = drive.disk.file_at(hit.track as u8, 0, sector) {
+        out.push_str(&format!(" — {file}"));
+    }
+    // And what has just happened to it, since that is what the colours mean.
+    let key = (hit.track as u8, 0u8, found.r);
+    if app.spec.bus.fdc.writes.contains_key(&key) {
+        out.push_str(" — just written");
+    } else if app.spec.bus.fdc.reads.contains_key(&key) {
+        out.push_str(" — just read");
+    }
+    if found.st1 != 0 || found.st2 != 0 {
+        out.push_str(&format!(
+            " — the disk records an error here (ST1 ${:02X}, ST2 ${:02X})",
+            found.st1, found.st2
+        ));
+    }
+    out
 }
 
 /// What is on the disk, where the tape window lists its blocks.

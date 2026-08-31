@@ -574,6 +574,75 @@ impl Disk {
         Some(total.saturating_sub(used + directory))
     }
 
+    /// Which block of the filesystem a sector belongs to, if the disk has a
+    /// filesystem and the sector is part of it.
+    ///
+    /// The inverse of [`Disk::block`]: the same units, the same order.
+    pub fn block_of(&self, track: u8, side: u8, index: usize) -> Option<u16> {
+        let spec = self.format().spec(self)?;
+        let sides = spec.sides.max(1) as u32;
+        let unit = track as u32 * sides + side as u32;
+        let unit = unit.checked_sub(spec.reserved as u32)?;
+        let logical = unit * spec.sectors as u32 + index as u32;
+        let sector_bytes = 128u32 << spec.sector_size.min(6);
+        let per_block = (spec.block_size / sector_bytes).max(1);
+        u16::try_from(logical / per_block).ok()
+    }
+
+    /// Which file a sector holds part of, if any does.
+    ///
+    /// A directory entry lists the blocks it owns; on a disk with more than
+    /// 255 of them they are pairs of bytes rather than single ones, which is
+    /// what makes a 720K disk's allocation different from a 180K one's.
+    pub fn file_at(&self, track: u8, side: u8, index: usize) -> Option<String> {
+        let spec = self.format().spec(self)?;
+        let block = self.block_of(track, side, index)?;
+        let directory = self.directory()?;
+        if block < spec.directory_blocks as u16 {
+            return Some("the catalogue".into());
+        }
+        let sector_bytes = 128u32 << spec.sector_size.min(6);
+        let blocks = (spec.tracks as u32 - spec.reserved as u32)
+            * spec.sides.max(1) as u32
+            * spec.sectors as u32
+            * sector_bytes
+            / spec.block_size;
+        let wide = blocks > 255;
+        for entry in directory.chunks(32) {
+            if entry.len() < 32 || entry[0] != 0 {
+                continue;
+            }
+            let owns = if wide {
+                entry[16..32]
+                    .chunks(2)
+                    .any(|pair| u16::from_le_bytes([pair[0], pair[1]]) == block)
+            } else {
+                entry[16..32].iter().any(|b| *b as u16 == block)
+            };
+            if !owns {
+                continue;
+            }
+            let name: String = entry[1..9]
+                .iter()
+                .map(|b| (b & 0x7F) as char)
+                .collect::<String>()
+                .trim_end()
+                .to_string();
+            let kind: String = entry[9..12]
+                .iter()
+                .map(|b| (b & 0x7F) as char)
+                .collect::<String>()
+                .trim_end()
+                .to_string();
+            return Some(if kind.is_empty() {
+                name
+            } else {
+                format!("{name}.{kind}")
+            });
+        }
+        None
+    }
+
     /// The directory: the blocks at the front of the disk that hold the
     /// catalogue, however many of them this format has.
     fn directory(&self) -> Option<Vec<u8>> {

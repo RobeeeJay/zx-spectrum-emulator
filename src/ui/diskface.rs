@@ -196,6 +196,42 @@ pub fn draw(disk: &Disk, size: usize) -> egui::ColorImage {
     }
 }
 
+/// What the pointer is over: a track, and a sector of it unless the pointer is
+/// in the gap between two.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Hit {
+    pub track: usize,
+    pub sector: Option<usize>,
+}
+
+/// What is under a point, given where the middle of the picture is and how big
+/// it is. The inverse of the drawing: the same bands and the same angles.
+pub fn at_point(from_centre: egui::Vec2, half: f32, tracks: usize, sectors: usize) -> Option<Hit> {
+    if half <= 0.0 {
+        return None;
+    }
+    let radius = from_centre.length() / half;
+    let (track, across) = track_at(radius, tracks)?;
+    if across > 1.0 - GUARD {
+        // In the gap between one track and the next: near enough this one to
+        // be worth saying, since the gap is a fraction of a track's width.
+        return Some(Hit {
+            track,
+            sector: None,
+        });
+    }
+    // Clockwise from the top, as the bits are laid down.
+    let angle = from_centre.y.atan2(from_centre.x) + std::f32::consts::FRAC_PI_2;
+    let turn = angle.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+    let per_sector = 1.0 / sectors.max(1) as f32;
+    let index = ((turn / per_sector) as usize).min(sectors.saturating_sub(1));
+    let along = (turn - index as f32 * per_sector) / per_sector;
+    Some(Hit {
+        track,
+        sector: (along <= 1.0 - SECTOR_GAP).then_some(index),
+    })
+}
+
 /// Where a sector sits on the picture: the angles it covers, and the radii of
 /// its track. Used to light the sectors that have just been read or written.
 pub fn sector_wedge(

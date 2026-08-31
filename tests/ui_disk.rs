@@ -637,3 +637,38 @@ fn the_disk_is_labelled_in_the_same_hand_as_the_cassette() {
         "and in white, since the disk is dark"
     );
 }
+
+/// Hovering the disk says which track and sector the pointer is over, and what
+/// lives there — a map nobody can read a position off is half a map.
+#[test]
+fn hovering_the_disk_says_where_the_pointer_is() {
+    let mut app = test_app();
+    let path = scratch("hover.dsk");
+    app.new_disk(&path);
+    // A file, so there is something to name under the pointer.
+    {
+        let disk = &mut app.spec.bus.fdc.drives[0].as_mut().unwrap().disk;
+        let directory = &mut disk.track_mut(0, 0).unwrap().sectors[0].data;
+        let entry = &mut directory[..32];
+        entry.fill(0);
+        entry[1..9].copy_from_slice(b"MYGAME  ");
+        entry[9..12].copy_from_slice(b"BAS");
+        entry[15] = 8;
+        entry[16] = 2; // the first block after the catalogue
+    }
+    app.show_disk = true;
+
+    // Which file the sectors hold, which is what the readout names.
+    let disk = &app.spec.bus.fdc.drives[0].as_ref().unwrap().disk;
+    assert_eq!(
+        disk.file_at(0, 0, 4).as_deref(),
+        Some("MYGAME.BAS"),
+        "the file's first block is the fifth sector of track 0"
+    );
+    assert_eq!(
+        disk.file_at(0, 0, 0).as_deref(),
+        Some("the catalogue"),
+        "and the front of the disk is the catalogue itself"
+    );
+    assert_eq!(disk.file_at(0, 0, 8), None, "with nothing in the rest");
+}
