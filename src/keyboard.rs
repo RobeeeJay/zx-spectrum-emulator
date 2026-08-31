@@ -226,6 +226,19 @@ impl Keys {
         self.latched.contains(&(row, bit))
     }
 
+    /// Let go of everything: nothing held, nothing latched, nothing lit.
+    ///
+    /// What a reset does to the keyboard. A shift clicked in the window and
+    /// never followed by a key stays down until something takes it, and it
+    /// used to survive a reset — so the machine came up with CAPS SHIFT held
+    /// and answered every key with the shifted one, which reads as a machine
+    /// that is ignoring the keyboard.
+    pub fn release_all(&mut self) {
+        self.held_until = [[None; 5]; 8];
+        self.lit_until = [[None; 5]; 8];
+        self.latched.clear();
+    }
+
     /// Press the latched shifts along with the key they were held for, and
     /// let go of the latch. Pressing them rather than simply dropping them is
     /// what puts the shift and the key in front of the machine together: a

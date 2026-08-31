@@ -1898,8 +1898,20 @@ impl App {
     /// saying why: the ROM checks every byte of RAM before it does anything
     /// else, with interrupts off, and the keyboard is read by the interrupt.
     /// Nothing is being ignored — there is nothing to ignore it yet.
+    /// What the status line says after a reset, for the tests.
+    pub fn starting_up_for_test(&self) -> String {
+        self.starting_up()
+    }
+
     fn starting_up(&self) -> String {
-        let frames = 85.0 / self.speed.max(0.01);
+        // Measured, per machine, from reset to the ROM reading a key: a 48K
+        // checks its RAM with the interrupt off and takes 85 frames over it,
+        // and the later ROMs are quicker about it.
+        let frames = match self.spec.bus.model {
+            Model::Spectrum48 => 85.0,
+            Model::Spectrum128 => 54.0,
+            Model::Plus2A | Model::Plus3 => 57.0,
+        } / self.speed.max(0.01);
         format!(
             "Reset ({}) — the ROM checks the RAM before it reads the keyboard, about {:.1}s",
             self.spec.bus.model.name(),
@@ -2168,7 +2180,14 @@ impl App {
         }
     }
 
+    /// Reset the machine, and let go of the keyboard with it.
+    ///
+    /// A key the window is holding — a shift clicked and waiting for the key
+    /// it shifts, most of all — would otherwise still be down on the machine
+    /// that comes up. A machine answering every key with the shifted one
+    /// reads as a machine ignoring the keyboard.
     pub fn reset_machine(&mut self) {
+        self.keys.release_all();
         match &mut self.zx81 {
             Some(zx) => zx.reset(),
             None => self.spec.reset(),
@@ -2890,7 +2909,7 @@ impl App {
                 }
                 ui.separator();
                 if ui.button("Reset").clicked() {
-                    self.spec.reset();
+                    self.reset_machine();
                     self.set_status(self.starting_up(), false);
                     ui.close();
                 }
@@ -2935,17 +2954,13 @@ impl App {
             }
             self.late_timing(ui);
             if ui.button("Reset").clicked() {
-                match &mut self.zx81 {
-                    Some(zx) => {
-                        zx.reset();
-                        let name = self.zx81_ram.name();
-                        self.set_status(format!("Reset ({name})"), false);
-                    }
-                    None => {
-                        self.spec.reset();
-                        let what = self.starting_up();
-                        self.set_status(what, false);
-                    }
+                self.reset_machine();
+                if self.on_zx81() {
+                    let name = self.zx81_ram.name();
+                    self.set_status(format!("Reset ({name})"), false);
+                } else {
+                    let what = self.starting_up();
+                    self.set_status(what, false);
                 }
             }
 

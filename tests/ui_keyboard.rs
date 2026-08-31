@@ -309,3 +309,57 @@ fn the_real_keyboard_lights_the_picture() {
         "and only that key"
     );
 }
+
+/// A reset lets go of the keyboard.
+///
+/// A shift clicked in the window waits for the key it is shifting, and it used
+/// to go on waiting across a reset: the machine came up with CAPS SHIFT held,
+/// answered every key with the shifted one, and read as a machine ignoring the
+/// keyboard.
+#[test]
+fn a_reset_lets_go_of_every_key() {
+    let mut app = test_app();
+    // A shift clicked and waiting, and a key still within its hold.
+    app.keys.latch(0, 0); // CAPS SHIFT
+    app.keys.press(1, 0, Instant::now()); // A
+    assert!(app.keys.latched(0, 0));
+    assert_ne!(app.keys.matrix(Instant::now()), [0xFF; 8]);
+
+    app.reset_machine();
+
+    assert!(!app.keys.latched(0, 0), "the shift is let go of");
+    assert_eq!(
+        app.keys.matrix(Instant::now()),
+        [0xFF; 8],
+        "and nothing is held down on the machine that comes up"
+    );
+    assert!(
+        !app.keys.is_lit(0, 0, Instant::now()),
+        "nor lit on the picture of the keyboard"
+    );
+}
+
+/// And the machine it comes up as says how long it will be before the ROM
+/// reads the keyboard, which is not the same on every model.
+#[test]
+fn the_wait_after_a_reset_is_the_machines_own() {
+    use zx_rustrum::machine::Model;
+
+    let mut app = test_app();
+    app.speed = 1.0;
+    app.switch_model(Model::Spectrum48);
+    app.reset_machine();
+    let status = app.starting_up_for_test();
+    assert!(status.contains("1.7s"), "a 48K checks 48K of RAM: {status}");
+
+    app.switch_model(Model::Plus3);
+    let status = app.starting_up_for_test();
+    assert!(
+        status.contains("+3"),
+        "and says which machine it is: {status}"
+    );
+    assert!(
+        status.contains("1.1s"),
+        "a +3 is quicker about it, and saying 1.7 would be wrong: {status}"
+    );
+}

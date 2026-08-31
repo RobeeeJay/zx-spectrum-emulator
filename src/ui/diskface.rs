@@ -22,6 +22,9 @@ use crate::disk::Disk;
 /// The rasterised platter, and what it was made from.
 #[derive(Default)]
 pub struct Platter {
+    /// How many times the picture has been rasterised. Kept because a cache
+    /// that is quietly missing every frame looks exactly like a slow machine.
+    pub draws: u32,
     texture: Option<egui::TextureHandle>,
     /// The size it was drawn at, and which disk at which revision: any of the
     /// three changing means drawing it again.
@@ -57,6 +60,7 @@ impl Platter {
                 }
             }
             self.drawn = Some(wanted);
+            self.draws += 1;
         }
         self.texture.as_ref().expect("just made")
     }

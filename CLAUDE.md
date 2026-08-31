@@ -350,11 +350,18 @@ speeds — the waits a real one makes, or none — and its window draws the fron
 of the drive, a map of what has been read and written per sector, and the
 catalogue. [`docs/disks.md`](docs/disks.md) has the rest.
 
+**A reset lets go of the keyboard.** A shift clicked in the keyboard window
+waits for the key it is shifting, and it used to go on waiting across a reset:
+the machine came up with CAPS SHIFT held, answered every key with the shifted
+one, and read as a machine ignoring the keyboard. `App::reset_machine` is the
+one way through, and it releases everything the window is holding.
+
 **The machine is deaf for a second after a reset, and that is the ROM.** The
 48K ROM checks every byte of RAM before it does anything else, with interrupts
 disabled — and the keyboard is read by the interrupt handler, so nothing is
-scanned until it finishes. Measured at 85 frames, and it scales with the
-emulator's speed: half speed, twice the wait. The status line says so rather
+scanned until it finishes. Measured at 85 frames on a 48K, 54 on a
+128K and 57 on a +3 — the later ROMs are quicker about it — and it scales with
+the emulator's speed: half speed, twice the wait. The status line says so rather
 than leaving it looking like a hang; nothing about it is worth "fixing", since
 the fix would be lying about the machine.
 
