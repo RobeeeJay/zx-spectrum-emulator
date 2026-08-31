@@ -194,9 +194,55 @@ impl Fdc {
         }
     }
 
+    /// What the reset line does to the controller.
+    ///
+    /// The disks stay in the drives and the speed stays as it was set; the
+    /// state machine goes back to waiting for a command. Two things went wrong
+    /// without this. A machine reset in the middle of a command left the
+    /// controller handing over data nobody was going to take, so the ROM's
+    /// next command found it talking rather than listening. And the machine's
+    /// clock goes back to zero on a reset, so a wait timed against it — the
+    /// motor coming up to speed, a sector coming round — was left ending
+    /// millions of T-states in the future, and the controller reported itself
+    /// busy for as long as it took the clock to catch up. Either way the ROM
+    /// sat at $211A polling the status register until it gave up, which is
+    /// twenty-two seconds of a machine that looks dead.
+    pub fn reset(&mut self) {
+        self.phase = Phase::Command;
+        self.command.clear();
+        self.wanted = 0;
+        self.buffer.clear();
+        self.at = 0;
+        self.pcn = [0, 0];
+        self.unit = 0;
+        self.head = 0;
+        self.seek_done = None;
+        self.sector = None;
+        self.last_sector = 0;
+        self.result.clear();
+        self.pending = (0, 0);
+        self.formatting = None;
+        self.format_sectors.clear();
+        self.motor = false;
+        self.motor_since = None;
+        self.now = 0;
+        self.busy_until = 0;
+        self.last_access = None;
+        self.last_access_at = 0;
+        self.reads.clear();
+        self.writes.clear();
+    }
+
     /// Tell the controller what time it is. The bus does this on every port
     /// access, which is the only moment the time can matter.
     pub fn at(&mut self, now: u64) {
+        // The machine's clock can go backwards — a reset puts it to zero, a
+        // snapshot puts it wherever it was saved — and a wait timed against a
+        // clock that has moved under it is not a wait at all.
+        if now < self.now {
+            self.busy_until = 0;
+            self.motor_since = None;
+        }
         self.now = now;
         if self.motor {
             self.motor_since.get_or_insert(now);

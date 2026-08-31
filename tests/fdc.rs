@@ -767,3 +767,124 @@ fn a_deleted_sector_is_skipped_when_the_command_says_to() {
         "the deleted sector should have been passed over, and $C2 read instead"
     );
 }
+
+/// The reset line goes to the controller too.
+///
+/// A machine reset in the middle of a command left it handing over data nobody
+/// was going to take, so the ROM's next command found it talking rather than
+/// listening — and the ROM sat at $211A polling the status register until it
+/// gave up, twenty-two seconds later.
+#[test]
+fn a_reset_puts_the_controller_back_to_waiting_for_a_command() {
+    let mut fdc = with_a_disk();
+    // Half a read: the controller is handing data back.
+    for byte in [0x46u8, 0x00, 0, 0, 0xC1, 2, 0xC1, 0x2A, 0xFF] {
+        fdc.write(byte);
+    }
+    assert_eq!(fdc.status() & DIO, DIO, "it is talking, not listening");
+
+    fdc.reset();
+    assert_eq!(
+        fdc.status(),
+        RQM,
+        "after a reset it wants a command and nothing else: ${:02X}",
+        fdc.status()
+    );
+    assert!(
+        fdc.drives[0].is_some(),
+        "and the disk is still in the drive"
+    );
+
+    // And it takes one.
+    let result = command(&mut fdc, &[0x04, 0x00]);
+    assert_eq!(result.len(), 1, "SENSE DRIVE STATUS answers");
+}
+
+/// A wait timed against the machine's clock is not a wait once that clock has
+/// gone backwards.
+///
+/// A reset puts the machine's T-state count to zero, and a snapshot puts it
+/// wherever it was saved. A drive left waiting for a moment millions of
+/// T-states in the future reports itself busy until the clock catches up,
+/// which is the same twenty-two seconds by another route.
+#[test]
+fn a_clock_that_goes_backwards_does_not_leave_the_drive_busy() {
+    use zx_rustrum::fdc::Speed;
+
+    let mut fdc = with_a_disk();
+    fdc.speed = Speed::Normal;
+    fdc.at(10_000_000);
+    // A read, which makes it wait for the motor and the sector.
+    for byte in [0x46u8, 0x00, 0, 0, 0xC1, 2, 0xC1, 0x2A, 0xFF] {
+        fdc.write(byte);
+    }
+    assert!(fdc.busy(), "it is waiting for the drive");
+
+    // The machine is reset: the clock goes back to nothing.
+    fdc.at(0);
+    assert!(
+        !fdc.busy(),
+        "a wait that ends ten million T-states from now is not a wait any more"
+    );
+    assert_ne!(fdc.status() & RQM, 0, "and it answers again");
+}
+
+/// The whole of it, with the machine's own ROM: a +3 reset in the middle of a
+/// disk command comes back to its menu instead of sitting on the status
+/// register.
+///
+/// $211A is where the +3's disk driver polls the controller. A machine that
+/// spends twenty-two seconds there is a machine that looks dead, and that is
+/// what a reset used to leave behind.
+#[test]
+fn a_plus3_reset_mid_command_comes_straight_back() {
+    use zx_rustrum::fdc::Speed;
+    use zx_rustrum::machine::{Model, Spectrum, FRAME_T};
+
+    let Ok(rom) = std::fs::read("roms/plus3.rom") else {
+        eprintln!("need roms/plus3.rom; skipping");
+        return;
+    };
+    let mut spec = Spectrum::new();
+    spec.set_model(Model::Plus3, &rom);
+    spec.reset();
+    spec.bus.fdc.drives[0] = Some(Drive::new(Disk::blank("t"), None, false));
+    spec.bus.fdc.speed = Speed::Normal;
+    for _ in 0..200 {
+        spec.run(FRAME_T);
+    }
+
+    // A command left half-done, and the reset button.
+    for byte in [0x46u8, 0x00, 0, 0, 0xC1, 2, 0xC1, 0x2A, 0xFF] {
+        spec.bus.fdc.write(byte);
+    }
+    spec.reset();
+
+    // The controller comes back waiting for a command, not half-way through
+    // the one it was given: the reset line reaches it as well as the CPU.
+    assert_eq!(
+        spec.bus.fdc.status(),
+        RQM,
+        "the controller should be waiting for a command: ${:02X}",
+        spec.bus.fdc.status()
+    );
+
+    let mut polling = 0u32;
+    for _ in 0..250u32 {
+        for _ in 0..200 {
+            spec.step_instruction();
+            if spec.cpu.pc == 0x211A {
+                polling += 1;
+            }
+        }
+        spec.run(FRAME_T);
+    }
+    assert_eq!(
+        polling, 0,
+        "the machine should not be sitting on the controller's status register"
+    );
+    assert!(
+        spec.bus.fdc.drives[0].is_some(),
+        "and the disk is still in the drive"
+    );
+}

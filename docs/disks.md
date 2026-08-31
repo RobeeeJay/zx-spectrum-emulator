@@ -210,6 +210,17 @@ Two ports: `$2FFD` is the status register the program polls and `$3FFD` the
 data register. The motor is bit 3 of `$1FFD`, and the controller is told: a
 drive whose motor is off is not ready, which is how +3DOS knows to wait.
 
+**The reset line reaches the controller.** A machine reset in the middle of a
+command used to leave it handing over data nobody was going to take, so the
+ROM's next command found it talking rather than listening; and the machine's
+clock goes back to zero on a reset, which left a wait timed against that clock
+ending millions of T-states in the future and the drive reporting itself busy
+until the clock caught up. Either way the +3's ROM sat at `$211A` polling the
+status register for the twenty-two seconds its timeout takes, which is a
+machine that looks dead. The controller is reset with the machine — the disks
+stay in the drives — and a clock that moves backwards under it cancels whatever
+it was waiting for.
+
 **Nothing is timed.** A real controller makes the program wait while the head
 steps and the disk turns, and reports not-ready until the motor is up to speed.
 This one answers at once. +3DOS polls rather than counting, so it cannot tell —

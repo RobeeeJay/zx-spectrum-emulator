@@ -350,6 +350,16 @@ speeds — the waits a real one makes, or none — and its window draws the fron
 of the drive, a map of what has been read and written per sector, and the
 catalogue. [`docs/disks.md`](docs/disks.md) has the rest.
 
+**A reset reaches the disk controller, and the clock going backwards cancels
+its waits.** Reset mid-command, the controller was left handing over data
+nobody would take, so the next command found it talking rather than listening;
+and `reset()` puts `tstates` and `frame` to zero, so a wait timed against
+`total_t()` was left ending millions of T-states ahead and the drive reported
+itself busy until the clock caught up. The +3's ROM then sat at `$211A` polling
+the status register for the twenty-two seconds its timeout takes. Anything that
+times against the machine's clock has to cope with it moving backwards — a
+snapshot does it too.
+
 **A reset lets go of the keyboard.** A shift clicked in the keyboard window
 waits for the key it is shifting, and it used to go on waiting across a reset:
 the machine came up with CAPS SHIFT held, answered every key with the shifted

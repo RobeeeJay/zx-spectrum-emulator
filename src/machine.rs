@@ -1738,6 +1738,9 @@ impl Spectrum {
         self.bus.paging_locked = false;
         self.bus.apply_paging();
         self.bus.tracker.reset();
+        // The reset line goes to the disk controller too: it comes back
+        // waiting for a command, with whatever is in the drives still in them.
+        self.bus.fdc.reset();
         self.bus.audio.ay.reset();
         self.bus.audio.rebase(0);
         self.bus.speaker = false;
