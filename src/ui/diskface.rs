@@ -23,12 +23,22 @@ use crate::disk::Disk;
 #[derive(Default)]
 pub struct Platter {
     texture: Option<egui::TextureHandle>,
-    /// The size it was drawn at, and the disk's revision when it was: either
-    /// changing means drawing it again.
-    drawn: Option<(usize, u64)>,
+    /// The size it was drawn at, and which disk at which revision: any of the
+    /// three changing means drawing it again.
+    ///
+    /// The disk's identity has to be in it. Every disk starts at revision 0,
+    /// so a key of size and revision alone kept the first disk's picture on
+    /// the screen for every disk put in after it.
+    drawn: Option<(usize, u64, u64)>,
 }
 
 impl Platter {
+    /// What the picture was last drawn for: the size, the disk and its
+    /// revision. What a test asks to find out whether it would be drawn again.
+    pub fn drawn_for(&self) -> Option<(usize, u64, u64)> {
+        self.drawn
+    }
+
     /// The picture, made again if the disk or the size has changed since.
     pub fn texture(
         &mut self,
@@ -36,7 +46,7 @@ impl Platter {
         disk: &Disk,
         size: usize,
     ) -> &egui::TextureHandle {
-        let wanted = (size, disk.revision);
+        let wanted = (size, disk.id, disk.revision);
         if self.drawn != Some(wanted) || self.texture.is_none() {
             let image = draw(disk, size);
             match &mut self.texture {

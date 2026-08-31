@@ -82,6 +82,20 @@ pub struct Disk {
     /// Bumped whenever a sector changes, so anything drawing the disk knows
     /// its picture is out of date without comparing every byte.
     pub revision: u64,
+    /// Which disk this is. A revision alone is not enough to know a picture
+    /// is stale: every disk starts at revision 0, so swapping one for another
+    /// that had not been written to left the first one's picture on the
+    /// screen.
+    pub id: u64,
+}
+
+/// The next disk's identity. Counted rather than hashed: two disks with the
+/// same contents are still two disks, and the count is what says a different
+/// one has been put in.
+pub fn next_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Disk {
@@ -117,6 +131,7 @@ impl Disk {
             tracks,
             dirty: false,
             revision: 0,
+            id: next_id(),
         }
     }
 
@@ -230,6 +245,7 @@ impl Disk {
             tracks,
             dirty: false,
             revision: 0,
+            id: next_id(),
         })
     }
 

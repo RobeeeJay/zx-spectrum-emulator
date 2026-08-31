@@ -347,6 +347,7 @@ pub fn parse(data: &[u8]) -> Result<Read, String> {
             tracks,
             dirty: false,
             revision: 0,
+            id: crate::disk::next_id(),
         },
         platform,
         deleted,

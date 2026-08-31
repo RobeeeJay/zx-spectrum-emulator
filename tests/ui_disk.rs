@@ -768,3 +768,83 @@ fn one_sector_ipf() -> Vec<u8> {
     out.extend_from_slice(&payload);
     out
 }
+
+/// Putting a different disk in draws a different disk.
+///
+/// The picture is rasterised once and kept until something changes, and what
+/// said it had changed was the disk's revision — which starts at 0 on every
+/// disk. Swapping one for another that had not been written to left the first
+/// one's picture on the screen for the second.
+#[test]
+fn changing_the_disk_changes_the_picture() {
+    let mut app = test_app();
+    let first = scratch("first.dsk");
+    let second = scratch("second.dsk");
+    // Two disks that look nothing alike: one blank, one written all over.
+    std::fs::write(&first, Disk::blank("first").to_bytes()).unwrap();
+    let mut busy = Disk::blank("second");
+    for track in 0..40u8 {
+        for sector in &mut busy.track_mut(track, 0).unwrap().sectors {
+            for (i, byte) in sector.data.iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(31) ^ track;
+            }
+        }
+    }
+    std::fs::write(&second, busy.to_bytes()).unwrap();
+
+    app.open_disk(&first);
+    app.mount_pending(Mounted::ReadOnly, None);
+    app.show_disk = true;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    let drawn_for_first = h.state().platter.drawn_for().expect("a picture was drawn");
+
+    // The same disk again draws nothing new: that is what the cache is for.
+    h.run_steps(3);
+    assert_eq!(
+        h.state().platter.drawn_for(),
+        Some(drawn_for_first),
+        "an unchanged disk is not rasterised again"
+    );
+
+    h.state_mut().open_disk(&second);
+    h.state_mut().mount_pending(Mounted::ReadOnly, None);
+    h.run_steps(3);
+    let drawn_for_second = h.state().platter.drawn_for().expect("a picture");
+    assert_ne!(
+        drawn_for_second, drawn_for_first,
+        "a different disk should have been drawn: both were at revision 0, so the \
+         identity is what tells them apart"
+    );
+
+    // And the two disks really are different pictures, so the redraw matters.
+    let a =
+        zx_rustrum::ui::diskface::draw(&Disk::parse(&std::fs::read(&first).unwrap()).unwrap(), 128);
+    let b = zx_rustrum::ui::diskface::draw(&busy, 128);
+    assert_ne!(a.pixels, b.pixels, "the two disks do not look alike");
+}
+
+/// Writing to the disk in the drive redraws it too — that is what the revision
+/// is for, and it still has to work alongside the identity.
+#[test]
+fn writing_to_the_disk_redraws_it() {
+    let mut app = test_app();
+    let path = scratch("written.dsk");
+    app.new_disk(&path);
+    app.show_disk = true;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    let before = h.state().platter.drawn_for().expect("a picture");
+
+    {
+        let disk = &mut h.state_mut().spec.bus.fdc.drives[0].as_mut().unwrap().disk;
+        disk.track_mut(5, 0).unwrap().sectors[0].data[0] = 0x99;
+        disk.revision += 1;
+    }
+    h.run_steps(3);
+    assert_ne!(
+        h.state().platter.drawn_for(),
+        Some(before),
+        "a disk that has been written to is drawn again"
+    );
+}

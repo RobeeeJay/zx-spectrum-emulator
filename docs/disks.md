@@ -91,9 +91,11 @@ strip of quads: an annular sector is not convex, and egui fans a convex polygon
 from its first vertex, so the first attempt came out as a triangle across the
 disk rather than a curve along the track. The picture is rasterised into a texture and kept until the disk
 changes, because fifty thousand line segments a frame is not a thing to ask of
-a window that is also running a Spectrum. What says the disk has changed is a
-revision number bumped when a sector is written, rather than a comparison of a
-hundred and eighty kilobytes.
+a window that is also running a Spectrum. What says it has changed is the
+disk's identity and a revision number bumped when a sector is written, rather
+than a comparison of a hundred and eighty kilobytes. The identity matters as
+much as the revision: every disk starts at revision 0, so a key without it kept
+the first disk's picture on the screen for every disk put in afterwards.
 
 **The catalogue**, where the tape window lists blocks: the CP/M directory read
 as CAT reads it, with each file's size and whether it is read-only or hidden.
