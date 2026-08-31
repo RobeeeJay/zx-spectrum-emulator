@@ -59,9 +59,13 @@ machine's time on every port access, which is the only moment the time can
 matter.
 
 **The disk**, where the tape window has its oscilloscope: drawn as a disk, a
-ring per track with track 0 outermost — where it is on a real one, which is why
-an empty disk is a bright band at the edge with nothing behind it. The bits are
-drawn as bits, white for a one and black for a nought, clockwise from the top.
+ring per track with track 0 outermost — where it is on a real one. The written
+band is the outer third of the radius, as it is on a three-inch disk whose
+forty tracks lie between about 24mm and 35mm from the middle; drawing them
+across the whole face made every disk look the same, since most of the picture
+was then empty tracks. The bits are drawn as bits, white for a one and black
+for a nought, clockwise from the top, with a gap between one sector and the
+next so the nine of them can be counted.
 
 Not all of them: a track is nine 512-byte sectors, 36,864 bits, and a ring a
 few hundred pixels round cannot hold them. What is drawn is the top bit of
@@ -77,7 +81,10 @@ a glance.
 
 Reads light green over the sector they touched and writes amber, both fading,
 so a load draws itself round the disk as it happens; a ring marks the track the
-head is on. The picture is rasterised into a texture and kept until the disk
+head is on. A highlight is a band that follows the track round, drawn as a
+strip of quads: an annular sector is not convex, and egui fans a convex polygon
+from its first vertex, so the first attempt came out as a triangle across the
+disk rather than a curve along the track. The picture is rasterised into a texture and kept until the disk
 changes, because fifty thousand line segments a frame is not a thing to ask of
 a window that is also running a Spectrum. What says the disk has changed is a
 revision number bumped when a sector is written, rather than a comparison of a

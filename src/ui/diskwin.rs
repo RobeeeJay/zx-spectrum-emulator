@@ -233,25 +233,32 @@ fn platter(app: &mut App, ui: &mut egui::Ui) {
 
     let centre = square.center();
     let half = square.width() / 2.0;
-    // A wedge of the disk, drawn as a filled polygon: the two radii and the
-    // arc between them, which at this size is a handful of points.
+    // A sector of the disk: a band that follows the track round rather than a
+    // straight-sided shape across it.
+    //
+    // Drawn as a strip of quads. A polygon of the two arcs and their end caps
+    // is not convex, and egui fans a convex polygon from its first vertex — so
+    // the highlight came out as a triangle across the disk instead of a curve
+    // along the track.
     let wedge = |track: usize, sector: usize, colour: egui::Color32| {
         let (angles, radii) = crate::ui::diskface::sector_wedge(tracks, track, sector, sectors);
-        let steps = 6;
-        let mut points = Vec::with_capacity(steps * 2 + 2);
+        let span = angles.end - angles.start;
+        // Enough steps that the outer edge is smooth: a step every few
+        // degrees, and more for a longer arc.
+        let steps = ((span.abs() * radii.end * half / 3.0) as usize).clamp(3, 64);
+        let mut mesh = egui::Mesh::default();
         for i in 0..=steps {
-            let a = angles.start + (angles.end - angles.start) * i as f32 / steps as f32;
-            points.push(centre + egui::vec2(a.cos(), a.sin()) * radii.end * half);
+            let a = angles.start + span * i as f32 / steps as f32;
+            let dir = egui::vec2(a.cos(), a.sin());
+            mesh.colored_vertex(centre + dir * radii.start * half, colour);
+            mesh.colored_vertex(centre + dir * radii.end * half, colour);
         }
-        for i in (0..=steps).rev() {
-            let a = angles.start + (angles.end - angles.start) * i as f32 / steps as f32;
-            points.push(centre + egui::vec2(a.cos(), a.sin()) * radii.start * half);
+        for i in 0..steps as u32 {
+            let base = i * 2;
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.add_triangle(base + 1, base + 3, base + 2);
         }
-        painter.add(egui::Shape::convex_polygon(
-            points,
-            colour,
-            egui::Stroke::NONE,
-        ));
+        painter.add(egui::Shape::mesh(mesh));
     };
 
     // What has been touched lately. A write counts for more than a read: it

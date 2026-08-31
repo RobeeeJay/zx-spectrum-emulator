@@ -214,9 +214,14 @@ fn a_sector_has_a_place_on_the_picture() {
         angles.start
     );
     assert!(angles.end > angles.start, "and goes clockwise");
+    // A ninth of the way round, less the gap after the sector: a track has a
+    // space between one sector and the next, and a highlight that covered it
+    // would say a sector had been read that had not.
+    let ninth = std::f32::consts::TAU / 9.0;
+    let span = angles.end - angles.start;
     assert!(
-        (angles.end - angles.start - std::f32::consts::TAU / 9.0).abs() < 0.001,
-        "a ninth of the way round"
+        span < ninth && span > ninth * 0.8,
+        "a ninth of the way round, less the gap: {span} against {ninth}"
     );
 
     // Track 0 is outside track 39.
@@ -227,17 +232,22 @@ fn a_sector_has_a_place_on_the_picture() {
         "track 0 sits outside track 39: {outer:?} against {inner:?}"
     );
 
-    // The sectors of a track tile it without overlapping.
+    // The sectors of a track follow one another round it, with the gap
+    // between them and no overlap.
     let (first, _) = sector_wedge(40, 3, 0, 9);
     let (second, _) = sector_wedge(40, 3, 1, 9);
     assert!(
-        (second.start - first.end).abs() < 0.001,
-        "one sector ends where the next begins"
+        second.start > first.end,
+        "the next sector starts after this one ends: {first:?} then {second:?}"
+    );
+    assert!(
+        (second.start - first.start - ninth).abs() < 0.001,
+        "and a ninth of the way further round"
     );
     let (last, _) = sector_wedge(40, 3, 8, 9);
     assert!(
-        (last.end - angles.start - std::f32::consts::TAU).abs() < 0.001,
-        "and the last one closes the circle"
+        last.end < angles.start + std::f32::consts::TAU,
+        "and the last one stops before the first comes round again"
     );
     assert_eq!(radii.end, outer.end);
 }
@@ -283,5 +293,84 @@ fn the_picture_is_only_drawn_again_when_the_disk_changes() {
     assert!(
         fdc.drives[0].as_ref().unwrap().disk.revision > revision,
         "a write means the picture is out of date"
+    );
+}
+
+/// The tracks are written where they are on a real disk: the outer third of
+/// the radius, not across the whole face.
+///
+/// Drawing them across almost everything made every disk look the same,
+/// because most of the picture was then the empty tracks nobody had written
+/// to.
+#[test]
+fn the_tracks_are_written_where_they_are_on_a_real_disk() {
+    let (_, outermost) = sector_wedge(40, 0, 0, 9);
+    let (_, innermost) = sector_wedge(40, 39, 0, 9);
+    assert!(
+        outermost.end > 0.85 && outermost.end < 0.95,
+        "the outermost track is near the edge: {outermost:?}"
+    );
+    assert!(
+        innermost.start > 0.5,
+        "and the innermost is still in the outer half: {innermost:?}"
+    );
+    let band = outermost.end - innermost.start;
+    assert!(
+        (0.25..0.45).contains(&band),
+        "so the written band is about a third of the radius: {band}"
+    );
+
+    // And nothing is drawn inside it: the hub and the clear plastic around the
+    // spindle are not tracks.
+    let mut disk = Disk::blank("test");
+    for track in 0..40u8 {
+        for sector in &mut disk.track_mut(track, 0).unwrap().sectors {
+            sector.data.fill(0xFF);
+        }
+    }
+    let image = draw(&disk, 512);
+    for fraction in [0.10, 0.25, 0.45] {
+        assert_ne!(
+            at_radius(&image, fraction),
+            egui::Color32::WHITE,
+            "nothing is written at {fraction} of the way out"
+        );
+    }
+}
+
+/// A track's sectors are drawn apart, with a gap between one and the next —
+/// which is what makes nine sectors countable rather than one unbroken ring.
+#[test]
+fn the_sectors_of_a_track_are_drawn_apart() {
+    let mut disk = Disk::blank("test");
+    for track in 0..40u8 {
+        for sector in &mut disk.track_mut(track, 0).unwrap().sectors {
+            sector.data.fill(0xFF);
+        }
+    }
+    let size = 512;
+    let image = draw(&disk, size);
+    let half = size as f32 / 2.0;
+    let centre = size / 2;
+
+    // Round the outermost track: white sectors with something else between
+    // them, so the colour changes at least twice per sector.
+    let (_, radii) = sector_wedge(40, 0, 0, 9);
+    let radius = (radii.end - (radii.end - radii.start) * 0.3) * half;
+    let mut changes = 0;
+    let mut last = None;
+    for step in 0..1440 {
+        let angle = std::f32::consts::TAU * step as f32 / 1440.0 - std::f32::consts::FRAC_PI_2;
+        let x = (centre as f32 + angle.cos() * radius) as usize;
+        let y = (centre as f32 + angle.sin() * radius) as usize;
+        let colour = pixel(&image, x.min(size - 1), y.min(size - 1));
+        if Some(colour) != last {
+            changes += 1;
+            last = Some(colour);
+        }
+    }
+    assert!(
+        changes >= 18,
+        "nine sectors with a gap after each is eighteen changes round the track: {changes}"
     );
 }
