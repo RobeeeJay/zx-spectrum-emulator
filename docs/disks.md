@@ -127,6 +127,17 @@ them a +3's controller would find.
 more than that; there is not enough here to write one back. Writes have to go
 to a copy, which is a DSK.
 
+What a preserved disk records against a sector — a deleted-data mark, a
+deliberate CRC error — comes back in the controller's result bytes, because
+that is the whole of some protections: telling a program it read an ordinary
+sector where the disk says the mark is deleted is telling it the disk is a
+copy. The skip flag is honoured too, which is the other half of what the mark
+is for.
+
+Checked against the machine: Combat School's protected disk boots off its IPF,
+puts up Ocean's menu, loads the game in 112 sectors without a controller error,
+and answers the keyboard on its control-selection screen.
+
 **What is not emulated**: the cell timing and the weak bits. A protection that
 measures how long a sector takes to come round, or that reads the same sector
 twice expecting different answers, will not be fooled by this.

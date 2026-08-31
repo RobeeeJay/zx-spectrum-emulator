@@ -146,6 +146,9 @@ pub struct Fdc {
     last_sector: u8,
     /// The result bytes, once there is something to say.
     result: Vec<u8>,
+    /// What the sector being transferred says about itself, to go in the
+    /// result when it has been handed over.
+    pending: (u8, u8),
     /// While formatting: the track being written and the sectors so far.
     formatting: Option<(u8, u8, u8, u8, u8)>,
     format_sectors: Vec<[u8; 4]>,
@@ -185,6 +188,7 @@ impl Fdc {
             sector: None,
             last_sector: 0,
             result: Vec::new(),
+            pending: (0, 0),
             formatting: None,
             format_sectors: Vec::new(),
         }
@@ -553,6 +557,32 @@ impl Fdc {
         self.wait(wait);
         match self.sector_data(c, h, r) {
             Some(data) => {
+                // A sector whose mark is not the one the command asked for —
+                // a deleted one for READ DATA, an ordinary one for READ
+                // DELETED DATA — is handed over anyway with the Control Mark
+                // set, unless the command said to skip it. Half of the disk
+                // protections there are turn on this.
+                let (st1, st2) = self.sector_status(c, h, r);
+                let deleted = st2 & 0x40 != 0;
+                let wanted_deleted = self.command[0] & 0x1F == 0x0C;
+                let skipping = self.command[0] & 0x20 != 0;
+                if deleted != wanted_deleted && skipping {
+                    // Skipped: on to the next one, or the end of the command.
+                    if r < self.last_sector {
+                        self.command[4] = r + 1;
+                        return self.start_read();
+                    }
+                    self.transfer_result(st1, st2 & 0x40, c, h, r.wrapping_add(1), 2);
+                    return;
+                }
+                self.pending = (
+                    st1,
+                    if deleted != wanted_deleted {
+                        st2
+                    } else {
+                        st2 & !0x40
+                    },
+                );
                 self.buffer = data;
                 self.at = 0;
                 self.sector = Some((c, h, r));
@@ -560,6 +590,28 @@ impl Fdc {
             }
             None => self.transfer_failed(c, h, r),
         }
+    }
+
+    /// What the disk records against a sector: the status bytes a controller
+    /// would give back after reading it.
+    ///
+    /// A preserved disk carries these — a deleted data mark, a CRC that does
+    /// not check out — and they are the whole of some protections. Reporting
+    /// a clean read of a sector the disk says is marked deleted is telling the
+    /// program the disk is a copy.
+    fn sector_status(&self, c: u8, h: u8, r: u8) -> (u8, u8) {
+        self.sector_at(c, h, r)
+            .map(|s| (s.st1, s.st2))
+            .unwrap_or((0, 0))
+    }
+
+    fn sector_at(&self, c: u8, h: u8, r: u8) -> Option<&crate::disk::Sector> {
+        let drive = self.drives.get(self.unit)?.as_ref()?;
+        let track = drive.disk.track(self.pcn[self.unit.min(1)], self.head)?;
+        track
+            .sectors
+            .iter()
+            .find(|s| s.r == r && s.c == c && (s.h == h || h == 0))
     }
 
     fn sector_data(&self, c: u8, h: u8, r: u8) -> Option<Vec<u8>> {
@@ -599,11 +651,32 @@ impl Fdc {
             self.phase = Phase::Command;
             return;
         };
+        // A sector that was not the kind the command asked for, or whose CRC
+        // is wrong, ends the command where it is: the controller stops rather
+        // than reading on, and says why.
+        let (st1, st2) = self.pending;
+        if st1 != 0 || st2 != 0 {
+            self.pending = (0, 0);
+            self.transfer_result(st1, st2, c, h, r.wrapping_add(1), 2);
+            return;
+        }
         // A multi-sector read carries on to the next one until it reaches the
         // last the command named.
         if r < self.last_sector {
             let next = r + 1;
             if let Some(data) = self.sector_data(c, h, next) {
+                let (st1, st2) = self.sector_status(c, h, next);
+                let deleted = st2 & 0x40 != 0;
+                let wanted_deleted = self.command[0] & 0x1F == 0x0C;
+                self.pending = (
+                    st1,
+                    if deleted != wanted_deleted {
+                        st2
+                    } else {
+                        st2 & !0x40
+                    },
+                );
+                self.touched(next, false);
                 self.buffer = data;
                 self.at = 0;
                 self.sector = Some((c, h, next));

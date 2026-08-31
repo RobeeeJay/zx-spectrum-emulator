@@ -685,3 +685,85 @@ fn the_sectors_touched_are_remembered_and_fade() {
     }
     assert!(fdc.reads.is_empty(), "and gone in the end");
 }
+
+/// What the disk records against a sector comes back in the result bytes.
+///
+/// A preserved disk carries a deleted-data mark or a deliberate CRC error, and
+/// those are the whole of some protections: telling a program it read an
+/// ordinary sector where the disk says the mark is deleted is telling it the
+/// disk is a copy.
+#[test]
+fn a_deleted_sector_is_reported_as_one() {
+    let mut fdc = with_a_disk();
+    // Mark one sector deleted, as a protection would, and put a CRC error on
+    // another.
+    if let Some(drive) = fdc.drives[0].as_mut() {
+        let track = drive.disk.track_mut(0, 0).unwrap();
+        track.sectors.iter_mut().find(|s| s.r == 0xC2).unwrap().st2 = 0x40;
+        let bad = track.sectors.iter_mut().find(|s| s.r == 0xC3).unwrap();
+        bad.st1 = 0x20;
+        bad.st2 = 0x20;
+    }
+
+    let read = |fdc: &mut Fdc, sector: u8| -> Vec<u8> {
+        for byte in [0x46u8, 0x00, 0, 0, sector, 2, sector, 0x2A, 0xFF] {
+            fdc.write(byte);
+        }
+        while fdc.status() & DIO != 0 && fdc.status() & 0x20 != 0 {
+            fdc.read();
+        }
+        let mut result = Vec::new();
+        while fdc.status() & DIO != 0 {
+            result.push(fdc.read());
+        }
+        result
+    };
+
+    // An ordinary sector: nothing to report.
+    let result = read(&mut fdc, 0xC1);
+    assert_eq!(result[2] & 0x40, 0, "ST2: {:02X}", result[2]);
+
+    // The deleted one: the data is still handed over, and the Control Mark
+    // says what it was.
+    let result = read(&mut fdc, 0xC2);
+    assert_eq!(
+        result[2] & 0x40,
+        0x40,
+        "the control mark should be set: ST2 {:02X}",
+        result[2]
+    );
+    assert_eq!(result[0] & 0xC0, 0x40, "and the command ends abnormally");
+
+    // And the one with a bad CRC says so in both status bytes, as the chip
+    // does: the error is in the data field.
+    let result = read(&mut fdc, 0xC3);
+    assert_eq!(result[1] & 0x20, 0x20, "ST1: {:02X}", result[1]);
+    assert_eq!(result[2] & 0x20, 0x20, "ST2: {:02X}", result[2]);
+}
+
+/// With the skip flag set, a sector marked deleted is passed over rather than
+/// read — which is the other half of what the flag is for.
+#[test]
+fn a_deleted_sector_is_skipped_when_the_command_says_to() {
+    let mut fdc = with_a_disk();
+    if let Some(drive) = fdc.drives[0].as_mut() {
+        let track = drive.disk.track_mut(0, 0).unwrap();
+        track.sectors.iter_mut().find(|s| s.r == 0xC1).unwrap().st2 = 0x40;
+        // Something to tell the second sector's data apart by.
+        track.sectors.iter_mut().find(|s| s.r == 0xC2).unwrap().data[0] = 0x5A;
+    }
+
+    // READ DATA with SK set, from $C1 to $C2.
+    for byte in [0x66u8, 0x00, 0, 0, 0xC1, 2, 0xC2, 0x2A, 0xFF] {
+        fdc.write(byte);
+    }
+    let mut data = Vec::new();
+    while fdc.status() & 0x20 != 0 && fdc.status() & DIO != 0 {
+        data.push(fdc.read());
+    }
+    assert_eq!(
+        data.first().copied(),
+        Some(0x5A),
+        "the deleted sector should have been passed over, and $C2 read instead"
+    );
+}
