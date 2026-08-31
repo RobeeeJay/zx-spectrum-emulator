@@ -358,6 +358,15 @@ emulator's speed: half speed, twice the wait. The status line says so rather
 than leaving it looking like a hang; nothing about it is worth "fixing", since
 the fix would be lying about the machine.
 
+**An IPF is read at byte level, not at flux level.** Its streams hold decoded
+bytes — sync elements carry the MFM sync words, data elements the bytes between
+them — so `src/ipf.rs` walks the container, finds the address marks and checks
+both CRCs, which is what says the reading is right rather than plausible. The
+deleted-data marks and deliberate CRC errors that a protection leaves are kept
+in the sector's ST1/ST2; the cell timing and the weak bits are not, and a
+protection that measures either will not be fooled. Nothing is written back to
+an IPF: what is taken out of one is the sectors, and an IPF is more than that.
+
 **A watch can be on a place as well as on a kind of thing.** `Breaks` carries
 watches for the sorts of thing a program does — a screen write, the beeper, an
 `IN` — and `write_range`, which is a watch on an address. It costs one

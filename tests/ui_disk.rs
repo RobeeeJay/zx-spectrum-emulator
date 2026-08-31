@@ -672,3 +672,99 @@ fn hovering_the_disk_says_where_the_pointer_is() {
     );
     assert_eq!(disk.file_at(0, 0, 8), None, "with nothing in the rest");
 }
+
+/// An IPF goes in the drive like any other disk, and cannot be written back
+/// to: what is read out of one is the sectors, and an IPF is more than that.
+#[test]
+fn an_ipf_is_mounted_read_only() {
+    use zx_rustrum::ui::disk::Source;
+
+    let path = scratch("game.ipf");
+    // The smallest IPF this can read: one track, one sector.
+    std::fs::write(&path, one_sector_ipf()).unwrap();
+
+    let mut app = test_app();
+    app.open_disk(&path);
+    let pending = app.pending_disk.as_ref().expect("a disk out of the IPF");
+    assert_eq!(pending.source, Source::File(path.clone()));
+    assert!(
+        !pending.source.writable_in_place(),
+        "an IPF has nowhere to write back to"
+    );
+    assert!(
+        app.status.contains("IPF"),
+        "and the window says what it is: {}",
+        app.status
+    );
+
+    // The question it asks has no "write to this file" on it.
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    assert!(h.query_by_label("Read-only").is_some());
+    assert!(h.query_by_label("Write to this file").is_none());
+
+    // Read-only mounts it, and the sector that was in it is there.
+    h.state_mut().mount_pending(Mounted::ReadOnly, None);
+    let drive = h.state().spec.bus.fdc.drives[0].as_ref().expect("a disk");
+    assert!(drive.write_protected);
+    assert_eq!(drive.disk.track(0, 0).unwrap().sectors[0].r, 0xC1);
+}
+
+/// An IPF holding one sector, built the way tests/ipf.rs builds them.
+fn one_sector_ipf() -> Vec<u8> {
+    fn record(name: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(name);
+        out.extend_from_slice(&((body.len() + 12) as u32).to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+    fn crc(bytes: &[u8]) -> u16 {
+        let mut crc = 0xFFFFu16;
+        for byte in [0xA1u8, 0xA1, 0xA1].iter().chain(bytes) {
+            crc ^= (*byte as u16) << 8;
+            for _ in 0..8 {
+                crc = if crc & 0x8000 != 0 {
+                    (crc << 1) ^ 0x1021
+                } else {
+                    crc << 1
+                };
+            }
+        }
+        crc
+    }
+
+    let mut stream = Vec::new();
+    stream.extend_from_slice(&[(1 << 5) | 1, 6, 0x44, 0x89, 0x44, 0x89, 0x44, 0x89]);
+    let mut id = vec![0xFE, 0, 0, 0xC1, 2];
+    id.extend_from_slice(&crc(&id).to_be_bytes());
+    stream.push((1 << 5) | 2);
+    stream.push(id.len() as u8);
+    stream.extend_from_slice(&id);
+    let mut field = vec![0xFB];
+    field.extend_from_slice(&[0xE5; 512]);
+    field.extend_from_slice(&crc(&field).to_be_bytes());
+    stream.push((2 << 5) | 2);
+    stream.extend_from_slice(&(field.len() as u16).to_be_bytes());
+    stream.extend_from_slice(&field);
+    stream.push(0);
+
+    let mut out = record(b"CAPS", &[]);
+    let mut info = vec![0u8; 84];
+    info[48..52].copy_from_slice(&5u32.to_be_bytes()); // a Spectrum disk
+    out.extend_from_slice(&record(b"INFO", &info));
+    let mut imge = vec![0u8; 68];
+    imge[40..44].copy_from_slice(&1u32.to_be_bytes()); // one block
+    imge[52..56].copy_from_slice(&1u32.to_be_bytes()); // data key
+    out.extend_from_slice(&record(b"IMGE", &imge));
+    let mut payload = vec![0u8; 32];
+    payload[28..32].copy_from_slice(&32u32.to_be_bytes());
+    payload.extend_from_slice(&stream);
+    let mut body = vec![0u8; 16];
+    body[..4].copy_from_slice(&(payload.len() as u32).to_be_bytes());
+    body[12..16].copy_from_slice(&1u32.to_be_bytes());
+    out.extend_from_slice(&record(b"DATA", &body));
+    out.extend_from_slice(&payload);
+    out
+}

@@ -102,6 +102,35 @@ because on a game disk that is usually where the game is. The extents of one
 file are not added up — the last extent already says how long the file is, and
 adding them made a 32K file 48K.
 
+## IPF
+
+An IPF holds a disk as the head would have read it — the sync marks, the gaps,
+the address marks and the data, track by track — rather than as a filesystem.
+It is how a protected disk is kept: the deleted-data marks, the odd sector
+numbering and the deliberate CRC errors that a copier could not reproduce are
+all in the file. **File ▸ Load disk…** takes one, and so does the server's
+`mount_disk`.
+
+The streams inside turn out to hold decoded bytes rather than flux — the sync
+elements carry the MFM sync words and the data elements the bytes between them
+— so a disk written in the usual IBM format can be taken apart at byte level:
+an address mark, four bytes of identity, a CRC; then a data mark, the sector,
+and another CRC. **Both CRCs are checked**, which is what says the reading is
+right rather than plausible: Combat School's disk comes out as 204 sectors with
+every CRC correct and 169 of them marked deleted.
+
+An IPF of another machine's disk is refused with what it is — an Amiga disk's
+tracks are written the way that machine wrote them, and there is nothing in
+them a +3's controller would find.
+
+**An IPF is read-only.** What is taken out of one is the sectors, and an IPF is
+more than that; there is not enough here to write one back. Writes have to go
+to a copy, which is a DSK.
+
+**What is not emulated**: the cell timing and the weak bits. A protection that
+measures how long a sector takes to come round, or that reads the same sector
+twice expecting different answers, will not be fooled by this.
+
 ## What a DSK file is
 
 Not a filesystem: what the controller would have read off the surface. Tracks,

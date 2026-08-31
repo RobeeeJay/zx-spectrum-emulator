@@ -26,7 +26,7 @@ pub fn mount_disk(session: &mut Session, args: &Json) -> Result<String, String> 
     } else {
         (path.display().to_string(), bytes)
     };
-    let disk = Disk::parse(&bytes)?;
+    let (disk, note) = crate::ui::disk::read_disk(&bytes)?;
     let what = if from_archive {
         format!("{inner} from {}: {}", path.display(), disk.describe())
     } else {
@@ -44,7 +44,18 @@ pub fn mount_disk(session: &mut Session, args: &Json) -> Result<String, String> 
     // writes go. A game writes its high scores to the disk it loaded from, and
     // doing that to somebody's file without being asked is not on.
     let writable = flag(args, "writable", false);
+    // An IPF describes a disk down to its sync marks and gaps, and what is
+    // read out of one is the sectors: there is not enough here to write one
+    // back, so writes have to go to a copy, which is a DSK.
     let copy_to = args.get("copy_to").and_then(|p| p.as_str());
+    if crate::ipf::is_ipf(&bytes) && writable && copy_to.is_none() {
+        return Err(
+            "an IPF cannot be written back to: it describes the disk down to its sync marks \
+             and gaps, and only the sectors are read out of it. Give copy_to a .dsk filename \
+             and the writes will go there."
+                .into(),
+        );
+    }
     let (path, protected) = match (writable, copy_to) {
         (_, Some(to)) => {
             std::fs::write(to, disk.to_bytes()).map_err(|e| format!("{to}: {e}"))?;
@@ -66,7 +77,9 @@ pub fn mount_disk(session: &mut Session, args: &Json) -> Result<String, String> 
         .unwrap_or_default();
     session.spec.bus.fdc.drives[0] = Some(Drive::new(disk, path, protected));
     Ok(format!(
-        "{what}. {}",
+        "{what}{}{}. {}",
+        if note.is_empty() { "" } else { " — " },
+        note,
         if protected {
             "Read-only: the machine is told it is write-protected and the file is not \
              touched. Pass writable, or copy_to a new file, to let it be written."

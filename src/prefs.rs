@@ -349,7 +349,7 @@ impl FileKind {
             "rom" | "bin" => Some(FileKind::Rom),
             "tzx" | "tap" => Some(FileKind::Tape),
             "sna" | "z80" => Some(FileKind::Snapshot),
-            "dsk" => Some(FileKind::Disk),
+            "dsk" | "ipf" => Some(FileKind::Disk),
             _ => None,
         }
     }

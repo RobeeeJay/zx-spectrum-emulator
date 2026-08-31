@@ -53,8 +53,18 @@ impl Source {
     }
 
     /// Whether writes could go back to where it came from.
+    ///
+    /// Not into an archive, and not into an IPF: that format describes a disk
+    /// down to its sync marks and gaps, and this emulator reads the sectors
+    /// out of one without keeping enough to write one back.
     pub fn writable_in_place(&self) -> bool {
-        matches!(self, Source::File(_))
+        match self {
+            // Never into an archive, whatever is in it.
+            Source::InArchive { .. } => false,
+            Source::File(path) => !path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("ipf")),
+        }
     }
 
     /// Where a copy of it should go: beside the file, or beside the archive
@@ -130,7 +140,8 @@ impl App {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
         {
-            let Some((inner, inner_bytes)) = crate::zip::first_with_extension(&bytes, &["dsk"])
+            let Some((inner, inner_bytes)) =
+                crate::zip::first_with_extension(&bytes, &["dsk", "ipf"])
             else {
                 return self.set_status(format!("{} holds no disk image", path.display()), true);
             };
@@ -147,10 +158,15 @@ impl App {
     pub fn open_disk_bytes(&mut self, source: Source, bytes: &[u8]) {
         let name = source.name();
         let path = source.path().to_path_buf();
-        match Disk::parse(bytes) {
-            Ok(disk) => {
+        match read_disk(bytes) {
+            Ok((disk, note)) => {
+                if !note.is_empty() {
+                    self.set_status(format!("{name} — {note}"), false);
+                }
                 self.prefs.remember_file(FileKind::Disk, &path);
-                self.set_status(format!("{name} — {}", disk.describe()), false);
+                if note.is_empty() {
+                    self.set_status(format!("{name} — {}", disk.describe()), false);
+                }
                 self.pending_disk = Some(Pending { source, disk });
             }
             Err(e) => self.set_status(format!("{name}: {e}"), true),
@@ -405,4 +421,36 @@ pub fn copy_name(path: &std::path::Path) -> std::path::PathBuf {
         n += 1;
     }
     candidate
+}
+
+/// Read a disk out of whatever shape it arrived in, and say anything that
+/// needs saying about it.
+///
+/// A DSK is a filesystem's worth of sectors; an IPF is what the head would
+/// have read, protections and all. Both end up as the same sectors in the
+/// drive — the difference is that nothing can be written back into an IPF.
+pub fn read_disk(bytes: &[u8]) -> Result<(Disk, String), String> {
+    if crate::ipf::is_ipf(bytes) {
+        let read = crate::ipf::parse(bytes)?;
+        let mut note = format!(
+            "{}, an IPF of a {} disk",
+            read.disk.describe(),
+            read.platform.name()
+        );
+        if read.deleted > 0 {
+            note.push_str(&format!(
+                " — {} sectors marked deleted, which is a protection",
+                read.deleted
+            ));
+        }
+        if read.bad_crc > 0 {
+            note.push_str(&format!(
+                ", and {} with a deliberate CRC error",
+                read.bad_crc
+            ));
+        }
+        note.push_str(". Read-only: an IPF cannot be written back to.");
+        return Ok((read.disk, note));
+    }
+    Disk::parse(bytes).map(|disk| (disk, String::new()))
 }

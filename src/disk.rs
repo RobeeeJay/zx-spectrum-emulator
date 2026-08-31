@@ -505,12 +505,26 @@ impl Disk {
         let bytes = self.directory()?;
 
         let mut files: Vec<Entry> = Vec::new();
+        // A directory is recognised as one, not assumed. A game disk often
+        // carries a specification and then keeps its own data where the
+        // catalogue would be; reading that as filenames produced seventy
+        // files called things like ". H" of nineteen megabytes each.
+        let mut plausible = 0usize;
+        let mut rubbish = 0usize;
         for entry in bytes.chunks(32) {
             if entry.len() < 32 || entry[0] != 0 {
                 // Only user 0, which is where +3DOS puts everything; $E5 is an
                 // empty slot.
                 continue;
             }
+            let printable = entry[1..12]
+                .iter()
+                .all(|b| (0x20..=0x7E).contains(&(b & 0x7F)));
+            if !printable {
+                rubbish += 1;
+                continue;
+            }
+            plausible += 1;
             let name: String = entry[1..9]
                 .iter()
                 .map(|b| (b & 0x7F) as char)
@@ -552,6 +566,11 @@ impl Disk {
                     system,
                 }),
             }
+        }
+        // More rubbish than names means this is not a directory: something
+        // else lives where one would be.
+        if rubbish > plausible {
+            return None;
         }
         files.sort_by(|a, b| a.name.cmp(&b.name));
         Some(files)
