@@ -673,6 +673,17 @@ matches the tape byte for byte, and it types `LOAD ""` on the emulated keyboard
 and loads a whole game from a real TZX. Tests that need `roms/48.rom` or
 `tapes/` skip themselves when those are absent.
 
+## What plugs into it
+
+A **Hardware** window lists the peripherals and says how far each is emulated:
+the Interface 1 with up to eight microdrives, the Fuller Audio Box and Cheetah's
+SpecDrum do something; the Currah µSpeech, the RAM Music Machine and the three
+Multifaces are switches with nothing behind them yet, and the window says so
+rather than looking as though they work. A **Microdrive** window puts `.mdr`
+cartridges — loose or zipped — in the drives, read-only, writing to a copy, or
+writing in place. [`docs/peripherals.md`](docs/peripherals.md) says what is
+emulated and what is not.
+
 ## Disks
 
 The +3 has a working disk interface: a µPD765A controller and `.dsk` images,

@@ -126,6 +126,15 @@ pub struct Prefs {
     pub recording_dir: Option<PathBuf>,
     /// Where the +3 disks are.
     pub disk_dir: Option<PathBuf>,
+    /// Where the microdrive cartridges are.
+    pub cartridge_dir: Option<PathBuf>,
+    /// Which machine was in use when the emulator was last closed, by the name
+    /// the dropdown gives it.
+    pub machine: Option<String>,
+    /// What was plugged into the back of it, by the keys in `hardware.rs`, and
+    /// how many microdrives were on the chain.
+    pub peripherals: Option<Vec<String>>,
+    pub microdrives: Option<usize>,
     /// Where each window was when the emulator last closed.
     pub windows: BTreeMap<String, WindowRect>,
     /// Display scale, as a multiple of the Spectrum's own pixels.
@@ -187,8 +196,21 @@ impl Prefs {
                 "snapshot_dir" => prefs.snapshot_dir = path,
                 "recording_dir" => prefs.recording_dir = path,
                 "disk_dir" => prefs.disk_dir = path,
+                "cartridge_dir" => prefs.cartridge_dir = path,
                 "display_scale" => prefs.display_scale = value.parse().ok(),
                 "overscan" => prefs.overscan = value.parse().ok(),
+                "machine" => prefs.machine = Some(value),
+                "microdrives" => prefs.microdrives = value.parse().ok(),
+                "peripherals" => {
+                    prefs.peripherals = Some(
+                        value
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                    )
+                }
                 "open_windows" => {
                     prefs.open_windows = Some(
                         value
@@ -231,11 +253,21 @@ impl Prefs {
         line(&mut s, "snapshot_dir", &self.snapshot_dir);
         line(&mut s, "recording_dir", &self.recording_dir);
         line(&mut s, "disk_dir", &self.disk_dir);
+        line(&mut s, "cartridge_dir", &self.cartridge_dir);
         if let Some(scale) = self.display_scale {
             s.push_str(&format!("display_scale = \"{scale}\"\n"));
         }
         if let Some(overscan) = self.overscan {
             s.push_str(&format!("overscan = \"{overscan}\"\n"));
+        }
+        if let Some(machine) = &self.machine {
+            s.push_str(&format!("machine = \"{machine}\"\n"));
+        }
+        if let Some(fitted) = &self.peripherals {
+            s.push_str(&format!("peripherals = \"{}\"\n", fitted.join(",")));
+        }
+        if let Some(drives) = self.microdrives {
+            s.push_str(&format!("microdrives = \"{drives}\"\n"));
         }
         if let Some(open) = &self.open_windows {
             s.push_str(&format!("open_windows = \"{}\"\n", open.join(",")));
@@ -274,6 +306,7 @@ impl Prefs {
             FileKind::Snapshot => self.snapshot_dir = Some(dir),
             FileKind::Recording => self.recording_dir = Some(dir),
             FileKind::Disk => self.disk_dir = Some(dir),
+            FileKind::Cartridge => self.cartridge_dir = Some(dir),
         }
         self.save();
     }
@@ -320,6 +353,7 @@ impl Prefs {
                 .or(self.tape_dir.as_ref())
                 .or(self.snapshot_dir.as_ref()),
             FileKind::Disk => self.disk_dir.as_ref().or(self.tape_dir.as_ref()),
+            FileKind::Cartridge => self.cartridge_dir.as_ref().or(self.tape_dir.as_ref()),
         }
     }
 }
@@ -335,6 +369,8 @@ pub enum FileKind {
     /// A +3 disk image. Kept apart from tapes: somebody with disks has a
     /// directory of them.
     Disk,
+    /// A microdrive cartridge.
+    Cartridge,
 }
 
 impl FileKind {

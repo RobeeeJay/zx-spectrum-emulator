@@ -8,7 +8,10 @@ pub mod debugger;
 pub mod disk;
 pub mod diskface;
 pub mod diskwin;
+pub mod hardware;
 pub mod keyboard;
+pub mod microdrive;
+pub mod microdrivewin;
 pub mod profiler;
 pub mod ram_map;
 pub mod sprites;
@@ -464,6 +467,15 @@ pub struct App {
     pub show_keyboard: bool,
     /// The +3's drive, drawn.
     pub show_disk: bool,
+    /// What is plugged into the back of the machine.
+    pub show_hardware: bool,
+    /// The microdrives, drawn.
+    pub show_microdrive: bool,
+    /// Which drive Load, Blank and Eject act on.
+    pub selected_drive: usize,
+    /// A cartridge read and waiting to be told how its writes should be
+    /// treated, and which drive it is going into.
+    pub pending_cartridge: Option<(crate::ui::microdrive::Pending, usize)>,
     /// The disk drawn as a disk, kept between frames: rasterising forty rings
     /// of bits is not a thing to do sixty times a second.
     pub platter: diskface::Platter,
@@ -615,6 +627,10 @@ impl App {
             show_profiler: false,
             show_keyboard: false,
             show_disk: false,
+            show_hardware: false,
+            show_microdrive: false,
+            selected_drive: 0,
+            pending_cartridge: None,
             platter: diskface::Platter::default(),
             pending_disk: None,
             disk_mounted: None,
@@ -881,6 +897,15 @@ impl App {
             if self.spec.bus.model.has_disk() && !self.on_zx81() {
                 theme::toggle(ui, &mut self.show_disk, "Disk");
             }
+            theme::toggle(ui, &mut self.show_hardware, "Hardware");
+            if self
+                .spec
+                .bus
+                .hardware
+                .fitted(crate::hardware::Peripheral::Interface1)
+            {
+                theme::toggle(ui, &mut self.show_microdrive, "Microdrive");
+            }
         });
     }
 
@@ -1064,6 +1089,8 @@ impl App {
             // Same reason as the recordings: nothing on this machine claims
             // `.dsk` either, and a greyed-out disk is worse than no filter.
             Some(FileKind::Disk) => dialog,
+            // The same again: nothing on this machine claims `.mdr` either.
+            Some(FileKind::Cartridge) => dialog,
             None => dialog
                 .add_filter(
                     "Tape, snapshot or ROM",
@@ -1546,6 +1573,19 @@ impl App {
                 }
             }
             "rzx" => self.load_recording(path),
+            // A cartridge goes into a microdrive, so there has to be an
+            // Interface 1 for it to hang off.
+            "mdr" => {
+                if !self
+                    .spec
+                    .bus
+                    .hardware
+                    .fitted(crate::hardware::Peripheral::Interface1)
+                {
+                    self.fit(crate::hardware::Peripheral::Interface1, true);
+                }
+                self.open_cartridge(path, self.selected_drive);
+            }
             // A disk only goes into a machine with a drive, so bring one up.
             "dsk" | "ipf" => {
                 if self.on_zx81() || !self.spec.bus.model.has_disk() {
@@ -1623,7 +1663,7 @@ impl App {
             // The disk window is built around a picture of the drive, which is
             // as wide as it is; the tape window's width suits it and two
             // windows of one width sit together without a ragged edge.
-            "tape" | "ram_map" | "disk" => Some(cassette::WINDOW_W),
+            "tape" | "ram_map" | "disk" | "microdrive" => Some(cassette::WINDOW_W),
             _ => None,
         }
     }
@@ -1707,12 +1747,85 @@ impl App {
         builder.with_position(pos).with_inner_size(size)
     }
 
+    /// Come up as the machine that was last in use, with what was plugged
+    /// into it.
+    ///
+    /// A ROM that is not there is not an error: somebody who had a +3 and has
+    /// since moved its ROM keeps the machine the emulator can actually be,
+    /// rather than being told off at every start-up.
+    fn apply_machine_settings(&mut self) {
+        if let Some(name) = self.prefs.machine.clone() {
+            match name.as_str() {
+                "zx81-1k" => self.switch_to_zx81(zx81::Ram::K1),
+                "zx81-16k" => self.switch_to_zx81(zx81::Ram::K16),
+                other => {
+                    if let Some(model) = [
+                        Model::Spectrum48,
+                        Model::Spectrum128,
+                        Model::Plus2A,
+                        Model::Plus3,
+                    ]
+                    .into_iter()
+                    .find(|m| m.name() == other)
+                    {
+                        if self.roms.for_model(model).is_some() {
+                            self.switch_model(model);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(fitted) = self.prefs.peripherals.clone() {
+            for key in fitted {
+                if let Some(what) = crate::hardware::Peripheral::from_key(&key) {
+                    self.fit(what, true);
+                }
+            }
+        }
+        if let Some(drives) = self.prefs.microdrives {
+            self.spec.bus.hardware.if1_drives = drives.clamp(1, crate::if1::MAX_DRIVES);
+            if let Some(if1) = self.spec.bus.if1.as_mut() {
+                if1.set_drive_count(drives);
+            }
+        }
+        // Nothing was said about the machine before this was written down, so
+        // the first close records whatever is running rather than losing it.
+        self.remember_machine_settings();
+    }
+
+    /// What machine is in use, by the name it is saved under.
+    pub fn machine_key(&self) -> String {
+        if self.on_zx81() {
+            match self.zx81_ram {
+                zx81::Ram::K1 => "zx81-1k".into(),
+                zx81::Ram::K16 => "zx81-16k".into(),
+            }
+        } else {
+            self.spec.bus.model.name().to_string()
+        }
+    }
+
+    fn remember_machine_settings(&mut self) {
+        self.prefs.machine = Some(self.machine_key());
+        self.prefs.peripherals = Some(
+            self.spec
+                .bus
+                .hardware
+                .all_fitted()
+                .iter()
+                .map(|p| p.key().to_string())
+                .collect(),
+        );
+        self.prefs.microdrives = Some(self.spec.bus.hardware.if1_drives);
+    }
+
     /// Write the window layout and display settings out. Called on close.
     pub fn save_window_state(&mut self) {
         self.prefs.display_scale = Some(self.scale);
         self.prefs.overscan = Some(self.overscan);
         self.prefs.open_windows = Some(self.open_windows());
         self.remember_tape_settings();
+        self.remember_machine_settings();
         self.prefs.save();
         self.last_saved = Some(self.prefs.to_text());
         self.last_save_at = Some(std::time::Instant::now());
@@ -1728,6 +1841,7 @@ impl App {
         self.prefs.overscan = Some(self.overscan);
         self.prefs.open_windows = Some(self.open_windows());
         self.remember_tape_settings();
+        self.remember_machine_settings();
         let text = self.prefs.to_text();
         if self.last_saved.as_deref() == Some(text.as_str()) {
             self.last_save_at = Some(std::time::Instant::now());
@@ -1839,6 +1953,7 @@ impl App {
     /// Take the display settings from the preferences file, if it has any.
     pub fn apply_prefs(&mut self) {
         self.apply_tape_settings();
+        self.apply_machine_settings();
         if let Some(scale) = self.prefs.display_scale.filter(|s| *s > 0.0) {
             // Somebody who last left it at half size has a preferences file
             // asking for a zoom that is not offered any more; they get the
@@ -1860,6 +1975,8 @@ impl App {
             self.show_profiler = is_open("profiler");
             self.show_keyboard = is_open("keyboard");
             self.show_disk = is_open("disk");
+            self.show_hardware = is_open("hardware");
+            self.show_microdrive = is_open("microdrive");
         }
     }
 
@@ -1876,6 +1993,8 @@ impl App {
             ("profiler", self.show_profiler),
             ("keyboard", self.show_keyboard),
             ("disk", self.show_disk),
+            ("hardware", self.show_hardware),
+            ("microdrive", self.show_microdrive),
         ]
         .into_iter()
         .filter(|(_, open)| *open)
@@ -2868,6 +2987,12 @@ impl App {
                     }
                     ui.close();
                 }
+                if ui.button("Load cartridge…").clicked() {
+                    if let Some(path) = self.pick_file(Some(FileKind::Cartridge)) {
+                        self.load_path(&path);
+                    }
+                    ui.close();
+                }
                 if ui.button("Create blank disk…").clicked() {
                     self.create_blank_disk();
                     ui.close();
@@ -3572,6 +3697,7 @@ impl eframe::App for App {
         // A disk written to during the session, written back before the
         // window goes: the machine has already been told the write happened.
         self.save_disk();
+        self.save_cartridges();
     }
 }
 
@@ -3642,6 +3768,7 @@ impl App {
         });
         let ctx = ui.ctx().clone();
         self.disk_prompt(&ctx);
+        self.cartridge_prompt(&ctx);
         egui::Panel::bottom("status").show(ui, |ui| {
             self.controls_row(ui);
             let status = self.status.clone();
@@ -3768,6 +3895,8 @@ impl App {
             ("callflow", self.show_callflow),
             ("keyboard", self.show_keyboard),
             ("disk", self.show_disk),
+            ("hardware", self.show_hardware),
+            ("microdrive", self.show_microdrive),
         ] {
             if !shown {
                 self.placed.remove(name);
@@ -3969,6 +4098,61 @@ impl App {
                 },
             );
             self.show_disk = open;
+        }
+
+        if self.show_hardware {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("hardware"),
+                self.restore_window(
+                    "hardware",
+                    ViewportBuilder::default().with_title("Hardware"),
+                    [420.0, 120.0],
+                    [520.0, 720.0],
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("hardware", &ctx, [420.0, 120.0], [520.0, 720.0]) {
+                        self.remember_window("hardware", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| crate::ui::hardware::ui(self, ui));
+                },
+            );
+            self.show_hardware = open;
+        }
+
+        if self.show_microdrive {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("microdrive"),
+                self.restore_window(
+                    "microdrive",
+                    ViewportBuilder::default().with_title("Microdrive"),
+                    [1040.0, 140.0],
+                    [cassette::WINDOW_W, 640.0],
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window(
+                        "microdrive",
+                        &ctx,
+                        [1040.0, 140.0],
+                        [cassette::WINDOW_W, 640.0],
+                    ) {
+                        self.remember_window("microdrive", &ctx);
+                    }
+                    self.fix_width(&ctx, cassette::WINDOW_W);
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| crate::ui::microdrivewin::ui(self, ui));
+                },
+            );
+            self.show_microdrive = open;
         }
 
         if self.show_keyboard {

@@ -384,6 +384,21 @@ in the sector's ST1/ST2; the cell timing and the weak bits are not, and a
 protection that measures either will not be fooled. Nothing is written back to
 an IPF: what is taken out of one is the sectors, and an IPF is more than that.
 
+**What is plugged into the back is a list that says how far each thing is
+emulated.** The Interface 1 and its microdrives, the Fuller Audio Box and the
+SpecDrum do something; the µSpeech, the Music Machine and the three Multifaces
+are switches with nothing behind them yet, and the Hardware window says so
+where somebody will see it. A switch that turns on nothing is worse than no
+switch. The Interface 1 pages its own ROM in when the machine fetches from
+$0008 or $1708 and out again at $0700, so without `roms/if1.rom` it pages in
+nothing — which is what an empty socket does.
+[`docs/peripherals.md`](docs/peripherals.md) has the rest.
+
+**The machine and what is plugged into it are remembered between launches.**
+`machine`, `peripherals` and `microdrives` in the preferences; a ROM that has
+since moved is not an error, and the machine the emulator can actually be is
+what comes up.
+
 **A watch can be on a place as well as on a kind of thing.** `Breaks` carries
 watches for the sorts of thing a program does — a screen write, the beeper, an
 `IN` — and `write_range`, which is a watch on an address. It costs one

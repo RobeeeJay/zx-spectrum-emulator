@@ -67,6 +67,12 @@ impl Source {
         }
     }
 
+    /// The same, for a file of another kind: a cartridge's copy is an .mdr.
+    pub fn copy_name_with(&self, extension: &str) -> std::path::PathBuf {
+        let path = self.copy_name();
+        path.with_extension(extension)
+    }
+
     /// Where a copy of it should go: beside the file, or beside the archive
     /// under the name it had inside it.
     pub fn copy_name(&self) -> std::path::PathBuf {
