@@ -2549,6 +2549,14 @@ impl App {
 
     /// Tell the mixer what the clock is now.
     ///
+    /// Whether anything is being listened to at all, which is what the frame
+    /// pacing asks: with every part muted there is no sound to keep in step
+    /// with.
+    fn sound_wanted(&self) -> bool {
+        let audio = &self.spec.bus.audio;
+        audio.enabled && (audio.beeper_on || audio.ay_on || audio.hardware_on)
+    }
+
     /// Sound is made of T-states, so a machine running at twice its clock plays
     /// every note an octave up — which is what an accelerated one did, and only
     /// comes out that way if the mixer counts in the same T-states the machine
@@ -2597,6 +2605,9 @@ impl App {
             machine.bus.audio.attach(out.queue.clone(), out.sample_rate);
         }
         machine.bus.audio.enabled = self.spec.bus.audio.enabled;
+        machine.bus.audio.beeper_on = self.spec.bus.audio.beeper_on;
+        machine.bus.audio.ay_on = self.spec.bus.audio.ay_on;
+        machine.bus.audio.hardware_on = self.spec.bus.audio.hardware_on;
         machine.bus.audio.volume = self.spec.bus.audio.volume;
         self.zx81 = Some(machine);
         self.zx81_ram = ram;
@@ -2701,7 +2712,7 @@ impl App {
             // Keep the sound buffer near its target depth, as for the
             // Spectrum, and mute when the speed is too far from normal.
             let target = self.audio_latency_target as f64;
-            let pace = if self.speed == 1.0 && boost == 1.0 && self.audio().enabled {
+            let pace = if self.speed == 1.0 && boost == 1.0 && self.sound_wanted() {
                 self.audio().pace(target)
             } else {
                 1.0
@@ -2743,7 +2754,7 @@ impl App {
         };
         // Nudge the amount of work to keep the sound buffer near its target
         // depth, so it neither runs dry nor backs up.
-        let pace = if self.speed == 1.0 && self.spec.bus.audio.enabled {
+        let pace = if self.speed == 1.0 && self.sound_wanted() {
             self.spec.bus.audio.pace(self.audio_latency_target as f64)
         } else {
             1.0
@@ -3680,8 +3691,19 @@ impl App {
                 (None, None) => "no audio device".to_string(),
             };
             let failed = self.audio_out.is_none();
-            theme::toggle(ui, &mut self.audio().enabled, if failed { "🔇" } else { "🔊" })
+            ui.label(if failed { "🔇" } else { "🔊" })
                 .on_hover_text(&sound);
+            // Three switches rather than one, because the machine has three
+            // sorts of sound in it and they are not equally wanted: the AY
+            // over a beeper that is only clicking, or the SpecDrum on its own.
+            theme::toggle(ui, &mut self.audio().beeper_on, "Beeper")
+                .on_hover_text("The machine's own speaker, and the tape's hiss with it.");
+            theme::toggle(ui, &mut self.audio().ay_on, "AY")
+                .on_hover_text(
+                    "The sound chip: the 128K's, and a Fuller Box's if one is fitted.",
+                );
+            theme::toggle(ui, &mut self.audio().hardware_on, "Hardware")
+                .on_hover_text("What the add-ons make — the SpecDrum's converter.");
             theme::slider(
                 ui,
                 egui::Slider::new(&mut self.audio().volume, 0.0..=1.0)

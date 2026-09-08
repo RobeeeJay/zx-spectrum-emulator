@@ -217,7 +217,17 @@ impl Ay {
 /// Mixes the beeper and the AY into a stream of samples.
 #[derive(Clone)]
 pub struct Audio {
+    /// The master switch: off, and nothing at all is heard.
     pub enabled: bool,
+    /// The beeper, which on a 48K is the whole of the machine's sound — and
+    /// the tape's hiss with it, since that comes out of the same speaker.
+    pub beeper_on: bool,
+    /// The AY, and any add-on that is one: a Fuller Box gives a 48K its own
+    /// and a 128K a second.
+    pub ay_on: bool,
+    /// What the other add-ons make: the SpecDrum's converter, and anything
+    /// else that is neither the beeper nor a sound chip.
+    pub hardware_on: bool,
     pub volume: f32,
     /// Mute automatically when not running at roughly normal speed, so
     /// fast-forwarding does not shriek.
@@ -276,6 +286,9 @@ impl Audio {
     pub fn new(cpu_hz: f64) -> Self {
         Audio {
             enabled: true,
+            beeper_on: true,
+            ay_on: true,
+            hardware_on: true,
             volume: 0.5,
             mute_off_speed: true,
             speed_ok: true,
@@ -370,7 +383,18 @@ impl Audio {
                 Some(ay) => ay.advance(chunk / 2.0),
                 None => 0.0,
             };
-            self.acc += (self.beeper + ay_out + extra + self.dac + self.hiss()) * chunk as f32;
+            // The hiss is drawn whether or not it is wanted, so muting the
+            // beeper does not change the noise the tape makes when it comes
+            // back — it is one sequence, not one per switch.
+            let hiss = self.hiss();
+            let beeper = if self.beeper_on {
+                self.beeper + hiss
+            } else {
+                0.0
+            };
+            let chips = if self.ay_on { ay_out + extra } else { 0.0 };
+            let boxes = if self.hardware_on { self.dac } else { 0.0 };
+            self.acc += (beeper + chips + boxes) * chunk as f32;
             self.acc_t += chunk;
             dt -= chunk;
             if self.acc_t >= self.t_per_sample - 1e-9 {

@@ -14,10 +14,28 @@ use zx_rustrum::machine::Spectrum;
 use zx_rustrum::ui::{App, Roms};
 
 fn heights(harness: &Harness<'_, App>, labels: &[&str]) -> Vec<(String, f32, f32)> {
+    // The first label anchors the row: a name can appear more than once in the
+    // window — "Beeper" is a break in the debugger and a sound switch on the
+    // main window — so every one after it is the nearest of its name to that
+    // row rather than the first in the tree.
+    let anchor = harness
+        .get_all_by_label(labels[0])
+        .next()
+        .and_then(|n| n.accesskit_node().bounding_box())
+        .map(|b| b.y0)
+        .unwrap_or(0.0);
     labels
         .iter()
         .filter_map(|label| {
-            let node = harness.get_all_by_label(label).next()?;
+            let node = harness.get_all_by_label(label).min_by(|a, b| {
+                let near = |n: &_| {
+                    NodeT::accesskit_node(n)
+                        .bounding_box()
+                        .map(|x| (x.y0 - anchor).abs())
+                        .unwrap_or(f64::MAX)
+                };
+                near(a).total_cmp(&near(b))
+            })?;
             let box_ = node.accesskit_node().bounding_box()?;
             Some((
                 label.to_string(),
