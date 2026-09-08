@@ -22,6 +22,7 @@ pub mod logo;
 pub mod loops;
 pub mod machine;
 pub mod mcp;
+pub mod microdrive;
 pub mod notes;
 pub mod observe;
 pub mod prefs;
