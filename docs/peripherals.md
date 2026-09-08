@@ -10,9 +10,11 @@ is working.
 | **Interface 1** | Emulated, once `roms/if1.rom` is there |
 | **Fuller Audio Box** | Emulated |
 | **Cheetah SpecDrum** | Emulated |
+| **Multiface One** | Emulated, once `roms/multiface1.rom` is there |
+| **Multiface 128** | Emulated, once `roms/multiface128.rom` is there |
+| **Multiface 3** | Emulated, once `roms/multiface3.rom` is there |
 | **Currah µSpeech** | Fitted, not emulated |
 | **RAM Music Machine** | Fitted, not emulated |
-| **Multiface One / 128 / 3** | Fitted, not emulated |
 
 What is plugged in — and which machine it is plugged into — is remembered
 between launches, along with how many microdrives are on the chain.
@@ -133,5 +135,55 @@ samples, and neither the ROM nor the synthesiser is here.
 here. Inventing one would make a switch that looks as though it works, which is
 the failure this window exists to avoid.
 
-**The Multifaces** need their own ROM, which cannot be shipped, and the three
-differ from one another in how they page it and which ports they answer.
+## The Multifaces
+
+Romantic Robot's box does one thing: pressing its red button pulls the CPU's
+`/NMI`, and the interface pages its own 8K of ROM and 8K of RAM over the bottom
+16K in time for the fetch from `$0066`. Whatever was running stops where it
+stood with every register still in it, and the ROM's menu can save the lot —
+which is how a game with no save game got one, and where most of the snapshots
+in the archives came from. The button is in the Hardware window; that is the
+whole of the box's front panel.
+
+The paging is hung on the **fetch from `$0066`**, not on the CPU taking the
+interrupt: the latch the button sets is clocked by /M1 with that address on the
+bus, which is the same mechanism as the Interface 1's `$0008`.
+
+Three models, and they do not agree on much:
+
+| | pages in | pages out | saves to |
+| --- | --- | --- | --- |
+| **One** (48K) | `IN` with A7 set — $9F | A7 clear — $1F | tape, cartridge |
+| **128** | A7 set — $BF | A7 clear — $3F | tape, microdrive |
+| **3** (+2A/+3) | A7 **clear** — $3F | A7 set — $BF | tape, disk |
+
+The One decodes `x001 xx1x` and the other two `x011 xx1x`, so the numbers in
+the manuals are one port each out of a family. The 128 hands back a byte saying
+whether bit 3 of the last write to `$7FFD` was set, and the 3 watches every
+write to `$1FFD`, `$3FFD`, `$5FFD` and `$7FFD` and hands back whichever of the
+four the address asks for: both need to put the machine's paging back before
+they give it up. Getting the 3's two ports the same way round as the 128's —
+the obvious guess — leaves the +3's own menu on the screen and no Multiface.
+
+Two latches decide whether a press does anything. One is set by the button and
+cleared by the fetch from `$0066`, so a press pages the ROM in exactly once;
+the other is cleared by the button and set again by the next `OUT` to the
+interface, which the ROM does on its way out. Press the button twice without
+letting the menu finish and the second press does nothing, as on the desk.
+
+All three can be on the back at once and one button serves them, as the
+hardware daisy-chains: the last one that is ready takes it.
+
+The port decoding and the latch behaviour are Fuse's `multiface.c`. The manuals
+give one port number each and say nothing about which address lines are
+decoded, so there was nothing else precise enough to work from.
+`tests/multiface_rom.rs` is what says the reading is right: it presses the
+button on a running machine of the right sort for each model and reads the menu
+off the screen — `exit return save tool copy jump` over
+`MULTIFACE 1 © Romantic Robot Ltd`, and the same for the other two — then
+presses R and checks the machine comes back exactly as it was.
+
+Watching one work is worth knowing about: the menu does not run with the box
+paged in. The ROM puts a stub in the machine's own RAM and pages itself in and
+out several times a frame, which is why the interface is usually *out* while
+its menu is on the screen.

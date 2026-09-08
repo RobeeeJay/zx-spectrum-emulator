@@ -174,6 +174,11 @@ pub struct SpectrumBus {
     /// The Interface 1, when one is fitted: its shadow ROM and the microdrives
     /// on the chain behind it.
     pub if1: Option<crate::if1::If1>,
+    /// A Multiface's button has been pressed and the NMI not taken yet.
+    pub nmi_pending: bool,
+    /// The Multifaces that are fitted. All three can be on the back at once,
+    /// and one button serves them: the hardware daisy-chains through.
+    pub multifaces: Vec<crate::multiface::Multiface>,
     /// The +3's disk controller. Present on every model, since a bus that
     /// changes shape with the machine is a bus that has to be rebuilt to swap
     /// one; the ports are only decoded on a machine that has the hardware.
@@ -342,6 +347,8 @@ impl SpectrumBus {
             page_reg_1ffd: 0,
             hardware: crate::hardware::Hardware::default(),
             if1: None,
+            nmi_pending: false,
+            multifaces: Vec::new(),
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
@@ -520,6 +527,13 @@ impl SpectrumBus {
                 return byte;
             }
         }
+        // A Multiface with its button pressed is over the bottom 16K: its ROM
+        // under the machine's, and its own RAM where the machine's ROM is not.
+        for mf in &self.multifaces {
+            if let Some(byte) = mf.mem(addr) {
+                return byte;
+            }
+        }
         let off = (addr & 0x3fff) as usize;
         match self.slot_of(addr) {
             Slot::Rom(page) => {
@@ -532,6 +546,11 @@ impl SpectrumBus {
 
     #[inline]
     pub fn poke(&mut self, addr: u16, v: u8) {
+        for mf in &mut self.multifaces {
+            if mf.poke(addr, v) {
+                return;
+            }
+        }
         let off = (addr & 0x3fff) as usize;
         if let Slot::Ram(bank) = self.slot_of(addr) {
             self.ram[bank * 0x4000 + off] = v;
@@ -1194,6 +1213,19 @@ impl SpectrumBus {
         self.irq_raised = self.total_t();
     }
 
+    /// The Multiface's red button, which is one button for all of them: the
+    /// hardware chains through, and the last one on the back that is ready
+    /// takes it.
+    pub fn press_red_button(&mut self) -> bool {
+        for mf in self.multifaces.iter_mut().rev() {
+            if mf.press() {
+                self.nmi_pending = true;
+                return true;
+            }
+        }
+        false
+    }
+
     /// End the video frame here, wherever the T-state count has got to.
     ///
     /// For a recording, whose frames are counted in opcode fetches: on the
@@ -1285,6 +1317,11 @@ impl Bus for SpectrumBus {
                 if1.at(now);
                 if1.on_fetch(addr);
             }
+        }
+        // A Multiface pages itself in at the fetch from $0066: the button
+        // pulled /NMI, and this is where the machine lands.
+        for mf in &mut self.multifaces {
+            mf.on_fetch(addr);
         }
         // Counted for RZX playback, which measures a frame in opcode fetches:
         // a prefixed instruction is two or more of them, so counting whole
@@ -1461,6 +1498,10 @@ impl Bus for SpectrumBus {
                     if1.write_control(value);
                 }
             }
+        }
+
+        for mf in &mut self.multifaces {
+            mf.io_write(port, value);
         }
 
         if self.model.has_paging() {
@@ -1780,8 +1821,17 @@ impl Spectrum {
         let tape_flash = self.bus.tape_flash;
         let slow_enabled = self.bus.slow.enabled;
         let late = self.bus.late_timing;
+        // What is plugged into the back stays plugged in: changing the machine
+        // is unplugging one and plugging in another, not unscrewing the
+        // Interface 1 from the back of it.
+        let hardware = std::mem::take(&mut self.bus.hardware);
+        let if1 = self.bus.if1.take();
+        let multifaces = std::mem::take(&mut self.bus.multifaces);
 
         self.bus = SpectrumBus::new(model);
+        self.bus.hardware = hardware;
+        self.bus.if1 = if1;
+        self.bus.multifaces = multifaces;
         self.bus.set_late_timing(late);
         self.bus.audio = audio;
         self.bus.audio.set_cpu_hz(model.cpu_hz());
@@ -1814,6 +1864,9 @@ impl Spectrum {
         if let Some(if1) = &mut self.bus.if1 {
             if1.reset();
         }
+        for mf in &mut self.bus.multifaces {
+            mf.reset();
+        }
         self.bus.audio.ay.reset();
         self.bus.audio.rebase(0);
         self.bus.speaker = false;
@@ -1830,6 +1883,13 @@ impl Spectrum {
     }
 
     fn check_interrupt(&mut self) {
+        // The red button pulls /NMI, which is taken between instructions
+        // whatever the program has said about interrupts: that is the whole
+        // point of it, and why a Multiface can stop a game that has them off.
+        if self.bus.nmi_pending {
+            self.bus.nmi_pending = false;
+            self.cpu.nmi(&mut self.bus);
+        }
         if self.bus.irq_pending {
             // The ULA holds the interrupt line down for thirty-odd T-states
             // and then lets it go, so a program with interrupts disabled
@@ -2137,6 +2197,13 @@ impl SpectrumBus {
                 self.break_hit.get_or_insert(Event::Ay);
             }
             return byte;
+        }
+        // A Multiface pages itself in and out on a read of its own port, so
+        // this is asked before anything else that decodes the low bits.
+        for mf in &mut self.multifaces {
+            if let Some(byte) = mf.io_read(port) {
+                return byte;
+            }
         }
         // The Interface 1: $E7 is the microdrive's data register and $EF its
         // control and status one. Decoded on the low bits, as the interface

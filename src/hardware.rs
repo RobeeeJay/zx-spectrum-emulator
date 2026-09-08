@@ -108,11 +108,19 @@ impl Peripheral {
                 "Its port map has not been checked against a reference here, and inventing \
                  one would make a switch that looks as though it works.",
             ),
-            Peripheral::MultifaceOne | Peripheral::Multiface128 | Peripheral::Multiface3 => {
-                Emulated::No(
-                    "The button and the paging need the Multiface's own ROM, which cannot \
-                     be shipped, and its port map differs between the three.",
-                )
+            // Each has its own 8K, and they are not interchangeable: the
+            // three page in on different ports and their menus save to
+            // different things.
+            Peripheral::MultifaceOne => Emulated::NeedsRom(
+                "roms/multiface1.rom — the 8K the red button runs. Everything the \
+                 Multiface does is in it.",
+            ),
+            Peripheral::Multiface128 => Emulated::NeedsRom(
+                "roms/multiface128.rom — the 128K's Multiface, which saves to microdrive \
+                 as well as to tape.",
+            ),
+            Peripheral::Multiface3 => {
+                Emulated::NeedsRom("roms/multiface3.rom — the +2A and +3's, which saves to disk.")
             }
         }
     }

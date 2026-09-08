@@ -385,10 +385,10 @@ protection that measures either will not be fooled. Nothing is written back to
 an IPF: what is taken out of one is the sectors, and an IPF is more than that.
 
 **What is plugged into the back is a list that says how far each thing is
-emulated.** The Interface 1 and its microdrives, the Fuller Audio Box and the
-SpecDrum do something; the µSpeech, the Music Machine and the three Multifaces
-are switches with nothing behind them yet, and the Hardware window says so
-where somebody will see it. A switch that turns on nothing is worse than no
+emulated.** The Interface 1 and its microdrives, the three Multifaces, the
+Fuller Audio Box and the SpecDrum do something; the µSpeech and the Music
+Machine are switches with nothing behind them yet, and the Hardware window says
+so where somebody will see it. A switch that turns on nothing is worse than no
 switch. The Interface 1 pages its own ROM in when the machine fetches from
 $0008 or $1708 and out again at $0700, so without `roms/if1.rom` it pages in
 nothing — which is what an empty socket does.
@@ -406,6 +406,16 @@ because a block is read with `INIR` at 21 T-states a byte and the tape hands
 one over every 170. `tests/if1_rom.rs` formats a cartridge, saves a program to
 it, loads it back and reads the listing off the screen; anything less than that
 was passing for the wrong reason.
+
+**The red button pages the Multiface in at the fetch from $0066**, not when the
+CPU takes the NMI: the latch the button sets is clocked by /M1 with that
+address on the bus, the same mechanism as the Interface 1's $0008. All three
+models are emulated, each needing its own 8K — they page in and out on
+different ports, and the 3 has its two the other way round from the 128, which
+is the sort of thing only the ROM can settle. The menu does not run with the
+box paged in: it puts a stub in the machine's RAM and pages itself in and out
+several times a frame, so `paged` is a bad thing for a test to assert on.
+[`docs/peripherals.md`](docs/peripherals.md) has the ports.
 
 **The machine and what is plugged into it are remembered between launches.**
 `machine`, `peripherals` and `microdrives` in the preferences; a ROM that has

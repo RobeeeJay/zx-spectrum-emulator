@@ -9,6 +9,7 @@ use eframe::egui;
 
 use crate::hardware::{Emulated, Peripheral};
 use crate::if1::{If1, MAX_DRIVES};
+use crate::multiface::{Model as MfModel, Multiface};
 use crate::ui::theme;
 use crate::ui::App;
 
@@ -45,6 +46,31 @@ impl App {
             }
             Peripheral::Fuller => self.spec.bus.audio.extra_ay = None,
             Peripheral::SpecDrum if !yes => self.spec.bus.audio.dac = 0.0,
+            // A Multiface is its ROM and 8K of RAM. Taking one out throws the
+            // RAM away, which is what unplugging the box does.
+            _ if multiface_model(what).is_some() => {
+                let model = multiface_model(what).unwrap();
+                self.spec.bus.multifaces.retain(|mf| mf.model != model);
+                if yes {
+                    let mut mf = Multiface::new(model);
+                    mf.rom = self.multiface_rom(model);
+                    if mf.rom.is_none() {
+                        self.set_status(
+                            format!(
+                                "{} fitted, but there is no {} to run: the red button \
+                                 has nothing behind it.",
+                                model.name(),
+                                model.rom_names()[0]
+                            ),
+                            true,
+                        );
+                    }
+                    self.spec.bus.multifaces.push(mf);
+                    // In the order the models came out, so one button reaching
+                    // the last one on the back reaches the newest.
+                    self.spec.bus.multifaces.sort_by_key(|mf| mf.model as u8);
+                }
+            }
             _ => {}
         }
     }
@@ -54,6 +80,42 @@ impl App {
         let dirs = crate::resources::search_dirs();
         crate::resources::find_file(&dirs, &["if1.rom", "interface1.rom", "if1-2.rom"], 8192)
             .map(|(_, data)| data)
+    }
+
+    /// A Multiface's ROM, from wherever the machine's ROMs are kept.
+    fn multiface_rom(&self, model: MfModel) -> Option<Vec<u8>> {
+        let dirs = crate::resources::search_dirs();
+        crate::resources::find_file(&dirs, model.rom_names(), crate::multiface::ROM_LEN)
+            .map(|(_, data)| data)
+    }
+
+    /// Whether a peripheral that wants a ROM has found one.
+    pub fn has_rom_for(&self, what: Peripheral) -> bool {
+        match multiface_model(what) {
+            Some(model) => self
+                .spec
+                .bus
+                .multifaces
+                .iter()
+                .any(|mf| mf.model == model && mf.ready()),
+            None => self.spec.bus.if1.as_ref().is_some_and(|i| i.rom.is_some()),
+        }
+    }
+
+    /// The red button, and what it did. One button serves every Multiface on
+    /// the back, as on the hardware.
+    pub fn press_red_button(&mut self) {
+        if self.spec.bus.press_red_button() {
+            self.running = true;
+            self.set_status("Red button: the Multiface has the machine.".into(), false);
+        } else {
+            self.set_status(
+                "The red button did nothing: no Multiface with a ROM in it, or its menu \
+                 has not finished with the last press."
+                    .into(),
+                true,
+            );
+        }
     }
 
     /// How many microdrives are on the chain.
@@ -104,7 +166,7 @@ fn peripheral(app: &mut App, ui: &mut egui::Ui, what: Peripheral) {
             match what.emulated() {
                 Emulated::Yes => {}
                 Emulated::NeedsRom(rom) => {
-                    let have = app.spec.bus.if1.as_ref().is_some_and(|i| i.rom.is_some());
+                    let have = app.has_rom_for(what);
                     ui.label(
                         egui::RichText::new(if have { "ROM found" } else { "needs a ROM" })
                             .small()
@@ -126,9 +188,23 @@ fn peripheral(app: &mut App, ui: &mut egui::Ui, what: Peripheral) {
             ui.label(egui::RichText::new(why).small().color(theme::DIM));
         }
         if let Emulated::NeedsRom(rom) = what.emulated() {
-            if !app.spec.bus.if1.as_ref().is_some_and(|i| i.rom.is_some()) {
+            if !app.has_rom_for(what) {
                 ui.label(egui::RichText::new(rom).small().color(theme::DIM));
             }
+        }
+
+        // The red button is the whole of a Multiface's front panel.
+        if multiface_model(what).is_some() && fitted && app.has_rom_for(what) {
+            ui.horizontal_wrapped(|ui| {
+                if theme::selectable(ui, false, "Red button").clicked() {
+                    app.press_red_button();
+                }
+                ui.label(
+                    egui::RichText::new("stops the machine wherever it is and brings up its menu")
+                        .small()
+                        .color(theme::DIM),
+                );
+            });
         }
 
         // The Interface 1 is the one with anything to set.
@@ -150,4 +226,14 @@ fn peripheral(app: &mut App, ui: &mut egui::Ui, what: Peripheral) {
             });
         }
     });
+}
+
+/// Which Multiface a peripheral is, if it is one.
+fn multiface_model(what: Peripheral) -> Option<MfModel> {
+    match what {
+        Peripheral::MultifaceOne => Some(MfModel::One),
+        Peripheral::Multiface128 => Some(MfModel::OneTwentyEight),
+        Peripheral::Multiface3 => Some(MfModel::Three),
+        _ => None,
+    }
 }

@@ -236,3 +236,77 @@ fn the_machine_and_its_peripherals_are_remembered() {
     assert!(next.spec.bus.hardware.fitted(Peripheral::Interface1));
     assert_eq!(next.spec.bus.if1.as_ref().unwrap().drive_count(), 3);
 }
+
+/// Fitting a Multiface puts one on the bus, and the window offers its button.
+///
+/// The Hardware window is the whole of a Multiface's front panel: there is
+/// nothing else to it but the red button.
+#[test]
+fn the_hardware_window_fits_a_multiface_and_offers_its_button() {
+    let mut app = test_app();
+    app.show_hardware = true;
+    app.fit(Peripheral::MultifaceOne, true);
+    let fitted = app
+        .spec
+        .bus
+        .multifaces
+        .iter()
+        .any(|mf| mf.model == zx_rustrum::multiface::Model::One);
+    assert!(fitted, "the box should be on the back");
+
+    let ready = app.has_rom_for(Peripheral::MultifaceOne);
+    let mut h = harness_for(app);
+    h.run_steps(3);
+
+    if ready {
+        // With a ROM in it the button is there to press, and pressing it asks
+        // the machine for an NMI.
+        assert!(
+            h.query_by_label("Red button").is_some(),
+            "the button should be on the panel"
+        );
+        h.get_by_label("Red button").click();
+        h.run_steps(2);
+        // What the press did is not something to look for in the latches a
+        // frame later: by then the NMI has been taken, the menu is running
+        // from the stub it puts in the machine's RAM, and the box has paged
+        // itself out again. The status line says whether the button was taken.
+        assert!(
+            h.state().status.contains("Red button"),
+            "pressing it should have stopped the machine: {}",
+            h.state().status
+        );
+        assert!(!h.state().status_is_error, "{}", h.state().status);
+    } else {
+        // Without one the window says what is missing rather than offering a
+        // button that would do nothing.
+        assert!(
+            h.query_by_label("Red button").is_none(),
+            "no ROM, no button"
+        );
+    }
+
+    // Taking it out unplugs the box, RAM and all.
+    let mut app = h.into_state();
+    app.fit(Peripheral::MultifaceOne, false);
+    assert!(app.spec.bus.multifaces.is_empty(), "and out it comes");
+}
+
+/// What is plugged into the back stays plugged in when the machine changes.
+///
+/// Changing model rebuilds the bus, and the peripherals used to be left behind
+/// by it: a 128K chosen from the toolbar came up with the Interface 1 gone and
+/// the cartridges with it.
+#[test]
+fn the_peripherals_stay_on_the_back_when_the_machine_changes() {
+    use zx_rustrum::machine::Model;
+
+    let mut app = test_app();
+    app.fit(Peripheral::Interface1, true);
+    app.fit(Peripheral::MultifaceOne, true);
+    app.switch_model(Model::Spectrum128);
+
+    assert!(app.spec.bus.if1.is_some(), "the interface is still there");
+    assert_eq!(app.spec.bus.multifaces.len(), 1, "and so is the Multiface");
+    assert!(app.spec.bus.hardware.fitted(Peripheral::Interface1));
+}
