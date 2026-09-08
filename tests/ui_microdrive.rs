@@ -237,14 +237,22 @@ fn the_machine_and_its_peripherals_are_remembered() {
     assert_eq!(next.spec.bus.if1.as_ref().unwrap().drive_count(), 3);
 }
 
-/// Fitting a Multiface puts one on the bus, and the window offers its button.
+/// Fitting a Multiface puts one on the bus, and the main window grows a red
+/// button for it.
 ///
-/// The Hardware window is the whole of a Multiface's front panel: there is
-/// nothing else to it but the red button.
+/// The button is on the front of the emulator rather than in the Hardware
+/// window because that is what it is for: it is pressed while a game is
+/// running, and going to find a window first is not that.
 #[test]
-fn the_hardware_window_fits_a_multiface_and_offers_its_button() {
+fn fitting_a_multiface_puts_its_red_button_on_the_main_window() {
     let mut app = test_app();
-    app.show_hardware = true;
+    assert!(
+        harness_for(test_app())
+            .query_by_label("Red button")
+            .is_none(),
+        "no Multiface, no button"
+    );
+
     app.fit(Peripheral::MultifaceOne, true);
     let fitted = app
         .spec
@@ -258,38 +266,39 @@ fn the_hardware_window_fits_a_multiface_and_offers_its_button() {
     let mut h = harness_for(app);
     h.run_steps(3);
 
-    if ready {
-        // With a ROM in it the button is there to press, and pressing it asks
-        // the machine for an NMI.
-        assert!(
-            h.query_by_label("Red button").is_some(),
-            "the button should be on the panel"
-        );
-        h.get_by_label("Red button").click();
-        h.run_steps(2);
-        // What the press did is not something to look for in the latches a
-        // frame later: by then the NMI has been taken, the menu is running
-        // from the stub it puts in the machine's RAM, and the box has paged
-        // itself out again. The status line says whether the button was taken.
-        assert!(
-            h.state().status.contains("Red button"),
-            "pressing it should have stopped the machine: {}",
-            h.state().status
-        );
-        assert!(!h.state().status_is_error, "{}", h.state().status);
-    } else {
-        // Without one the window says what is missing rather than offering a
-        // button that would do nothing.
+    if !ready {
+        // Without a ROM there is nothing behind the button, and a button that
+        // does nothing is what the Hardware window exists to avoid.
         assert!(
             h.query_by_label("Red button").is_none(),
             "no ROM, no button"
         );
+        return;
     }
 
-    // Taking it out unplugs the box, RAM and all.
+    h.get_by_label("Red button").click();
+    h.run_steps(2);
+    // What the press did is not something to look for in the latches a frame
+    // later: by then the NMI has been taken, the menu is running from the stub
+    // it puts in the machine's RAM, and the box has paged itself out again.
+    // The status line says whether the button was taken.
+    assert!(
+        h.state().status.contains("Red button"),
+        "pressing it should have stopped the machine: {}",
+        h.state().status
+    );
+    assert!(!h.state().status_is_error, "{}", h.state().status);
+
+    // Taking the box out takes its button with it.
     let mut app = h.into_state();
     app.fit(Peripheral::MultifaceOne, false);
     assert!(app.spec.bus.multifaces.is_empty(), "and out it comes");
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("Red button").is_none(),
+        "nothing left to press"
+    );
 }
 
 /// What is plugged into the back stays plugged in when the machine changes.

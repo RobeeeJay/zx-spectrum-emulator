@@ -414,7 +414,9 @@ models are emulated, each needing its own 8K — they page in and out on
 different ports, and the 3 has its two the other way round from the 128, which
 is the sort of thing only the ROM can settle. The menu does not run with the
 box paged in: it puts a stub in the machine's RAM and pages itself in and out
-several times a frame, so `paged` is a bad thing for a test to assert on.
+several times a frame, so `paged` is a bad thing for a test to assert on. The
+button itself is on the main window under *Buttons* rather than in the Hardware
+window, because it is pressed while a game is running.
 [`docs/peripherals.md`](docs/peripherals.md) has the ports.
 
 **The machine and what is plugged into it are remembered between launches.**

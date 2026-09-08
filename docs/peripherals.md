@@ -142,8 +142,10 @@ Romantic Robot's box does one thing: pressing its red button pulls the CPU's
 16K in time for the fetch from `$0066`. Whatever was running stops where it
 stood with every register still in it, and the ROM's menu can save the lot —
 which is how a game with no save game got one, and where most of the snapshots
-in the archives came from. The button is in the Hardware window; that is the
-whole of the box's front panel.
+in the archives came from. The button is on the main window, under **Buttons**,
+next to the list of windows: it is pressed while a game is running, and going
+to find a window first is not that. It appears when a Multiface with a ROM in
+it is fitted, and one button serves however many are on the back.
 
 The paging is hung on the **fetch from `$0066`**, not on the CPU taking the
 interrupt: the latch the button sets is clocked by /M1 with that address on the

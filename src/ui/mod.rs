@@ -906,7 +906,39 @@ impl App {
             {
                 theme::toggle(ui, &mut self.show_microdrive, "Microdrive");
             }
+            self.buttons(ui);
         });
+    }
+
+    /// The buttons on the boxes plugged into the back, which are on the front
+    /// of the emulator because that is where a hand can reach them: a
+    /// Multiface's whole purpose is being pressed while something else is
+    /// running, and going and finding a window first is not that.
+    ///
+    /// Nothing is drawn when there is nothing to press. One button serves
+    /// every Multiface on the back, as on the hardware.
+    fn buttons(&mut self, ui: &mut egui::Ui) {
+        let any = self
+            .spec
+            .bus
+            .multifaces
+            .iter()
+            .any(|mf| mf.ready() && self.spec.bus.hardware.fitted(peripheral_of(mf.model)));
+        if !any {
+            return;
+        }
+        theme::group_label(ui, "Buttons");
+        let label = egui::RichText::new("Red button").color(theme::RED);
+        let button = egui::Button::new(label)
+            .frame_when_inactive(true)
+            .min_size(egui::vec2(0.0, theme::button_height(ui)));
+        if ui
+            .add(button)
+            .on_hover_text("Stops the machine wherever it is and brings up the Multiface's menu")
+            .clicked()
+        {
+            self.press_red_button();
+        }
     }
 
     /// Start recording what the machine does, from where it is now.
@@ -4310,5 +4342,15 @@ impl App {
             Some(zx) => zx.bus.keys = matrix,
             None => self.spec.bus.keys = matrix,
         }
+    }
+}
+
+/// Which peripheral a Multiface model is, so the button can tell whether the
+/// box is still plugged in.
+fn peripheral_of(model: crate::multiface::Model) -> crate::hardware::Peripheral {
+    match model {
+        crate::multiface::Model::One => crate::hardware::Peripheral::MultifaceOne,
+        crate::multiface::Model::OneTwentyEight => crate::hardware::Peripheral::Multiface128,
+        crate::multiface::Model::Three => crate::hardware::Peripheral::Multiface3,
     }
 }

@@ -193,19 +193,9 @@ fn peripheral(app: &mut App, ui: &mut egui::Ui, what: Peripheral) {
             }
         }
 
-        // The red button is the whole of a Multiface's front panel.
-        if multiface_model(what).is_some() && fitted && app.has_rom_for(what) {
-            ui.horizontal_wrapped(|ui| {
-                if theme::selectable(ui, false, "Red button").clicked() {
-                    app.press_red_button();
-                }
-                ui.label(
-                    egui::RichText::new("stops the machine wherever it is and brings up its menu")
-                        .small()
-                        .color(theme::DIM),
-                );
-            });
-        }
+        // The red button itself is on the main window, under Buttons: it is
+        // pressed while something else is running, and going to find a window
+        // first is not that.
 
         // The Interface 1 is the one with anything to set.
         if what == Peripheral::Interface1 && fitted {
