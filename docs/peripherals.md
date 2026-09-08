@@ -28,19 +28,48 @@ of the machine's. A fetch from `$0700` pages it out again.
 Everything the microdrives do is done by that ROM, so **without one in the
 socket the interface pages in nothing**, which is exactly what the hardware
 does with an empty socket. The ROM is somebody else's copyright and is not
-shipped; put one at `roms/if1.rom` and the interface works.
+shipped; put one at `roms/if1.rom` and the interface works. It is the second
+edition that is wanted — 8K, with ` 1983 Sinclair Research Ltd MJB ` at
+`$16DC`.
 
-The drives are a loop of tape running past a head at about seventy-six sectors
-a second. The ROM finds its way round by waiting for a gap and then for sync,
-so the tape has to move: its position follows the machine's clock rather than a
-count of accesses, and a clock that goes backwards — a reset, a snapshot — is
-not time passing. One bit selects one of eight drives by being walked down the
-chain: a pulse on the motor line starts the first, and each further pulse moves
-it one further along.
+**The ROM pages out one fetch later than it pages in.** `$0700` in the shadow
+ROM is a `RET`, and that is how a microdrive routine hands back: it jumps
+there, the `RET` runs out of the shadow ROM, and the ROM is gone by the time
+the return address is fetched. Paging out before that byte is read runs
+whatever the machine's own ROM holds at `$0700` — `$71` on a 48K, the middle of
+an unrelated routine — and the Interface 1's initialisation goes round for
+ever.
+
+The status port `$EF` reads the **gap** on bit 2, high while the tape between
+two blocks is under the head; **sync** on bit 1, low once the block's preamble
+is; and the **write-protect** tab on bit 0, low for a cartridge that may not be
+written. That is not a guess: the ROM's sector-finding loop at `$165A` waits
+for eight reads with bit 2 set, then six with it clear, then for bit 1 to go
+low, and its write test at `$136C` refuses when bit 0 reads clear. The motor
+line is bit 0 of a write and it is **low** for a drive that is to run; it is
+latched on the falling edge of the comms clock (bit 1) and walks one place down
+the chain of eight each time.
+
+**The tape moves as the ROM reads it, not on the clock.** A block is read with
+`INIR` — 21 T-states a byte — where the tape itself hands over a byte every 170
+or so; a tape running at its own speed gives the same byte to a dozen reads in
+a row. On the hardware the interface paces the CPU; here the reads pace the
+tape, which comes to the same thing from the ROM's side, and is what Fuse does.
+A write to the control port puts the head at the start of the next block, since
+that is what the ROM does when it has finished with one.
 
 Ports `$E7` (data) and `$EF` (control and status) are decoded on the low bits,
 as the interface does. `$F7` is the RS232 and network side, and nothing is on
 the other end of it here.
+
+### What has actually been run
+
+`tests/if1_rom.rs` puts the real ROM in the socket and drives it from the
+keyboard: `FORMAT "m";1;"newcart"`, a one-line program saved with `SAVE *`,
+`NEW`, `LOAD *`, `LIST` — and reads `10 REM hello` back off the screen through
+the ROM's own font. `CAT 1` of a 180-sector cartridge prints its name and 90K
+free. A real cartridge — Hewson's, 200 sectors — catalogues as ten files with
+1K free, which is what the emulator's own reading of it says as well.
 
 ## Cartridges
 
@@ -54,6 +83,17 @@ files in the wild have not got it.
 The arithmetic is **mod 255**, not mod 256. A sector whose bytes add to 255
 checksums as nothing, and getting that wrong fails one sector in a few hundred
 — which reads as a worn cartridge rather than as a bug.
+
+A record is **in use when bit 2 of its flag byte is set**. Bit 1 is something
+else, and testing that instead dropped ten of Hewson's records — the ones
+flagged `$06` — out of the files they belong to. An empty record is all zeros,
+which is what the interface's own `FORMAT` writes: flags, length, name and both
+checksums, the lot. A blank cartridge made with anything else in those bytes
+catalogues as having no room on it at all.
+
+`FORMAT` leaves one sector holding the pattern of `$FC` it wrote to test the
+tape with, which is why the ROM reports 89K free on a 180-sector cartridge
+rather than 90, and why that one sector does not add up.
 
 Cartridges are mounted the way disks are: **read-only**, **writing to a copy**,
 or **writing to the file itself**, and the question is asked rather than

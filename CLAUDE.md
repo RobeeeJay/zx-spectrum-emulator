@@ -394,6 +394,19 @@ $0008 or $1708 and out again at $0700, so without `roms/if1.rom` it pages in
 nothing — which is what an empty socket does.
 [`docs/peripherals.md`](docs/peripherals.md) has the rest.
 
+**Nothing about an interface was known until its own ROM was run.** The first
+Interface 1 here was written against the documentation and passed nine tests,
+and with Sinclair's ROM in the socket it did not turn a drive: the shadow ROM
+was paged out one fetch too early (the `RET` at $0700 has to come from the
+shadow), the gap, sync and write-protect lines were in the wrong bits, and the
+motor line was the wrong way up. All four were read back off the interface's
+own code — the sector-finding loop at $165A, the write test at $136C — rather
+than off a table. The tape moves as the ROM reads it rather than on the clock,
+because a block is read with `INIR` at 21 T-states a byte and the tape hands
+one over every 170. `tests/if1_rom.rs` formats a cartridge, saves a program to
+it, loads it back and reads the listing off the screen; anything less than that
+was passing for the wrong reason.
+
 **The machine and what is plugged into it are remembered between launches.**
 `machine`, `peripherals` and `microdrives` in the preferences; a ROM that has
 since moved is not an error, and the machine the emulator can actually be is

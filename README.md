@@ -681,8 +681,11 @@ SpecDrum do something; the Currah µSpeech, the RAM Music Machine and the three
 Multifaces are switches with nothing behind them yet, and the window says so
 rather than looking as though they work. A **Microdrive** window puts `.mdr`
 cartridges — loose or zipped — in the drives, read-only, writing to a copy, or
-writing in place. [`docs/peripherals.md`](docs/peripherals.md) says what is
-emulated and what is not.
+writing in place. With Sinclair's own 8K at `roms/if1.rom` the microdrives run:
+`FORMAT`, `SAVE *`, `LOAD *` and `CAT` all work, and a test drives that whole
+round trip from the emulated keyboard.
+[`docs/peripherals.md`](docs/peripherals.md) says what is emulated and what is
+not.
 
 ## Disks
 

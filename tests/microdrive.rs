@@ -175,3 +175,29 @@ fn an_erased_sector_is_not_a_file() {
     assert_eq!(files[0].bytes, 512);
     assert_eq!(cart.free_sectors(), 7);
 }
+
+/// A record flagged $06 belongs to its file just as much as one flagged $04.
+///
+/// Bit 2 is what says a record is in use; bit 1 is something else, and testing
+/// it instead dropped ten of Hewson's records — all of the ones flagged $06 —
+/// out of the files they belong to, and counted them as free space. The
+/// Interface 1's own CAT of that cartridge says one kilobyte free, which is
+/// the four sectors flagged $00 or $02, halved and less the one it keeps back.
+#[test]
+fn a_record_is_in_use_when_bit_two_of_its_flags_is_set() {
+    let mut cart = Cartridge::blank("Test", 8);
+    for (i, flags) in [(0usize, 0x04u8), (1, 0x06), (2, 0x00), (3, 0x02)] {
+        cart.sectors[i].record[0] = flags;
+        cart.sectors[i].record[4..14].copy_from_slice(b"Cybernoid ");
+        cart.sectors[i].record[2] = 0x00;
+        cart.sectors[i].record[3] = 0x02;
+    }
+
+    let files = cart.catalogue();
+    assert_eq!(files.len(), 1, "one file: {files:?}");
+    assert_eq!(
+        files[0].sectors, 2,
+        "both the $04 and the $06 record are its: {files:?}"
+    );
+    assert_eq!(cart.free_sectors(), 6, "and the other two are free");
+}

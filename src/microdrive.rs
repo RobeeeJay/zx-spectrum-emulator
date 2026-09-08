@@ -61,11 +61,18 @@ impl Sector {
     /// Whether the record is in use at all. A sector the ROM has erased has
     /// its record flagged empty, and its data is nobody's.
     pub fn in_use(&self) -> bool {
-        // A name of nothing printable is not a name. An erased sector keeps
-        // whatever was in those bytes, and rendering them as dots made a file
-        // called ".........." appear in the catalogue.
+        // Bit 2 of the record's flag byte, read off a real cartridge rather
+        // than off a table: Hewson's has 196 records flagged $04 or $06 and
+        // four flagged $00 or $02, and the Interface 1's own CAT reports that
+        // cartridge as having one kilobyte free — which is these four sectors,
+        // halved for their 512 bytes, less the one the ROM keeps back. Bit 1
+        // was what this used to test, and it dropped the ten records flagged
+        // $06 out of the files they belong to.
+        // And a name of nothing printable is not a name: an erased sector
+        // keeps whatever was in those bytes, and rendering them as dots put a
+        // file called ".........." in the catalogue.
         let named = self.record[4..14].iter().any(|b| (0x21..0x7F).contains(b));
-        self.record[0] & 0x02 == 0 && named
+        self.record[0] & 0x04 != 0 && named
     }
 
     /// The three checksums the Interface 1 works out for itself, and whether
@@ -158,11 +165,12 @@ impl Cartridge {
             write_name(&mut header[4..14], name);
             header[14] = checksum(&header[..14]);
 
-            let mut record = [0u8; RECORD_LEN];
-            // Bit 1 set is an empty record: nothing of anybody's here.
-            record[0] = 0x02;
-            record[14] = checksum(&record[..14]);
-            record[527] = checksum(&record[15..527]);
+            // An empty record is all zeros, which is what the Interface 1's
+            // own FORMAT writes — flags, length, name and both checksums, the
+            // lot. Anything else here and the ROM counts the sector as spoken
+            // for: a cartridge made with a flag byte of $02 catalogued as
+            // having nothing free at all.
+            let record = [0u8; RECORD_LEN];
             out.push(Sector { header, record });
         }
         Cartridge {
