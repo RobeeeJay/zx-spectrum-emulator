@@ -111,6 +111,11 @@ fn machine(rom48: &[u8], speech: &[u8]) -> Spectrum {
     let mut uspeech = Uspeech::new();
     uspeech.rom = Some(speech.to_vec());
     spec.bus.uspeech = Some(uspeech);
+    // The chip, if its ROM is here: the busy line the interface hands back is
+    // the chip's own, so without it nothing waits for anything.
+    if let Ok(chip) = std::fs::read("roms/sp0256-al2.rom") {
+        spec.bus.audio.speech = Some(zx_rustrum::sp0256::Sp0256::new(&chip));
+    }
     for _ in 0..250 {
         spec.run(FRAME_T);
     }
@@ -188,8 +193,8 @@ fn what_is_put_in_s_dollar_reaches_the_speech_chip() {
     );
 }
 
-/// The busy line is what a program waits on between allophones, and it is up
-/// for as long as the allophone takes.
+/// The busy line is what a program waits on between allophones, and it is the
+/// chip's own: it is up for exactly as long as the sound takes.
 #[test]
 fn the_busy_line_lasts_as_long_as_the_allophone_does() {
     let Some((rom48, speech)) = roms() else {
@@ -197,32 +202,113 @@ fn the_busy_line_lasts_as_long_as_the_allophone_does() {
         return;
     };
     let mut spec = machine(&rom48, &speech);
+    if spec.bus.audio.speech.is_none() {
+        eprintln!("need roms/sp0256-al2.rom; skipping");
+        return;
+    }
 
-    // Reach in and drive the chip the way a program would: turn the interface
-    // on with a read of $0038, say /OY/ — the longest allophone there is, at
-    // 291ms — and watch the line.
-    let start = spec.bus.total_t();
+    // Drive the interface the way the Currah manual says to: read $0038 to
+    // turn it on, write the allophone, poll the busy bit.
     let uspeech = spec.bus.uspeech.as_mut().unwrap();
-    uspeech.at(start, 3_500_000.0);
     uspeech.touch(0x0038);
     assert!(uspeech.paged, "a read of $0038 turns it on");
-    uspeech.poke(0x1000, 0x05);
-    assert!(
-        uspeech.busy(),
-        "and it is busy the moment it is told to talk"
+    let told = uspeech.poke(0x1000, 0x05).expect("the chip's register");
+    spec.bus.tell_speech(told);
+    assert_ne!(
+        spec.bus.mem(0x1000) & 1,
+        0,
+        "busy the moment it is told to talk"
     );
 
-    // A tenth of a second in it is still going; half a second later it is not.
-    uspeech.at(start + 350_000, 3_500_000.0);
+    // /OY/ is the longest allophone there is: 291ms at the chip's own rate,
+    // which is 2,850 samples. Run the mixer through it and watch the line.
+    let quiet_at = (0..4000)
+        .position(|_| {
+            spec.bus.audio.speech.as_mut().unwrap().sample();
+            !spec.bus.audio.speech.as_ref().unwrap().busy()
+        })
+        .expect("it should stop talking");
+    let ms = quiet_at as f64 / (3_050_000.0 / 312.0) * 1000.0;
     assert!(
-        uspeech.busy(),
-        "/OY/ takes 291ms, so 100ms in it is talking"
+        (ms - 291.2).abs() < 20.0,
+        "/OY/ should take about 291ms, and took {ms:.0}ms"
     );
-    uspeech.at(start + 1_750_000, 3_500_000.0);
-    assert!(!uspeech.busy(), "and by half a second it has finished");
+    assert_eq!(spec.bus.mem(0x1000) & 1, 0, "and the line drops");
+}
 
-    // The next access to $0038 puts the machine's own ROM back.
-    uspeech.touch(0x0038);
-    assert!(!uspeech.paged);
-    assert_eq!(uspeech.mem(0x0000), None, "and the box answers nothing");
+/// The whole path, end to end: `LET s$="hello"` and sound comes out.
+///
+/// This is the test that says the µSpeech works. Everything else says a part
+/// of it does: this types at the keyboard, lets Currah's ROM drive the chip
+/// through its interrupt handler, and listens to what the mixer produced.
+#[test]
+fn saying_something_makes_a_noise_in_the_mixer() {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    let Some((rom48, speech)) = roms() else {
+        eprintln!("need roms/48.rom and roms/uspeech.rom; skipping");
+        return;
+    };
+    let mut spec = machine(&rom48, &speech);
+    if spec.bus.audio.speech.is_none() {
+        eprintln!("need roms/sp0256-al2.rom; skipping");
+        return;
+    }
+
+    let queue: zx_rustrum::audio::SharedQueue = Arc::new(Mutex::new(VecDeque::new()));
+    spec.bus.audio.attach(queue.clone(), 48_000.0);
+    spec.bus.audio.volume = 1.0;
+    // The beeper and the chips off, so what is left can only be the speech.
+    spec.bus.audio.beeper_on = false;
+    spec.bus.audio.ay_on = false;
+
+    // Drained every frame, the way a sound card drains it: the queue holds a
+    // quarter of a second and throws the oldest away, so reading it at the end
+    // reads the silence after the machine has finished speaking. That is what
+    // "it makes no sound" looked like for an hour.
+    let mut samples: Vec<f32> = Vec::new();
+    let drain = |spec: &mut Spectrum, samples: &mut Vec<f32>| {
+        spec.bus.audio.flush();
+        let mut q = queue.lock().unwrap();
+        samples.extend(q.drain(..));
+    };
+
+    hold(&mut spec, &[(6, 1)], 8); // LET
+    type_text(&mut spec, "s$=\"hello\"");
+    hold(&mut spec, &[ENTER], 8);
+    for _ in 0..200 {
+        spec.run(FRAME_T);
+        spec.bus.audio_sync();
+        drain(&mut spec, &mut samples);
+    }
+    drain(&mut spec, &mut samples);
+
+    let loudest = samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+    assert!(
+        loudest > 0.02,
+        "the machine should have made a noise: loudest sample {loudest} of \
+         {} samples",
+        samples.len()
+    );
+
+    // And it is speech rather than a click: at 48kHz, a click is a handful of
+    // samples and a spoken word is thousands. Most of the recording is the
+    // machine sitting at its prompt, so what matters is how long the sound
+    // lasts and not what fraction of the whole it is.
+    let busy = samples.iter().filter(|s| s.abs() > loudest / 8.0).count();
+    assert!(
+        busy > 400,
+        "and it should last: only {busy} of {} samples are loud, which is {}ms",
+        samples.len(),
+        busy * 1000 / 48_000
+    );
+
+    // Five sounds went to the chip, which is "hello" as the Currah says it.
+    let uspeech = spec.bus.uspeech.as_ref().unwrap();
+    assert!(
+        uspeech.phonemes >= 4,
+        "and it should be a word rather than one noise: {} sounds",
+        uspeech.phonemes
+    );
 }

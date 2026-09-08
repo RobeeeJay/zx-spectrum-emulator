@@ -423,10 +423,22 @@ window, because it is pressed while a game is running.
 is — a fetch, a read, a write, an `IN` or an `OUT`. The ULA's interrupt is a
 fetch from that address, so the box pages itself in for the interrupt, runs its
 handler and pages out again on the way back: fitting one to a running machine
-is all it takes. Its interface is emulated and its speech is not — the
-allophones are filter coefficients inside the SP0256-AL2, not in the µSpeech's
-own ROM — so a program drives the chip and reads its busy line back, and
-nothing is audible. A noise invented to fill the silence would be worse.
+is all it takes.
+
+**The SP0256-AL2 is emulated as the chip, not as samples.** `src/sp0256.rs`
+runs the microsequencer in its 2K ROM and the twelve-pole lattice filter it
+drives, so the allophones are synthesised the way the hardware synthesises
+them. It needs the chip's own dump at `roms/sp0256-al2.rom`; without it the
+interface works and nothing is audible. Three traps, all of which cost time:
+the sequencer addresses its ROM from $1000 rather than zero, so a dump loaded
+at zero halts a sample later without a sound; bit order cannot be guessed and
+has to be established by running it — right way round, all 64 allophones come
+out within 3.5% of their published lengths, wrong way round the chip halts at
+once or runs for a second and a half; and the arithmetic is deliberately narrow
+and wraps, so widening it makes something that is not an SP0256. The chip runs
+on its own oscillator, so it lives with the mixer and is clocked in the
+machine's T-states. Checked against a recording of real hardware: the steady
+sounds correlate at 0.94-0.98 with their formants inside a hundred hertz.
 
 **The machine and what is plugged into it are remembered between launches.**
 `machine`, `peripherals` and `microdrives` in the preferences; a ROM that has

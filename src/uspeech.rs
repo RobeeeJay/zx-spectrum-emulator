@@ -21,12 +21,10 @@
 //! All of it works through `IN` and `OUT` as well, because the decoding is on
 //! the address bus and does not care which kind of cycle put it there.
 //!
-//! What is *not* here is the speech. The sounds live in the SP0256-AL2's own
-//! ROM as filter coefficients — the chip is a twelve-pole lattice filter, not
-//! a sample player — and that ROM is inside the chip, not in the µSpeech's.
-//! Everything the machine can see is emulated, so a program that drives the
-//! interface runs and reads back what it should; what comes out of the speaker
-//! is silence, and the Hardware window says so rather than pretending.
+//! The speech itself is the SP0256-AL2's, in `crate::sp0256`: this file is the
+//! box the chip sits in, and the chip is what talks. The busy line read back
+//! at `$1000` is the chip's own, so a program that polls it waits exactly as
+//! long as the sound takes.
 //!
 //! The addresses, the mirroring and the busy bit are from Thomas Busse's
 //! measurements of the real hardware at
@@ -35,20 +33,6 @@
 //! SP0256-AL2's published ones.
 
 pub const ROM_LEN: usize = 2048;
-
-/// How long each of the 64 allophones takes, in tenths of a millisecond.
-///
-/// The chip holds its busy line up for exactly this long, and a program that
-/// wants to speak without gaps waits on that line rather than counting: these
-/// are the measured lengths from the SP0256-AL2's data sheet, which are not
-/// the round numbers the manual gives.
-const LENGTHS: [u16; 64] = [
-    64, 256, 448, 960, 1984, // the five pauses
-    2912, 1729, 546, 768, 1472, 984, 1729, 455, 960, 1274, 546, 1820, 768, 1365, 1729, 2002, 455,
-    637, 728, 637, 1274, 819, 896, 364, 1280, 728, 1729, 2548, 721, 1105, 1274, 721, 1984, 1341,
-    819, 1088, 1344, 1152, 1486, 2002, 819, 1456, 2457, 1452, 910, 1472, 1092, 2093, 1729, 1820,
-    640, 1365, 1260, 2366, 2002, 2457, 694, 1365, 502,
-];
 
 #[derive(Clone)]
 pub struct Uspeech {
@@ -69,10 +53,18 @@ pub struct Uspeech {
     /// writes a pause every interrupt whether or not anything is being said,
     /// so the pauses say nothing about whether the machine is talking.
     pub phonemes: u64,
-    /// The machine's clock, and when the chip will have finished.
-    now: u64,
-    busy_until: u64,
-    cpu_hz: f64,
+}
+
+/// What an access told the interface to do. The chip itself lives with the
+/// mixer — it makes sound at its own rate, not the machine's — so what it is
+/// told has to be passed on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Told {
+    Nothing,
+    /// Say this allophone.
+    Say(u8),
+    /// Use the higher of the two pitches, or the lower.
+    Pitch(bool),
 }
 
 impl Default for Uspeech {
@@ -90,30 +82,11 @@ impl Uspeech {
             phonemes: 0,
             high_pitch: false,
             spoken: 0,
-            now: 0,
-            busy_until: 0,
-            cpu_hz: 3_500_000.0,
         }
     }
 
     pub fn ready(&self) -> bool {
         self.rom.is_some()
-    }
-
-    /// The machine's clock. A clock that has gone backwards — a reset, a
-    /// snapshot — would otherwise leave the chip busy for the age of the
-    /// universe, which is the bug the disk controller had.
-    pub fn at(&mut self, now: u64, cpu_hz: f64) {
-        if now < self.now {
-            self.busy_until = 0;
-        }
-        self.now = now;
-        self.cpu_hz = cpu_hz;
-    }
-
-    /// Whether the chip is still saying the last allophone.
-    pub fn busy(&self) -> bool {
-        self.now < self.busy_until
     }
 
     /// Any access at all to $0038 turns the interface on, and the next one
@@ -126,8 +99,10 @@ impl Uspeech {
         true
     }
 
-    /// What the interface answers at an address, if it is paged in.
-    pub fn mem(&self, addr: u16) -> Option<u8> {
+    /// What the interface answers at an address, if it is paged in. The busy
+    /// line comes from the chip, which is the only thing that knows how long
+    /// an allophone takes.
+    pub fn mem(&self, addr: u16, busy: bool) -> Option<u8> {
         if !self.paged {
             return None;
         }
@@ -140,72 +115,59 @@ impl Uspeech {
                 .copied(),
             // The SP0256. Bit 0 is the busy line; the rest are the chip's own
             // business and are not driven here.
-            0x1000..=0x1FFF => Some(if self.busy() { 0xFF } else { 0xFE }),
+            0x1000..=0x1FFF => Some(if busy { 0xFF } else { 0xFE }),
             // The machine's ROM is not readable while the interface is in.
             0x2000..=0x3FFF => Some(0xFF),
             _ => None,
         }
     }
 
-    /// A write into the interface's space. Returns whether it took it.
-    pub fn poke(&mut self, addr: u16, value: u8) -> bool {
+    /// A write into the interface's space, and what it told the chip.
+    pub fn poke(&mut self, addr: u16, value: u8) -> Option<Told> {
         if !self.paged {
-            return false;
+            return None;
         }
         match addr {
             0x1000..=0x1FFF => {
-                self.say(value);
-                true
+                self.allophone = value & 0x3F;
+                self.spoken += 1;
+                if self.allophone > 4 {
+                    self.phonemes += 1;
+                }
+                Some(Told::Say(self.allophone))
             }
             0x3000..=0x3FFF => {
                 // The address says which pitch; the byte written means
                 // nothing at all.
                 self.high_pitch = addr & 0x0001 != 0;
-                true
+                Some(Told::Pitch(self.high_pitch))
             }
             // Its ROM, and the space where the machine's would be.
-            0x0000..=0x3FFF => true,
-            _ => false,
+            0x0000..=0x3FFF => Some(Told::Nothing),
+            _ => None,
         }
     }
 
     /// An `IN`: the address bus is the address bus, whichever cycle it is.
-    pub fn io_read(&mut self, port: u16) -> Option<u8> {
+    pub fn io_read(&mut self, port: u16, busy: bool) -> Option<u8> {
         if self.touch(port) {
             return None;
         }
-        self.mem(port)
+        self.mem(port, busy)
     }
 
-    /// An `OUT`, which can write an allophone or the pitch just as a memory
+    /// An `OUT`, which can say an allophone or set the pitch just as a memory
     /// write can.
-    pub fn io_write(&mut self, port: u16, value: u8) -> bool {
+    pub fn io_write(&mut self, port: u16, value: u8) -> Option<Told> {
         if self.touch(port) {
-            return false;
+            return None;
         }
         self.poke(port, value)
-    }
-
-    /// Start an allophone. The chip is busy for as long as that one takes.
-    fn say(&mut self, allophone: u8) {
-        let which = allophone as usize & 0x3F;
-        self.allophone = which as u8;
-        self.spoken += 1;
-        if which > 4 {
-            self.phonemes += 1;
-        }
-        let tenths_ms = f64::from(LENGTHS[which]);
-        // The higher intonation runs the chip's oscillator about seven per
-        // cent faster, so everything it says is that much shorter.
-        let pitch = if self.high_pitch { 1.07 } else { 1.0 };
-        let t = tenths_ms / 10_000.0 / pitch * self.cpu_hz;
-        self.busy_until = self.now + t as u64;
     }
 
     /// What the reset line does: the ROM is out of the way and the chip quiet.
     pub fn reset(&mut self) {
         self.paged = false;
-        self.busy_until = 0;
         self.high_pitch = false;
     }
 }

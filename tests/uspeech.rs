@@ -4,7 +4,7 @@
 //! hardware; `tests/uspeech_rom.rs` is what says the reading is right, by
 //! running Currah's ROM on a 48K and watching it talk.
 
-use zx_rustrum::uspeech::{Uspeech, ROM_LEN};
+use zx_rustrum::uspeech::{Told, Uspeech, ROM_LEN};
 
 fn fitted() -> Uspeech {
     let mut u = Uspeech::new();
@@ -19,7 +19,7 @@ fn an_empty_socket_never_pages_anything_in() {
     let mut u = Uspeech::new();
     assert!(!u.touch(0x0038));
     assert!(!u.paged);
-    assert_eq!(u.mem(0x0000), None);
+    assert_eq!(u.mem(0x0000, false), None);
 }
 
 /// Every access to $0038 turns the interface over, whichever kind it is.
@@ -37,7 +37,7 @@ fn every_kind_of_access_to_0038_turns_the_interface_over() {
 
     // An IN and an OUT do it too: the decoding is on the address bus and does
     // not care which cycle put the address there.
-    u.io_read(0x0038);
+    u.io_read(0x0038, false);
     assert!(u.paged);
     u.io_write(0x0038, 0x00);
     assert!(!u.paged);
@@ -53,15 +53,19 @@ fn the_rom_is_mirrored_and_the_machines_own_is_not_there() {
     let mut u = fitted();
     u.touch(0x0038);
 
-    assert_eq!(u.mem(0x0000), Some(0x00));
-    assert_eq!(u.mem(0x0123), Some(0x23));
-    assert_eq!(u.mem(0x0823), Some(0x23), "mirrored over $0800-$0FFF");
+    assert_eq!(u.mem(0x0000, false), Some(0x00));
+    assert_eq!(u.mem(0x0123, false), Some(0x23));
     assert_eq!(
-        u.mem(0x2000),
+        u.mem(0x0823, false),
+        Some(0x23),
+        "mirrored over $0800-$0FFF"
+    );
+    assert_eq!(
+        u.mem(0x2000, false),
         Some(0xFF),
         "and the machine's ROM is not readable up here"
     );
-    assert_eq!(u.mem(0x4000), None, "the interface stops at the RAM");
+    assert_eq!(u.mem(0x4000, false), None, "the interface stops at the RAM");
 }
 
 /// Writing to $1000 says an allophone; reading it gives the chip's busy line
@@ -70,17 +74,26 @@ fn the_rom_is_mirrored_and_the_machines_own_is_not_there() {
 fn the_speech_chip_answers_across_the_whole_1000_block() {
     let mut u = fitted();
     u.touch(0x0038);
-    assert_eq!(u.mem(0x1000), Some(0xFE), "quiet: bit 0 clear");
+    assert_eq!(u.mem(0x1000, false), Some(0xFE), "quiet: bit 0 clear");
 
-    u.at(0, 3_500_000.0);
-    u.poke(0x1800, 0x18); // /AA/ at one of the mirrors
+    // The busy line is the chip's, so it is handed in rather than worked out
+    // here: this file is the box the chip sits in.
+    assert_eq!(
+        u.poke(0x1800, 0x18), // /AA/ at one of the mirrors
+        Some(Told::Say(0x18)),
+        "a write anywhere in the block reaches the chip"
+    );
     assert_eq!(u.allophone, 0x18);
-    assert_eq!(u.mem(0x1001), Some(0xFF), "busy: bit 0 set, at a mirror");
+    assert_eq!(
+        u.mem(0x1001, true),
+        Some(0xFF),
+        "busy: bit 0 set, at a mirror"
+    );
     assert_eq!(u.spoken, 1);
     assert_eq!(u.phonemes, 1);
 
     // $2000 is not one of the mirrors, whatever it looks like.
-    u.poke(0x2000, 0x19);
+    assert_eq!(u.poke(0x2000, 0x19), Some(Told::Nothing));
     assert_eq!(u.allophone, 0x18, "$2000 is not the chip");
 
     // The five pauses are counted apart from the sounds: the driver writes one
@@ -97,21 +110,16 @@ fn the_intonation_is_in_the_address_and_not_the_byte() {
     u.touch(0x0038);
     assert!(!u.high_pitch);
 
-    u.poke(0x3001, 0x00);
+    assert_eq!(u.poke(0x3001, 0x00), Some(Told::Pitch(true)));
     assert!(u.high_pitch, "an odd address is the higher of the two");
-    u.poke(0x3000, 0xFF);
+    assert_eq!(u.poke(0x3000, 0xFF), Some(Told::Pitch(false)));
     assert!(!u.high_pitch, "and an even one the lower");
-    u.poke(0x3FFF, 0x00);
+    assert_eq!(u.poke(0x3FFF, 0x00), Some(Told::Pitch(true)));
     assert!(u.high_pitch, "mirrored across the block");
 
-    // The higher pitch runs the chip faster, so an allophone is shorter.
-    u.at(0, 3_500_000.0);
-    u.poke(0x1000, 0x05);
-    // /OY/ is 291.2ms at the low pitch and 272.1ms at the high.
-    u.at(940_000, 3_500_000.0);
-    assert!(u.busy(), "268ms in, it is still going");
-    u.at(960_000, 3_500_000.0);
-    assert!(!u.busy(), "and by 274ms it has finished early");
+    // What the higher pitch does to the sound is the chip's business: it runs
+    // its oscillator about seven per cent faster, so everything is that much
+    // shorter, and that is timed in `tests/sp0256.rs` against the data sheet.
 }
 
 /// A reset puts the box out of the way and stops the chip.
@@ -119,13 +127,12 @@ fn the_intonation_is_in_the_address_and_not_the_byte() {
 fn a_reset_pages_it_out_and_stops_the_chip() {
     let mut u = fitted();
     u.touch(0x0038);
-    u.at(0, 3_500_000.0);
     u.poke(0x1000, 0x05);
-    assert!(u.busy());
+    assert!(u.paged);
 
     u.reset();
     assert!(!u.paged);
-    assert!(!u.busy(), "and nothing is being said");
+    assert!(!u.high_pitch, "and it comes back at the lower pitch");
 }
 
 /// The toggle reaches the interface through every path the machine has.

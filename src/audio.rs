@@ -214,6 +214,10 @@ impl Ay {
     }
 }
 
+/// How loud the speech chip is against the beeper. The Currah went into the
+/// television's sound alongside the machine's own, at about the same level.
+const SPEECH_GAIN: f32 = 0.6;
+
 /// Mixes the beeper and the AY into a stream of samples.
 #[derive(Clone)]
 pub struct Audio {
@@ -225,9 +229,18 @@ pub struct Audio {
     /// The AY, and any add-on that is one: a Fuller Box gives a 48K its own
     /// and a 128K a second.
     pub ay_on: bool,
-    /// What the other add-ons make: the SpecDrum's converter, and anything
-    /// else that is neither the beeper nor a sound chip.
+    /// What the other add-ons make: the SpecDrum's converter, the µSpeech's
+    /// chip, and anything else that is neither the beeper nor a sound chip.
     pub hardware_on: bool,
+    /// The Currah µSpeech's SP0256, when one is fitted. It runs on its own
+    /// oscillator rather than the machine's clock, so it is clocked here in
+    /// T-states of the machine and asked for a sample when its own time comes.
+    pub speech: Option<crate::sp0256::Sp0256>,
+    /// T-states between one sample of the speech chip and the next.
+    speech_t: f64,
+    speech_acc: f64,
+    speech_level: f32,
+
     pub volume: f32,
     /// Mute automatically when not running at roughly normal speed, so
     /// fast-forwarding does not shriek.
@@ -289,6 +302,11 @@ impl Audio {
             beeper_on: true,
             ay_on: true,
             hardware_on: true,
+            speech: None,
+            speech_t: 358.0,
+            speech_acc: 0.0,
+            speech_level: 0.0,
+
             volume: 0.5,
             mute_off_speed: true,
             speed_ok: true,
@@ -393,7 +411,22 @@ impl Audio {
                 0.0
             };
             let chips = if self.ay_on { ay_out + extra } else { 0.0 };
-            let boxes = if self.hardware_on { self.dac } else { 0.0 };
+            // The speech chip, at its own rate: a sample every 312 clocks of
+            // its oscillator, held between times.
+            let mut level = self.speech_level;
+            if let Some(chip) = self.speech.as_mut() {
+                self.speech_acc += chunk;
+                while self.speech_acc >= self.speech_t {
+                    self.speech_acc -= self.speech_t;
+                    level = f32::from(chip.sample()) / 32768.0 * SPEECH_GAIN;
+                }
+                self.speech_level = level;
+            }
+            let boxes = if self.hardware_on {
+                self.dac + level
+            } else {
+                0.0
+            };
             self.acc += (beeper + chips + boxes) * chunk as f32;
             self.acc_t += chunk;
             dt -= chunk;
@@ -404,6 +437,13 @@ impl Audio {
                 self.acc_t = 0.0;
             }
         }
+    }
+
+    /// How fast the speech chip's own oscillator runs, in the machine's
+    /// T-states. The µSpeech has two: about 3.05MHz, and 7% above it.
+    pub fn set_speech_pitch(&mut self, high: bool) {
+        let hz = if high { 3_260_000.0 } else { 3_050_000.0 };
+        self.speech_t = self.cpu_hz * f64::from(crate::sp0256::CLOCK_DIVIDER) / hz;
     }
 
     /// A sample of hiss: white noise at whatever the deck says it is worth.

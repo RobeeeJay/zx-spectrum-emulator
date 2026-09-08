@@ -3698,10 +3698,14 @@ impl App {
             // over a beeper that is only clicking, or the SpecDrum on its own.
             theme::toggle(ui, &mut self.audio().beeper_on, "Beeper")
                 .on_hover_text("The machine's own speaker, and the tape's hiss with it.");
-            theme::toggle(ui, &mut self.audio().ay_on, "AY")
-                .on_hover_text(
+            // Only where there is one: a 48K has no AY unless something was
+            // plugged into it, and a ZX81 has nothing at all.
+            let has_ay = self.spec.bus.model.has_ay() || self.spec.bus.audio.extra_ay.is_some();
+            if has_ay && !self.on_zx81() {
+                theme::toggle(ui, &mut self.audio().ay_on, "AY").on_hover_text(
                     "The sound chip: the 128K's, and a Fuller Box's if one is fitted.",
                 );
+            }
             theme::toggle(ui, &mut self.audio().hardware_on, "Hardware")
                 .on_hover_text("What the add-ons make — the SpecDrum's converter.");
             theme::slider(

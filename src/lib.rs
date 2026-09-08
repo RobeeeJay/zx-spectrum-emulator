@@ -35,6 +35,7 @@ pub mod resources;
 pub mod rzx;
 pub mod screen;
 pub mod snapshot;
+pub mod sp0256;
 pub mod svg;
 pub mod tape;
 pub mod timeline;

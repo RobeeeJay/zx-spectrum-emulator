@@ -13,7 +13,7 @@ is working.
 | **Multiface One** | Emulated, once `roms/multiface1.rom` is there |
 | **Multiface 128** | Emulated, once `roms/multiface128.rom` is there |
 | **Multiface 3** | Emulated, once `roms/multiface3.rom` is there |
-| **Currah µSpeech** | Interface emulated, once `roms/uspeech.rom` is there; no sound |
+| **Currah µSpeech** | Emulated, with `roms/uspeech.rom` and `roms/sp0256-al2.rom` |
 | **RAM Music Machine** | Fitted, not emulated |
 
 What is plugged in — and which machine it is plugged into — is remembered
@@ -158,12 +158,47 @@ higher pitch runs the chip about seven per cent faster, so everything it says
 is that much shorter. A program that speaks properly waits on that line rather
 than counting.
 
-**There is no sound.** The allophones live inside the SP0256-AL2 as filter
-coefficients — it is a twelve-pole lattice filter, not a sample player — and
-that data is in the chip, not in the µSpeech's ROM. Everything the machine can
-see is emulated, so `LET s$="hello"` runs and every allophone reaches the chip
-and can be counted; nothing comes out of the speaker. Synthesising it needs the
-SP0256's own 2K, and inventing a noise instead would be worse than silence.
+### The speech chip
+
+`src/sp0256.rs` is the SP0256-AL2 itself, and it talks. It is not a sample
+player: inside it is a 2K ROM holding a program for a microsequencer whose data
+words are the coefficients of a twelve-pole lattice filter — six two-pole
+stages — driven either by impulses at the pitch period or by white noise.
+Speech comes out of the filter, which is how 64 allophones fit in two
+kilobytes: what is stored is the shape of a mouth over time.
+
+It needs the chip's own dump at `roms/sp0256-al2.rom`. With Currah's ROM but
+not that one the interface still works and nothing is audible, and the Hardware
+window says which of the two is missing.
+
+Three things cost time and are worth writing down:
+
+- **The sequencer addresses its ROM from `$1000`**, not from zero. A dump
+  loaded at zero leaves every allophone jumping into empty space, and the chip
+  halts one sample later without a sound.
+- **Bit order cannot be guessed.** Some dumps are stored bit-reversed and some
+  are not. The way to tell is to run them: the right way round, all 64
+  allophones come out within about 3.5% of their published lengths; the wrong
+  way round the chip either halts at once or runs for a second and a half.
+- **The arithmetic is deliberately narrow** — sixteen bits that wrap, eight
+  bits out. Widening it to stop the overflow makes something that is not an
+  SP0256.
+
+The chip runs on its own oscillator rather than the machine's clock, so it
+lives with the mixer (`Audio::speech`) and is asked for a sample when its own
+time comes: one every 312 of its clocks, which is 9.8kHz at the Currah's
+3.05MHz. The busy line the interface hands back at `$1000` is the chip's own,
+so a program polling it waits exactly as long as the sound takes.
+
+**How this was checked.** Every one of the 64 allophones comes out within 2 to
+4% of its published length — consistently long, because the Currah's oscillator
+runs a little under the speed those figures assume. Waveforms were compared
+against a recording of real hardware
+(<https://maziac.github.io/currah_uspeech_tests>): the steady sounds match
+closely, /AA/, /AE/, /MM/, /AO/ and /IY/ correlating at 0.94 to 0.98 with their
+formants inside a hundred hertz. The moving sounds — diphthongs, the affricates
+— score lower, but that is a single comparison window landing at a different
+point in a glide rather than evidence about the filter.
 
 The addresses, the mirroring and the busy bit are Thomas Busse's measurements
 of real hardware at <https://maziac.github.io/currah_uspeech_tests>, which is

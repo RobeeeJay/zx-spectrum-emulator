@@ -540,7 +540,8 @@ impl SpectrumBus {
         // The µSpeech takes the bottom 16K while it is paged in: its ROM, the
         // speech chip, and no machine ROM behind either.
         if let Some(uspeech) = &self.uspeech {
-            if let Some(byte) = uspeech.mem(addr) {
+            let busy = self.audio.speech.as_ref().is_some_and(|chip| chip.busy());
+            if let Some(byte) = uspeech.mem(addr, busy) {
                 return byte;
             }
         }
@@ -562,7 +563,8 @@ impl SpectrumBus {
             }
         }
         if let Some(uspeech) = &mut self.uspeech {
-            if uspeech.poke(addr, v) {
+            if let Some(told) = uspeech.poke(addr, v) {
+                self.tell_speech(told);
                 return;
             }
         }
@@ -1234,12 +1236,25 @@ impl SpectrumBus {
     /// ports in the I/O handlers.
     #[inline]
     fn uspeech_touch(&mut self, addr: u16) {
-        if self.uspeech.is_some() && addr == 0x0038 {
-            let (now, hz) = (self.total_t(), self.model.cpu_hz());
-            if let Some(uspeech) = &mut self.uspeech {
-                uspeech.at(now, hz);
-                uspeech.touch(addr);
+        if addr != 0x0038 {
+            return;
+        }
+        if let Some(uspeech) = &mut self.uspeech {
+            uspeech.touch(addr);
+        }
+    }
+
+    /// Pass on what the interface was told: the chip lives with the mixer,
+    /// because it makes sound at its own rate rather than the machine's.
+    pub fn tell_speech(&mut self, told: crate::uspeech::Told) {
+        match told {
+            crate::uspeech::Told::Say(allophone) => {
+                if let Some(chip) = self.audio.speech.as_mut() {
+                    chip.speak(allophone);
+                }
             }
+            crate::uspeech::Told::Pitch(high) => self.audio.set_speech_pitch(high),
+            crate::uspeech::Told::Nothing => {}
         }
     }
 
@@ -1355,12 +1370,8 @@ impl Bus for SpectrumBus {
         }
         // And the µSpeech turns over at $0038, before the byte is read: that
         // is how the interrupt runs its handler and then the machine's.
-        if self.uspeech.is_some() {
-            let (now, hz) = (self.total_t(), self.model.cpu_hz());
-            if let Some(uspeech) = &mut self.uspeech {
-                uspeech.at(now, hz);
-                uspeech.touch(addr);
-            }
+        if let Some(uspeech) = &mut self.uspeech {
+            uspeech.touch(addr);
         }
         // Counted for RZX playback, which measures a frame in opcode fetches:
         // a prefixed instruction is two or more of them, so counting whole
@@ -1545,10 +1556,12 @@ impl Bus for SpectrumBus {
             mf.io_write(port, value);
         }
         if self.uspeech.is_some() {
-            let (now, hz) = (self.total_t(), self.model.cpu_hz());
-            if let Some(uspeech) = &mut self.uspeech {
-                uspeech.at(now, hz);
-                uspeech.io_write(port, value);
+            let told = self
+                .uspeech
+                .as_mut()
+                .and_then(|uspeech| uspeech.io_write(port, value));
+            if let Some(told) = told {
+                self.tell_speech(told);
             }
         }
 
@@ -1920,6 +1933,9 @@ impl Spectrum {
         if let Some(uspeech) = &mut self.bus.uspeech {
             uspeech.reset();
         }
+        if let Some(chip) = self.bus.audio.speech.as_mut() {
+            chip.reset();
+        }
         self.bus.audio.ay.reset();
         self.bus.audio.rebase(0);
         self.bus.speaker = false;
@@ -2254,10 +2270,9 @@ impl SpectrumBus {
         // The µSpeech decodes the address bus and does not care that this is
         // an I/O cycle: $0038 turns it over, and its registers answer.
         if self.uspeech.is_some() {
-            let (now, hz) = (self.total_t(), self.model.cpu_hz());
+            let busy = self.audio.speech.as_ref().is_some_and(|chip| chip.busy());
             if let Some(uspeech) = &mut self.uspeech {
-                uspeech.at(now, hz);
-                if let Some(byte) = uspeech.io_read(port) {
+                if let Some(byte) = uspeech.io_read(port, busy) {
                     return byte;
                 }
             }
