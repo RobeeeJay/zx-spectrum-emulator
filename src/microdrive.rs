@@ -26,7 +26,7 @@ pub const DATA_LEN: usize = 512;
 /// Kept as the bytes rather than as fields: the Interface 1 reads it a byte at
 /// a time and checks its own checksums, so anything this took apart it would
 /// have to put back together exactly.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Sector {
     pub header: [u8; HEADER_LEN],
     pub record: [u8; RECORD_LEN],

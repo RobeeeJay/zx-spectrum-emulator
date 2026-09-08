@@ -168,6 +168,9 @@ pub struct SpectrumBus {
     pub page_reg: u8,
     /// Last value written to port $1FFD (+2A/+3 only).
     pub page_reg_1ffd: u8,
+    /// The Interface 1, when one is fitted: its shadow ROM and the microdrives
+    /// on the chain behind it.
+    pub if1: Option<crate::if1::If1>,
     /// The +3's disk controller. Present on every model, since a bus that
     /// changes shape with the machine is a bus that has to be rebuilt to swap
     /// one; the ports are only decoded on a machine that has the hardware.
@@ -334,6 +337,7 @@ impl SpectrumBus {
             ram: vec![0; 8 * 0x4000],
             page_reg: 0,
             page_reg_1ffd: 0,
+            if1: None,
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
@@ -504,6 +508,14 @@ impl SpectrumBus {
 
     #[inline]
     pub fn mem(&self, addr: u16) -> u8 {
+        // The Interface 1's ROM sits over the bottom 8K of the machine's while
+        // it is paged in, which is how a microdrive command runs code the
+        // machine has no room for.
+        if let Some(if1) = &self.if1 {
+            if let Some(byte) = if1.rom_byte(addr) {
+                return byte;
+            }
+        }
         let off = (addr & 0x3fff) as usize;
         match self.slot_of(addr) {
             Slot::Rom(page) => {
@@ -1263,6 +1275,13 @@ impl Bus for SpectrumBus {
     }
 
     fn fetch_op(&mut self, addr: u16) -> u8 {
+        if self.if1.is_some() {
+            let now = self.total_t();
+            if let Some(if1) = &mut self.if1 {
+                if1.at(now);
+                if1.on_fetch(addr);
+            }
+        }
         // Counted for RZX playback, which measures a frame in opcode fetches:
         // a prefixed instruction is two or more of them, so counting whole
         // instructions instead runs past the end of every frame.
@@ -1410,6 +1429,22 @@ impl Bus for SpectrumBus {
                 let now = self.total_t();
                 self.fdc.motor = self.disk_motor();
                 self.fdc.at(now);
+            }
+            // The Interface 1's data and control registers.
+            if self.if1.is_some() {
+                let now = self.total_t();
+                if port & 0x0018 == 0x0000 {
+                    if let Some(if1) = &mut self.if1 {
+                        if1.at(now);
+                        if1.write_data(value);
+                    }
+                }
+                if port & 0x0018 == 0x0008 {
+                    if let Some(if1) = &mut self.if1 {
+                        if1.at(now);
+                        if1.write_control(value);
+                    }
+                }
             }
             // $3FFD: the controller's data register. The status register at
             // $2FFD is read-only, so nothing is written there.
@@ -1741,6 +1776,9 @@ impl Spectrum {
         // The reset line goes to the disk controller too: it comes back
         // waiting for a command, with whatever is in the drives still in them.
         self.bus.fdc.reset();
+        if let Some(if1) = &mut self.bus.if1 {
+            if1.reset();
+        }
         self.bus.audio.ay.reset();
         self.bus.audio.rebase(0);
         self.bus.speaker = false;
@@ -2064,6 +2102,24 @@ impl SpectrumBus {
                 self.break_hit.get_or_insert(Event::Ay);
             }
             return byte;
+        }
+        // The Interface 1: $E7 is the microdrive's data register and $EF its
+        // control and status one. Decoded on the low bits, as the interface
+        // does — it watches A0-A4 and nothing else.
+        if self.if1.is_some() {
+            let now = self.total_t();
+            if port & 0x0018 == 0x0000 {
+                if let Some(if1) = &mut self.if1 {
+                    if1.at(now);
+                    return if1.read_data();
+                }
+            }
+            if port & 0x0018 == 0x0008 {
+                if let Some(if1) = &mut self.if1 {
+                    if1.at(now);
+                    return if1.read_status();
+                }
+            }
         }
         // The disk controller: $2FFD is its status register and $3FFD its
         // data register. Both are read; only the data register is written.
