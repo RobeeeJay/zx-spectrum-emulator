@@ -179,6 +179,8 @@ pub struct SpectrumBus {
     /// The Multifaces that are fitted. All three can be on the back at once,
     /// and one button serves them: the hardware daisy-chains through.
     pub multifaces: Vec<crate::multiface::Multiface>,
+    /// The Currah µSpeech, if one is on the back.
+    pub uspeech: Option<crate::uspeech::Uspeech>,
     /// The +3's disk controller. Present on every model, since a bus that
     /// changes shape with the machine is a bus that has to be rebuilt to swap
     /// one; the ports are only decoded on a machine that has the hardware.
@@ -349,6 +351,7 @@ impl SpectrumBus {
             if1: None,
             nmi_pending: false,
             multifaces: Vec::new(),
+            uspeech: None,
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
@@ -534,6 +537,13 @@ impl SpectrumBus {
                 return byte;
             }
         }
+        // The µSpeech takes the bottom 16K while it is paged in: its ROM, the
+        // speech chip, and no machine ROM behind either.
+        if let Some(uspeech) = &self.uspeech {
+            if let Some(byte) = uspeech.mem(addr) {
+                return byte;
+            }
+        }
         let off = (addr & 0x3fff) as usize;
         match self.slot_of(addr) {
             Slot::Rom(page) => {
@@ -548,6 +558,11 @@ impl SpectrumBus {
     pub fn poke(&mut self, addr: u16, v: u8) {
         for mf in &mut self.multifaces {
             if mf.poke(addr, v) {
+                return;
+            }
+        }
+        if let Some(uspeech) = &mut self.uspeech {
+            if uspeech.poke(addr, v) {
                 return;
             }
         }
@@ -1213,6 +1228,21 @@ impl SpectrumBus {
         self.irq_raised = self.total_t();
     }
 
+    /// Every access to $0038 turns the µSpeech over, whichever kind of cycle
+    /// it is: a read, a write, an `IN`, an `OUT` or an opcode fetch. This is
+    /// the read and write side of that; the fetch is in `fetch_op` and the
+    /// ports in the I/O handlers.
+    #[inline]
+    fn uspeech_touch(&mut self, addr: u16) {
+        if self.uspeech.is_some() && addr == 0x0038 {
+            let (now, hz) = (self.total_t(), self.model.cpu_hz());
+            if let Some(uspeech) = &mut self.uspeech {
+                uspeech.at(now, hz);
+                uspeech.touch(addr);
+            }
+        }
+    }
+
     /// The Multiface's red button, which is one button for all of them: the
     /// hardware chains through, and the last one on the back that is ready
     /// takes it.
@@ -1323,6 +1353,15 @@ impl Bus for SpectrumBus {
         for mf in &mut self.multifaces {
             mf.on_fetch(addr);
         }
+        // And the µSpeech turns over at $0038, before the byte is read: that
+        // is how the interrupt runs its handler and then the machine's.
+        if self.uspeech.is_some() {
+            let (now, hz) = (self.total_t(), self.model.cpu_hz());
+            if let Some(uspeech) = &mut self.uspeech {
+                uspeech.at(now, hz);
+                uspeech.touch(addr);
+            }
+        }
         // Counted for RZX playback, which measures a frame in opcode fetches:
         // a prefixed instruction is two or more of them, so counting whole
         // instructions instead runs past the end of every frame.
@@ -1343,6 +1382,7 @@ impl Bus for SpectrumBus {
 
     fn read(&mut self, addr: u16) -> u8 {
         self.access(addr, 3);
+        self.uspeech_touch(addr);
         let phys = self.phys_index(addr);
         self.tracker.on_read(phys, addr);
         self.observer.on_read(addr);
@@ -1361,6 +1401,7 @@ impl Bus for SpectrumBus {
 
     fn write(&mut self, addr: u16, value: u8) {
         self.access(addr, 3);
+        self.uspeech_touch(addr);
         // A watch on an address costs a comparison on every write, which is
         // why it is an Option and not a list: None is one test, and nothing
         // is paid for a watch nobody set.
@@ -1502,6 +1543,13 @@ impl Bus for SpectrumBus {
 
         for mf in &mut self.multifaces {
             mf.io_write(port, value);
+        }
+        if self.uspeech.is_some() {
+            let (now, hz) = (self.total_t(), self.model.cpu_hz());
+            if let Some(uspeech) = &mut self.uspeech {
+                uspeech.at(now, hz);
+                uspeech.io_write(port, value);
+            }
         }
 
         if self.model.has_paging() {
@@ -1827,11 +1875,13 @@ impl Spectrum {
         let hardware = std::mem::take(&mut self.bus.hardware);
         let if1 = self.bus.if1.take();
         let multifaces = std::mem::take(&mut self.bus.multifaces);
+        let uspeech = self.bus.uspeech.take();
 
         self.bus = SpectrumBus::new(model);
         self.bus.hardware = hardware;
         self.bus.if1 = if1;
         self.bus.multifaces = multifaces;
+        self.bus.uspeech = uspeech;
         self.bus.set_late_timing(late);
         self.bus.audio = audio;
         self.bus.audio.set_cpu_hz(model.cpu_hz());
@@ -1866,6 +1916,9 @@ impl Spectrum {
         }
         for mf in &mut self.bus.multifaces {
             mf.reset();
+        }
+        if let Some(uspeech) = &mut self.bus.uspeech {
+            uspeech.reset();
         }
         self.bus.audio.ay.reset();
         self.bus.audio.rebase(0);
@@ -2197,6 +2250,17 @@ impl SpectrumBus {
                 self.break_hit.get_or_insert(Event::Ay);
             }
             return byte;
+        }
+        // The µSpeech decodes the address bus and does not care that this is
+        // an I/O cycle: $0038 turns it over, and its registers answer.
+        if self.uspeech.is_some() {
+            let (now, hz) = (self.total_t(), self.model.cpu_hz());
+            if let Some(uspeech) = &mut self.uspeech {
+                uspeech.at(now, hz);
+                if let Some(byte) = uspeech.io_read(port) {
+                    return byte;
+                }
+            }
         }
         // A Multiface pages itself in and out on a read of its own port, so
         // this is asked before anything else that decodes the low bits.

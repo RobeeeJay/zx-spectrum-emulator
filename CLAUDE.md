@@ -419,6 +419,15 @@ button itself is on the main window under *Buttons* rather than in the Hardware
 window, because it is pressed while a game is running.
 [`docs/peripherals.md`](docs/peripherals.md) has the ports.
 
+**The µSpeech turns over on any access to $0038**, whichever kind of cycle it
+is — a fetch, a read, a write, an `IN` or an `OUT`. The ULA's interrupt is a
+fetch from that address, so the box pages itself in for the interrupt, runs its
+handler and pages out again on the way back: fitting one to a running machine
+is all it takes. Its interface is emulated and its speech is not — the
+allophones are filter coefficients inside the SP0256-AL2, not in the µSpeech's
+own ROM — so a program drives the chip and reads its busy line back, and
+nothing is audible. A noise invented to fill the silence would be worse.
+
 **The machine and what is plugged into it are remembered between launches.**
 `machine`, `peripherals` and `microdrives` in the preferences; a ROM that has
 since moved is not an error, and the machine the emulator can actually be is

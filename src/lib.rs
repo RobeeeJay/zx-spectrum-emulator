@@ -40,6 +40,7 @@ pub mod tape;
 pub mod timeline;
 pub mod tracker;
 pub mod ui;
+pub mod uspeech;
 pub mod video_out;
 pub mod z80;
 pub mod zip;

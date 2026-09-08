@@ -678,8 +678,9 @@ and loads a whole game from a real TZX. Tests that need `roms/48.rom` or
 A **Hardware** window lists the peripherals and says how far each is emulated:
 the Interface 1 with up to eight microdrives, the Multiface One, 128 and 3 with
 their red button, the Fuller Audio Box and Cheetah's SpecDrum all do something;
-the Currah µSpeech and the RAM Music Machine are switches with nothing behind
-them yet, and the window says so rather than looking as though they work. A **Microdrive** window puts `.mdr`
+the Currah µSpeech's interface works — its ROM signs on and every allophone
+reaches the chip — but nothing is audible, since the sounds live inside the
+SP0256 itself; the RAM Music Machine is a switch with nothing behind it yet, and the window says so rather than looking as though they work. A **Microdrive** window puts `.mdr`
 cartridges — loose or zipped — in the drives, read-only, writing to a copy, or
 writing in place. With Sinclair's own 8K at `roms/if1.rom` the microdrives run:
 `FORMAT`, `SAVE *`, `LOAD *` and `CAT` all work, and a test drives that whole

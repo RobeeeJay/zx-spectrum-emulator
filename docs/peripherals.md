@@ -13,7 +13,7 @@ is working.
 | **Multiface One** | Emulated, once `roms/multiface1.rom` is there |
 | **Multiface 128** | Emulated, once `roms/multiface128.rom` is there |
 | **Multiface 3** | Emulated, once `roms/multiface3.rom` is there |
-| **Currah µSpeech** | Fitted, not emulated |
+| **Currah µSpeech** | Interface emulated, once `roms/uspeech.rom` is there; no sound |
 | **RAM Music Machine** | Fitted, not emulated |
 
 What is plugged in — and which machine it is plugged into — is remembered
@@ -125,11 +125,51 @@ The port assignments are as documented rather than as measured here — there is
 no hardware to check them against — which is worth knowing if something that
 should be making a noise is not.
 
-## The ones that are switches only
+## The Currah µSpeech
 
-**The Currah µSpeech** holds its allophones in the SP0256's own ROM as filter
-coefficients. Playing them means synthesising the chip rather than replaying
-samples, and neither the ROM nor the synthesiser is here.
+One address does everything. Every access to `$0038` — an opcode fetch, a
+memory read, a memory write, an `IN` or an `OUT` — turns the interface's ROM
+on, and the next one turns it off. That is not a quirk but the whole design:
+the ULA's interrupt is a fetch from `$0038`, so the box pages itself in for the
+interrupt, its own handler runs, and jumping back to `$0038` pages it out and
+lets the machine's handler run. Fitting one to a machine that is already
+running is enough — the next interrupt hands it over, and the sign-on says
+`Speech System © CURRAH 1983` above Sinclair's own.
+
+While it is in, the bottom 16K is the interface's:
+
+| | |
+| --- | --- |
+| `$0000-$07FF` | its 2K ROM, mirrored again over `$0800-$0FFF` |
+| `$1000-$1FFF` | the SP0256: write an allophone, read the busy line in bit 0 |
+| `$3000-$3FFF` | the pitch — an even address is low, an odd one about 7% higher |
+| everything else | nothing, and the machine's own ROM is not readable behind it |
+
+The byte written to `$3000` means nothing; the address is the whole message.
+`$2000` is not a mirror of `$1000`, whatever it looks like. All of it works
+through `IN` and `OUT` as well as through memory, because the decoding is on
+the address bus and does not care which cycle put the address there — and that
+is worth a test of its own, because the ROM's own handler arrives by fetch and
+would not notice the other paths being unwired.
+
+The busy line is up for as long as the allophone takes, from the SP0256-AL2's
+published lengths — 6.4ms for the shortest pause, 291.2ms for `/OY/` — and the
+higher pitch runs the chip about seven per cent faster, so everything it says
+is that much shorter. A program that speaks properly waits on that line rather
+than counting.
+
+**There is no sound.** The allophones live inside the SP0256-AL2 as filter
+coefficients — it is a twelve-pole lattice filter, not a sample player — and
+that data is in the chip, not in the µSpeech's ROM. Everything the machine can
+see is emulated, so `LET s$="hello"` runs and every allophone reaches the chip
+and can be counted; nothing comes out of the speaker. Synthesising it needs the
+SP0256's own 2K, and inventing a noise instead would be worse than silence.
+
+The addresses, the mirroring and the busy bit are Thomas Busse's measurements
+of real hardware at <https://maziac.github.io/currah_uspeech_tests>, which is
+the only description precise enough to work from.
+
+## The ones that are switches only
 
 **The RAM Music Machine**'s port map has not been checked against a reference
 here. Inventing one would make a switch that looks as though it works, which is

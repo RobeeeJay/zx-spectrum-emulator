@@ -99,10 +99,11 @@ impl Peripheral {
                  by it, so without one the interface pages in nothing.",
             ),
             Peripheral::Fuller | Peripheral::SpecDrum => Emulated::Yes,
-            Peripheral::Uspeech => Emulated::No(
-                "The SP0256's own ROM holds the allophones as filter coefficients, and \
-                 playing them means synthesising the chip rather than replaying samples. \
-                 Neither is here.",
+            Peripheral::Uspeech => Emulated::NeedsRom(
+                "roms/uspeech.rom — Currah's own 2K, which is the whole of the interface. \
+                 The speech itself is inside the SP0256-AL2 as filter coefficients and is \
+                 not emulated: a program that drives the chip runs and reads it back, but \
+                 nothing is audible.",
             ),
             Peripheral::MusicMachine => Emulated::No(
                 "Its port map has not been checked against a reference here, and inventing \

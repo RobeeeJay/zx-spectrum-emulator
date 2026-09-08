@@ -12,6 +12,7 @@ use crate::if1::{If1, MAX_DRIVES};
 use crate::multiface::{Model as MfModel, Multiface};
 use crate::ui::theme;
 use crate::ui::App;
+use crate::uspeech::Uspeech;
 
 impl App {
     /// Plug something in, or take it out.
@@ -46,6 +47,22 @@ impl App {
             }
             Peripheral::Fuller => self.spec.bus.audio.extra_ay = None,
             Peripheral::SpecDrum if !yes => self.spec.bus.audio.dac = 0.0,
+            // The µSpeech is its ROM: without one there is nothing to page in
+            // at the interrupt, and the box does nothing at all.
+            Peripheral::Uspeech if yes => {
+                let mut uspeech = Uspeech::new();
+                uspeech.rom = self.uspeech_rom();
+                if uspeech.rom.is_none() {
+                    self.set_status(
+                        "µSpeech fitted, but there is no roms/uspeech.rom: everything the \
+                         interface does is done by that ROM."
+                            .into(),
+                        true,
+                    );
+                }
+                self.spec.bus.uspeech = Some(uspeech);
+            }
+            Peripheral::Uspeech => self.spec.bus.uspeech = None,
             // A Multiface is its ROM and 8K of RAM. Taking one out throws the
             // RAM away, which is what unplugging the box does.
             _ if multiface_model(what).is_some() => {
@@ -82,6 +99,17 @@ impl App {
             .map(|(_, data)| data)
     }
 
+    /// The µSpeech's ROM, from wherever the machine's ROMs are kept.
+    fn uspeech_rom(&self) -> Option<Vec<u8>> {
+        let dirs = crate::resources::search_dirs();
+        crate::resources::find_file(
+            &dirs,
+            &["uspeech.rom", "currah.rom", "microspeech.rom"],
+            crate::uspeech::ROM_LEN,
+        )
+        .map(|(_, data)| data)
+    }
+
     /// A Multiface's ROM, from wherever the machine's ROMs are kept.
     fn multiface_rom(&self, model: MfModel) -> Option<Vec<u8>> {
         let dirs = crate::resources::search_dirs();
@@ -91,6 +119,9 @@ impl App {
 
     /// Whether a peripheral that wants a ROM has found one.
     pub fn has_rom_for(&self, what: Peripheral) -> bool {
+        if what == Peripheral::Uspeech {
+            return self.spec.bus.uspeech.as_ref().is_some_and(|u| u.ready());
+        }
         match multiface_model(what) {
             Some(model) => self
                 .spec

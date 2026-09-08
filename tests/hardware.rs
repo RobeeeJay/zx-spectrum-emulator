@@ -81,7 +81,16 @@ fn every_peripheral_says_how_far_it_is_emulated() {
         Peripheral::Interface1.emulated(),
         Emulated::NeedsRom(_)
     ));
-    assert!(matches!(Peripheral::Uspeech.emulated(), Emulated::No(_)));
+    // The µSpeech's interface is emulated once its ROM is there; what is not
+    // is the sound, which lives inside the SP0256 rather than in that ROM.
+    assert!(matches!(
+        Peripheral::Uspeech.emulated(),
+        Emulated::NeedsRom(_)
+    ));
+    assert!(matches!(
+        Peripheral::MusicMachine.emulated(),
+        Emulated::No(_)
+    ));
 }
 
 /// The SpecDrum is an eight-bit converter on a port: a byte written to $DF is
