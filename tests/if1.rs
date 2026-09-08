@@ -1,6 +1,6 @@
 //! The Interface 1: its shadow ROM, and the microdrives behind it.
 
-use zx_rustrum::if1::{Drive, If1, Where, MAX_DRIVES, SECTOR_T};
+use zx_rustrum::if1::{Drive, If1, MAX_DRIVES};
 use zx_rustrum::microdrive::Cartridge;
 
 fn with_a_cartridge() -> If1 {
@@ -38,7 +38,18 @@ fn the_shadow_rom_pages_itself_in_when_the_machine_lands_on_a_hook() {
     assert!(!if1.on_fetch(0x1234), "and nothing else moves it");
     assert!(if1.paged);
 
-    assert!(if1.on_fetch(0x0700), "$0700 pages it out again");
+    // $0700 pages it out, but only after the byte there has been fetched: the
+    // shadow ROM's own $0700 is the RET that hands back to the machine's ROM,
+    // so that byte has to come from the shadow ROM. This used to page out
+    // before the fetch, which ran the 48K ROM's $0700 — the middle of another
+    // routine — and the Interface 1 never got past its own initialisation.
+    assert!(
+        !if1.on_fetch(0x0700),
+        "the fetch itself still reads the shadow"
+    );
+    assert!(if1.paged);
+    assert_eq!(if1.rom_byte(0x0700), Some(0xC9), "and it reads the RET");
+    assert!(if1.after_fetch(0x0700), "then it is gone");
     assert!(!if1.paged);
     assert_eq!(if1.rom_byte(0x0000), None);
 
@@ -58,26 +69,40 @@ fn an_interface_with_no_rom_pages_nothing() {
 }
 
 /// One bit selects one of eight drives, by being shifted along the chain.
+///
+/// The bit is latched on the comms clock's falling edge, and it is *low* for a
+/// drive that is to run — the ROM starts drive 1 by writing $EE. This test used
+/// to drive it the other way up, which is a convention nothing checked until
+/// the real ROM was put in the socket and no drive ever turned.
 #[test]
 fn the_motor_bit_walks_down_the_chain_of_drives() {
     let mut if1 = If1::new(4);
     assert_eq!(if1.selected, 0, "nothing turning to start with");
 
-    // A 1 on the motor line starts the first drive.
-    if1.write_control(0x01);
+    clock(&mut if1, true);
     assert_eq!(if1.selected, 1);
     assert!(if1.motor_on());
 
-    // Each further pulse moves it one further down.
-    if1.write_control(0x01);
+    // Each further pulse moves the running drive one further down.
+    clock(&mut if1, false);
     assert_eq!(if1.selected, 2);
-    if1.write_control(0x01);
+    clock(&mut if1, false);
     assert_eq!(if1.selected, 3);
 
-    // And clearing the chain stops everything.
-    if1.write_control(0x00);
+    // And it falls off the end of the chain: four more pulses and nothing is
+    // turning.
+    for _ in 0..2 {
+        clock(&mut if1, false);
+    }
     assert_eq!(if1.selected, 0);
     assert!(!if1.motor_on());
+}
+
+/// One pulse of the comms clock, with the motor line high or low.
+fn clock(if1: &mut If1, motor: bool) {
+    let bit = if motor { 0x00 } else { 0x01 };
+    if1.write_control(bit | 0x02);
+    if1.write_control(bit);
 }
 
 /// The chain is as long as the interface has drives on it.
@@ -101,94 +126,111 @@ fn the_number_of_drives_can_be_changed_without_losing_the_cartridges() {
     assert_eq!(if1.drive_count(), MAX_DRIVES);
 }
 
-/// The tape runs past the head: a gap, then the sector's header, then its
-/// record — which is the order the ROM waits for them in.
-///
-/// The header is fifteen bytes of five hundred and forty-three, so it goes
-/// past in a fiftieth of the time the sector takes. Walking the sector is the
-/// way to test that: picking a moment and hoping it lands in the header is how
-/// the first version of this test failed.
+/// The status port says gap for a while, then sync, over and over — which is
+/// the pattern the ROM's sector-finding loop at $165A waits for: eight reads
+/// with the gap line high, six with it low, then sync.
 #[test]
-fn the_tape_runs_past_the_head_gap_then_header_then_record() {
+fn the_status_port_alternates_gap_and_sync_as_the_rom_expects() {
     let mut if1 = with_a_cartridge();
-    if1.at(0);
-    if1.write_control(0x01);
+    clock(&mut if1, true);
 
-    let mut seen: Vec<&str> = Vec::new();
-    for step in 0..200u64 {
-        if1.at(step * SECTOR_T / 200);
-        let now = match if1.head() {
-            Where::Gap => "gap",
-            Where::Header(_) => "header",
-            Where::Record(_) => "record",
-        };
-        if seen.last() != Some(&now) {
-            seen.push(now);
-        }
+    let seen: Vec<bool> = (0..64).map(|_| if1.read_status() & 0x04 != 0).collect();
+    assert!(
+        seen[..15].iter().all(|gap| *gap),
+        "the gap comes first: {seen:?}"
+    );
+    assert!(
+        seen[15..31].iter().all(|gap| !*gap),
+        "then the block, with sync low: {seen:?}"
+    );
+    assert!(seen[31], "and then the next gap");
+
+    // Sync goes low with the gap line, because it is the block's preamble
+    // under the head.
+    let mut if1 = with_a_cartridge();
+    clock(&mut if1, true);
+    for _ in 0..15 {
+        assert_ne!(if1.read_status() & 0x02, 0, "no sync while the gap runs");
     }
-    assert_eq!(
-        seen,
-        vec!["gap", "header", "record"],
-        "the head passes the gap, then the header, then the record"
-    );
-
-    // The lines say the same thing: the gap line low in the gap, sync low once
-    // a sector has started.
-    if1.at(0);
-    assert_eq!(if1.read_status() & 0x01, 0, "the gap line is low in a gap");
-    if1.at(SECTOR_T / 2);
-    assert_eq!(if1.read_status() & 0x02, 0, "and sync is low on a sector");
-
-    // A whole sector's time later, the next sector is under the head.
-    assert_eq!(if1.drive().unwrap().sector(), 0);
-    if1.at(SECTOR_T + SECTOR_T / 2);
-    assert_eq!(if1.drive().unwrap().sector(), 1, "the tape moved on");
-
-    // And it goes round: a cartridge is a loop, not a reel.
-    if1.at(SECTOR_T * 10 + SECTOR_T / 2);
-    assert_eq!(
-        if1.drive().unwrap().sector(),
-        0,
-        "ten sectors on a ten-sector cartridge is back where it started"
-    );
+    assert_eq!(if1.read_status() & 0x02, 0, "sync once the block starts");
 }
 
-/// The bytes the ROM reads are the bytes on the tape.
+/// The bytes the ROM reads are the bytes on the tape, and reading them is what
+/// moves the tape.
+///
+/// The head advances with the reads rather than with the clock: the ROM reads
+/// a block with `INIR`, 21 T-states a byte, and a tape running at its own
+/// speed would hand the same byte over a dozen times.
 #[test]
-fn the_data_port_hands_over_what_is_under_the_head() {
+fn the_data_port_hands_over_the_block_under_the_head() {
     let mut if1 = with_a_cartridge();
-    if1.at(0);
-    if1.write_control(0x01);
-
-    // Walk the sector, taking each byte as it passes, and compare what came
-    // out with what is on the cartridge.
+    clock(&mut if1, true);
     let expected = if1.drive().unwrap().cartridge.as_ref().unwrap().sectors[0].clone();
-    let mut header_bytes = Vec::new();
-    let mut record_start = Vec::new();
-    for step in 0..4000u64 {
-        if1.at(step * SECTOR_T / 4000);
-        match if1.head() {
-            Where::Header(at) if at == header_bytes.len() => header_bytes.push(if1.read_data()),
-            Where::Record(at) if at == record_start.len() && at < 20 => {
-                record_start.push(if1.read_data())
-            }
-            _ => {}
-        }
-    }
+
+    let header: Vec<u8> = (0..15).map(|_| if1.read_data()).collect();
     assert_eq!(
-        header_bytes,
+        header,
         expected.header.to_vec(),
         "the header came off the tape as it is written on it"
     );
+
+    // Reading past the end of a block gives the last byte again: the block is
+    // as long as it is, and the ROM knows how much to take.
+    assert_eq!(if1.read_data(), expected.header[14]);
+
+    // A write to the control port puts the head at the start of the next
+    // block, which here is the record.
+    if1.write_control(0x00);
+    let record: Vec<u8> = (0..20).map(|_| if1.read_data()).collect();
     assert_eq!(
-        record_start,
+        record,
         expected.record[..20].to_vec(),
         "and so did the front of the record"
     );
+}
 
-    // In the gap there is nothing to read.
-    if1.at(0);
-    assert_eq!(if1.read_data(), 0xFF, "a gap reads as nothing");
+/// What the ROM writes goes onto the tape, after the twelve bytes of preamble
+/// that are not part of the block.
+#[test]
+fn what_the_machine_writes_lands_in_the_sector_under_the_head() {
+    let mut if1 = with_a_cartridge();
+    clock(&mut if1, true);
+    // Past the header, so the head is at the start of the record.
+    for _ in 0..15 {
+        if1.read_data();
+    }
+    if1.write_control(0x00);
+
+    for _ in 0..12 {
+        if1.write_data(0x00);
+    }
+    for byte in 0..8u8 {
+        if1.write_data(0xA0 + byte);
+    }
+    let record = &if1.drives[0].cartridge.as_ref().unwrap().sectors[0].record;
+    assert_eq!(
+        &record[..8],
+        &[0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7],
+        "the preamble is not part of the block; what follows it is"
+    );
+
+    // A cartridge the user asked to keep is not written to.
+    let mut if1 = with_a_cartridge();
+    if1.drives[0].read_only = true;
+    clock(&mut if1, true);
+    for _ in 0..15 {
+        if1.read_data();
+    }
+    if1.write_control(0x00);
+    for _ in 0..12 {
+        if1.write_data(0x00);
+    }
+    if1.write_data(0x55);
+    assert_ne!(
+        if1.drives[0].cartridge.as_ref().unwrap().sectors[0].record[0],
+        0x55,
+        "a read-only cartridge stays as it is"
+    );
 }
 
 /// A drive with no cartridge in it says so, and one whose tab is broken says
@@ -196,8 +238,7 @@ fn the_data_port_hands_over_what_is_under_the_head() {
 #[test]
 fn an_empty_drive_and_a_protected_cartridge_both_say_so() {
     let mut if1 = If1::new(2);
-    if1.at(0);
-    if1.write_control(0x01);
+    clock(&mut if1, true);
     assert_eq!(
         if1.read_status(),
         0xFF,
@@ -207,9 +248,9 @@ fn an_empty_drive_and_a_protected_cartridge_both_say_so() {
     let mut cart = Cartridge::blank("Protected", 10);
     cart.write_protected = true;
     if1.drives[0] = Drive::loaded(cart, None, false);
-    if1.at(SECTOR_T / 2);
+    clock(&mut if1, true);
     assert_eq!(
-        if1.read_status() & 0x04,
+        if1.read_status() & 0x01,
         0,
         "the write-protect line is low: ${:02X}",
         if1.read_status()
@@ -227,7 +268,7 @@ fn an_empty_drive_and_a_protected_cartridge_both_say_so() {
 fn a_reset_pages_the_rom_out_and_stops_the_tape() {
     let mut if1 = with_a_cartridge();
     if1.on_fetch(0x0008);
-    if1.write_control(0x01);
+    clock(&mut if1, true);
     assert!(if1.paged && if1.motor_on());
 
     if1.reset();
@@ -258,18 +299,20 @@ fn the_interfaces_ports_reach_it_on_a_48k() {
         spec.bus.if1 = Some(if1);
 
         // A pulse on the motor line starts the first drive, through the port.
-        spec.bus.io_write(0x00EF, 0x01);
+        spec.bus.io_write(0x00EF, 0x02);
+        spec.bus.io_write(0x00EF, 0x00);
         let if1 = spec.bus.if1.as_ref().unwrap();
         assert_eq!(
             if1.selected, 1,
             "{model:?}: the control port should have reached the interface"
         );
 
-        // And the status port answers with what the drive says.
-        let status = spec.bus.io_read(0x00EF);
-        assert_ne!(
-            status, 0xFF,
-            "{model:?}: a drive with a cartridge in it drives some of the lines"
+        // And the status port answers with what the drive says: the gap for a
+        // few reads, then the block with the gap and sync lines low.
+        let seen: Vec<u8> = (0..32).map(|_| spec.bus.io_read(0x00EF)).collect();
+        assert!(
+            seen.iter().any(|s| s & 0x04 == 0),
+            "{model:?}: a drive with a cartridge in it should read a block: {seen:02X?}"
         );
     }
 }

@@ -1294,7 +1294,14 @@ impl Bus for SpectrumBus {
         self.access(addr, 4);
         let phys = self.phys_index(addr);
         self.tracker.on_exec(phys, addr);
-        self.mem(addr)
+        let byte = self.mem(addr);
+        // The interface pages its ROM out *after* the byte at $0700 has been
+        // read: that byte is the RET which takes the machine back to its own
+        // ROM, and it has to come from the shadow.
+        if let Some(if1) = &mut self.if1 {
+            if1.after_fetch(addr);
+        }
+        byte
     }
 
     fn read(&mut self, addr: u16) -> u8 {
