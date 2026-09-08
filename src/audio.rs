@@ -246,6 +246,13 @@ pub struct Audio {
     /// hiss does — nothing reads this but an ear.
     hiss_state: u32,
     pub ay: Ay,
+    /// A second sound chip, for the add-ons that brought their own: the Fuller
+    /// Audio Box gave a 48K the AY it did not have.
+    pub extra_ay: Option<Ay>,
+    /// An eight-bit converter's output, for the add-ons that had one. The
+    /// SpecDrum is nothing but this: a byte written to a port is a sample, and
+    /// the program feeds it drum sounds from memory as fast as it can.
+    pub dac: f32,
     pub ay_present: bool,
 
     /// One-pole DC blocker, as the real machine's output is AC coupled: the
@@ -283,6 +290,8 @@ impl Audio {
             tape_hiss: 0.0,
             hiss_state: 0x1234_5678,
             ay: Ay::new(),
+            extra_ay: None,
+            dac: 0.0,
             ay_present: false,
             dc_x1: 0.0,
             dc_y1: 0.0,
@@ -355,7 +364,13 @@ impl Audio {
             } else {
                 0.0
             };
-            self.acc += (self.beeper + ay_out + self.hiss()) * chunk as f32;
+            // What an add-on is making, if one is fitted: another sound chip,
+            // and a converter somebody is feeding samples to.
+            let extra = match &mut self.extra_ay {
+                Some(ay) => ay.advance(chunk / 2.0),
+                None => 0.0,
+            };
+            self.acc += (self.beeper + ay_out + extra + self.dac + self.hiss()) * chunk as f32;
             self.acc_t += chunk;
             dt -= chunk;
             if self.acc_t >= self.t_per_sample - 1e-9 {

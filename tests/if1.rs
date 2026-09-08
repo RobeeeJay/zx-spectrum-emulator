@@ -238,3 +238,38 @@ fn a_reset_pages_the_rom_out_and_stops_the_tape() {
         "the cartridge stays in the drive"
     );
 }
+
+/// The interface's ports reach it through the machine, on any model: an
+/// add-on is an add-on whether or not the machine it is plugged into has
+/// paging.
+///
+/// The first wiring put these inside the branch that handles the 128K's paging
+/// ports, so on a 48K — where an Interface 1 usually lives — nothing reached
+/// it at all.
+#[test]
+fn the_interfaces_ports_reach_it_on_a_48k() {
+    use zx_rustrum::machine::{Model, Spectrum};
+    use zx_rustrum::z80::Bus;
+
+    for model in [Model::Spectrum48, Model::Spectrum128] {
+        let mut spec = Spectrum::with_model(model);
+        let mut if1 = If1::new(2);
+        if1.drives[0] = Drive::loaded(Cartridge::blank("Test", 10), None, false);
+        spec.bus.if1 = Some(if1);
+
+        // A pulse on the motor line starts the first drive, through the port.
+        spec.bus.io_write(0x00EF, 0x01);
+        let if1 = spec.bus.if1.as_ref().unwrap();
+        assert_eq!(
+            if1.selected, 1,
+            "{model:?}: the control port should have reached the interface"
+        );
+
+        // And the status port answers with what the drive says.
+        let status = spec.bus.io_read(0x00EF);
+        assert_ne!(
+            status, 0xFF,
+            "{model:?}: a drive with a cartridge in it drives some of the lines"
+        );
+    }
+}

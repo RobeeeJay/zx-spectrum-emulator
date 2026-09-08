@@ -15,6 +15,7 @@ pub mod disk;
 pub mod fdc;
 pub mod flashload;
 pub mod flow;
+pub mod hardware;
 pub mod if1;
 pub mod ipf;
 pub mod keyboard;

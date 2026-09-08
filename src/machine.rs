@@ -168,6 +168,9 @@ pub struct SpectrumBus {
     pub page_reg: u8,
     /// Last value written to port $1FFD (+2A/+3 only).
     pub page_reg_1ffd: u8,
+    /// What is plugged into the back: which peripherals are fitted, and the
+    /// state of the ones that do something.
+    pub hardware: crate::hardware::Hardware,
     /// The Interface 1, when one is fitted: its shadow ROM and the microdrives
     /// on the chain behind it.
     pub if1: Option<crate::if1::If1>,
@@ -337,6 +340,7 @@ impl SpectrumBus {
             ram: vec![0; 8 * 0x4000],
             page_reg: 0,
             page_reg_1ffd: 0,
+            hardware: crate::hardware::Hardware::default(),
             if1: None,
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
@@ -1412,6 +1416,46 @@ impl Bus for SpectrumBus {
             }
         }
 
+        // The Fuller Audio Box: a sound chip of its own, register select
+        // at $3F and data at $5F. Its ports are decoded on the low byte,
+        // as the box does.
+        if self.hardware.fitted(crate::hardware::Peripheral::Fuller) {
+            if port & 0xFF == 0x3F {
+                self.hardware.fuller_register = value & 0x0F;
+            } else if port & 0xFF == 0x5F {
+                let register = self.hardware.fuller_register;
+                if let Some(ay) = self.audio.extra_ay.as_mut() {
+                    ay.selected = register;
+                    ay.write(value);
+                }
+            }
+        }
+        // The SpecDrum: an eight-bit converter and nothing else. A byte
+        // written to $DF is a sample, and a program feeds it drum sounds
+        // out of memory as fast as it can.
+        if self.hardware.fitted(crate::hardware::Peripheral::SpecDrum) && port & 0xFF == 0xDF {
+            self.audio_sync();
+            // Centred on nothing, so silence is silence: the converter
+            // idles at half scale.
+            self.audio.dac = (value as f32 - 128.0) / 128.0 * 0.4;
+        }
+        // The Interface 1's data and control registers.
+        if self.if1.is_some() {
+            let now = self.total_t();
+            if port & 0x0018 == 0x0000 {
+                if let Some(if1) = &mut self.if1 {
+                    if1.at(now);
+                    if1.write_data(value);
+                }
+            }
+            if port & 0x0018 == 0x0008 {
+                if let Some(if1) = &mut self.if1 {
+                    if1.at(now);
+                    if1.write_control(value);
+                }
+            }
+        }
+
         if self.model.has_paging() {
             // $7FFD: memory paging. The +2A/+3 decode it more strictly than
             // the 128K, which decodes only A15 and A1.
@@ -1429,22 +1473,6 @@ impl Bus for SpectrumBus {
                 let now = self.total_t();
                 self.fdc.motor = self.disk_motor();
                 self.fdc.at(now);
-            }
-            // The Interface 1's data and control registers.
-            if self.if1.is_some() {
-                let now = self.total_t();
-                if port & 0x0018 == 0x0000 {
-                    if let Some(if1) = &mut self.if1 {
-                        if1.at(now);
-                        if1.write_data(value);
-                    }
-                }
-                if port & 0x0018 == 0x0008 {
-                    if let Some(if1) = &mut self.if1 {
-                        if1.at(now);
-                        if1.write_control(value);
-                    }
-                }
             }
             // $3FFD: the controller's data register. The status register at
             // $2FFD is read-only, so nothing is written there.
