@@ -13,6 +13,10 @@ use crate::ui::App;
 /// The gap between keys, at the size the keys are drawn.
 const GAP: f32 = 6.0;
 
+/// And the gap between rows, which is wider because the word printed under
+/// each key goes in it — as it does on the case, in red.
+const ROW_GAP: f32 = 13.0;
+
 /// The face of a key, and the face of one that is down.
 const FACE: Color32 = theme::CONTROL;
 const LIT: Color32 = theme::AMBER;
@@ -36,7 +40,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(4.0);
 
     let area = ui.available_rect_before_wrap();
-    let rects = keyboard::key_rects(area, GAP);
+    let rects = keyboard::key_rects_with(area, GAP, ROW_GAP);
     let painter = ui.painter().clone();
     painter.rect_filled(area, 6.0, theme::CASE_DARK);
 
@@ -69,6 +73,17 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             .all(|&(row, bit)| app.keys.is_lit(row, bit, now))
             || (shift && app.keys.latched(key.press[0].0, key.press[0].1));
         draw_key(&painter, rect, key, lit, response.hovered());
+        // Under the key rather than on it, which is where the machine prints
+        // it: the extended-mode word a shift gives — CAT, FORMAT, INVERSE.
+        if !key.under.is_empty() {
+            painter.text(
+                egui::pos2(rect.center().x, rect.bottom() + 1.0),
+                Align2::CENTER_TOP,
+                key.under,
+                FontId::proportional((rect.height() * 0.20).clamp(6.0, 9.0)),
+                theme::RED,
+            );
+        }
     }
 
     // A key that is lit goes out on its own, with nothing else moving.

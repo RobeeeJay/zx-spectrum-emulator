@@ -363,3 +363,31 @@ fn the_wait_after_a_reset_is_the_machines_own() {
         "a +3 is quicker about it, and saying 1.7 would be wrong: {status}"
     );
 }
+
+/// The rows are spaced far enough apart for the word printed under each key.
+///
+/// The red words — CAT, FORMAT, INVERSE — go under the keys rather than on
+/// them, which is where the case prints them and the only place left: the face
+/// already carries four legends. That only works if the gap between rows is
+/// taller than the text in it.
+#[test]
+fn the_rows_leave_room_for_the_word_under_each_key() {
+    use egui::{pos2, vec2, Rect};
+
+    let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 320.0));
+    let rects = keyboard::key_rects_with(area, 6.0, 13.0);
+
+    let first = rects[0];
+    let below = rects[keyboard::ACROSS];
+    let gap = below.top() - first.bottom();
+    assert!(
+        gap >= 12.0,
+        "the row gap is {gap} and the word under a key wants about nine points \
+         of it"
+    );
+    assert_eq!(
+        rects[1].left() - rects[0].right(),
+        6.0,
+        "and the keys are no further apart across the row than they were"
+    );
+}

@@ -25,6 +25,10 @@ pub struct Key {
     /// The word above the key: extended mode on a Spectrum, the function mode
     /// on a ZX81, and the CAPS SHIFT job on the digits.
     pub over: &'static str,
+    /// The word below the key, in red on the case: extended mode with either
+    /// shift. This is where CAT, FORMAT, INVERSE and the rest live, and a
+    /// keyboard without them cannot be used to find them.
+    pub under: &'static str,
     /// The matrix positions it pulls down, as (row, bit).
     pub press: &'static [(usize, u8)],
 }
@@ -45,6 +49,7 @@ const fn key(
     word: &'static str,
     sym: &'static str,
     over: &'static str,
+    under: &'static str,
     press: &'static [(usize, u8)],
 ) -> Key {
     Key {
@@ -52,6 +57,7 @@ const fn key(
         word,
         sym,
         over,
+        under,
         press,
     }
 }
@@ -60,100 +66,101 @@ const fn key(
 /// words on them.
 #[rustfmt::skip]
 pub const SPECTRUM: [Key; 40] = [
-    key("1", "", "!", "EDIT",      &[(3, 0)]),
-    key("2", "", "@", "CAPS LOCK", &[(3, 1)]),
-    key("3", "", "#", "TRUE VID",  &[(3, 2)]),
-    key("4", "", "$", "INV VID",   &[(3, 3)]),
-    key("5", "", "%", "LEFT",  &[(3, 4)]),
-    key("6", "", "&", "DOWN",  &[(4, 4)]),
-    key("7", "", "'", "UP",  &[(4, 3)]),
-    key("8", "", "(", "RIGHT",  &[(4, 2)]),
-    key("9", "", ")", "GRAPHICS",  &[(4, 1)]),
-    key("0", "", "_", "DELETE",    &[(4, 0)]),
+    key("1", "", "!", "EDIT",      "DEF FN", &[(3, 0)]),
+    key("2", "", "@", "CAPS LOCK", "FN", &[(3, 1)]),
+    key("3", "", "#", "TRUE VID",  "LINE", &[(3, 2)]),
+    key("4", "", "$", "INV VID",   "OPEN #", &[(3, 3)]),
+    key("5", "", "%", "LEFT",  "CLOSE #", &[(3, 4)]),
+    key("6", "", "&", "DOWN",  "MOVE", &[(4, 4)]),
+    key("7", "", "'", "UP",  "ERASE", &[(4, 3)]),
+    key("8", "", "(", "RIGHT",  "POINT", &[(4, 2)]),
+    key("9", "", ")", "GRAPHICS",  "CAT", &[(4, 1)]),
+    key("0", "", "_", "DELETE",    "FORMAT", &[(4, 0)]),
 
-    key("Q", "PLOT",   "<=", "SIN",  &[(2, 0)]),
-    key("W", "DRAW",   "<>", "COS",  &[(2, 1)]),
-    key("E", "REM",    ">=", "TAN",  &[(2, 2)]),
-    key("R", "RUN",    "<",  "INT",  &[(2, 3)]),
-    key("T", "RAND",   ">",  "RND",  &[(2, 4)]),
-    key("Y", "RETURN", "AND", "STR$", &[(5, 4)]),
-    key("U", "IF",     "OR", "CHR$", &[(5, 3)]),
-    key("I", "INPUT",  "AT", "CODE", &[(5, 2)]),
-    key("O", "POKE",   ";",  "PEEK", &[(5, 1)]),
-    key("P", "PRINT",  "\"", "TAB",  &[(5, 0)]),
+    key("Q", "PLOT",   "<=", "SIN",  "ASN", &[(2, 0)]),
+    key("W", "DRAW",   "<>", "COS",  "ACS", &[(2, 1)]),
+    key("E", "REM",    ">=", "TAN",  "ATN", &[(2, 2)]),
+    key("R", "RUN",    "<",  "INT",  "VERIFY", &[(2, 3)]),
+    key("T", "RAND",   ">",  "RND",  "MERGE", &[(2, 4)]),
+    key("Y", "RETURN", "AND", "STR$", "[", &[(5, 4)]),
+    key("U", "IF",     "OR", "CHR$", "]", &[(5, 3)]),
+    key("I", "INPUT",  "AT", "CODE", "IN", &[(5, 2)]),
+    key("O", "POKE",   ";",  "PEEK", "OUT", &[(5, 1)]),
+    key("P", "PRINT",  "\"", "TAB",  "\u{00a9}", &[(5, 0)]),
 
-    key("A", "NEW",   "STOP", "READ",    &[(1, 0)]),
-    key("S", "SAVE",  "NOT",  "RESTORE", &[(1, 1)]),
-    key("D", "DIM",   "STEP", "DATA",    &[(1, 2)]),
-    key("F", "FOR",   "TO",   "SGN",     &[(1, 3)]),
-    key("G", "GOTO",  "THEN", "ABS",     &[(1, 4)]),
-    key("H", "GOSUB", "^", "SQR", &[(6, 4)]),
-    key("J", "LOAD",  "\u{2212}", "VAL", &[(6, 3)]),
-    key("K", "LIST",  "+",    "LEN",     &[(6, 2)]),
-    key("L", "LET",   "=",    "USR",     &[(6, 1)]),
-    key("ENTER", "",  "",     "",        &[(6, 0)]),
+    key("A", "NEW",   "STOP", "READ",    "~", &[(1, 0)]),
+    key("S", "SAVE",  "NOT",  "RESTORE", "|", &[(1, 1)]),
+    key("D", "DIM",   "STEP", "DATA",    "\\", &[(1, 2)]),
+    key("F", "FOR",   "TO",   "SGN",     "{", &[(1, 3)]),
+    key("G", "GOTO",  "THEN", "ABS",     "}", &[(1, 4)]),
+    key("H", "GOSUB", "^", "SQR", "CIRCLE", &[(6, 4)]),
+    key("J", "LOAD",  "\u{2212}", "VAL", "VAL$", &[(6, 3)]),
+    key("K", "LIST",  "+",    "LEN",     "SCREEN$", &[(6, 2)]),
+    key("L", "LET",   "=",    "USR",     "ATTR", &[(6, 1)]),
+    key("ENTER", "",  "",     "",        "", &[(6, 0)]),
 
-    key("CAPS SHIFT", "", "",     "",        &[(0, 0)]),
-    key("Z", "COPY",   ":",  "LN",      &[(0, 1)]),
-    key("X", "CLEAR",  "\u{00a3}", "EXP", &[(0, 2)]),
-    key("C", "CONT",   "?",  "LPRINT",  &[(0, 3)]),
-    key("V", "CLS",    "/",  "LLIST",   &[(0, 4)]),
-    key("B", "BORDER", "*",  "BIN",     &[(7, 4)]),
-    key("N", "NEXT",   ",",  "INKEY$",  &[(7, 3)]),
-    key("M", "PAUSE",  ".",  "PI",      &[(7, 2)]),
-    key("SYMBOL SHIFT", "", "",  "",    &[(7, 1)]),
-    key("SPACE", "", "",  "BREAK",      &[(7, 0)]),
+    key("CAPS SHIFT", "", "",     "",        "", &[(0, 0)]),
+    key("Z", "COPY",   ":",  "LN",      "BEEP", &[(0, 1)]),
+    key("X", "CLEAR",  "\u{00a3}", "EXP", "INK", &[(0, 2)]),
+    key("C", "CONT",   "?",  "LPRINT",  "PAPER", &[(0, 3)]),
+    key("V", "CLS",    "/",  "LLIST",   "FLASH", &[(0, 4)]),
+    key("B", "BORDER", "*",  "BIN",     "BRIGHT", &[(7, 4)]),
+    key("N", "NEXT",   ",",  "INKEY$",  "OVER", &[(7, 3)]),
+    key("M", "PAUSE",  ".",  "PI",      "INVERSE", &[(7, 2)]),
+    key("SYMBOL SHIFT", "", "",  "",    "", &[(7, 1)]),
+    key("SPACE", "", "",  "BREAK",      "", &[(7, 0)]),
 ];
 
 /// The ZX81's, whose matrix is wired the same way and whose keys say something
-/// else. Taken from the keyboard assignment table in
+/// else. It has nothing under its keys: the fourth legend the Spectrum grew
+/// did not exist yet. Taken from the keyboard assignment table in
 /// <https://problemkaputt.de/zxdocs.htm>: the "Normal" column is the keyword,
 /// "Command" is what SHIFT gives, and "Function" is the word above the key.
 #[rustfmt::skip]
 pub const ZX81: [Key; 40] = [
-    key("1", "", "EDIT",     "", &[(3, 0)]),
-    key("2", "", "AND",      "", &[(3, 1)]),
-    key("3", "", "THEN",     "", &[(3, 2)]),
-    key("4", "", "TO",       "", &[(3, 3)]),
-    key("5", "", "LEFT", "", &[(3, 4)]),
-    key("6", "", "DOWN", "", &[(4, 4)]),
-    key("7", "", "UP", "", &[(4, 3)]),
-    key("8", "", "RIGHT", "", &[(4, 2)]),
-    key("9", "", "GRAPHICS", "", &[(4, 1)]),
-    key("0", "", "RUBOUT",   "", &[(4, 0)]),
+    key("1", "", "EDIT",     "", "", &[(3, 0)]),
+    key("2", "", "AND",      "", "", &[(3, 1)]),
+    key("3", "", "THEN",     "", "", &[(3, 2)]),
+    key("4", "", "TO",       "", "", &[(3, 3)]),
+    key("5", "", "LEFT", "", "", &[(3, 4)]),
+    key("6", "", "DOWN", "", "", &[(4, 4)]),
+    key("7", "", "UP", "", "", &[(4, 3)]),
+    key("8", "", "RIGHT", "", "", &[(4, 2)]),
+    key("9", "", "GRAPHICS", "", "", &[(4, 1)]),
+    key("0", "", "RUBOUT",   "", "", &[(4, 0)]),
 
-    key("Q", "PLOT",   "\"\"", "SIN",  &[(2, 0)]),
-    key("W", "UNPLOT", "OR",   "COS",  &[(2, 1)]),
-    key("E", "REM",    "STEP", "TAN",  &[(2, 2)]),
-    key("R", "RUN",    "<=",   "INT",  &[(2, 3)]),
-    key("T", "RAND",   "<>",   "RND",  &[(2, 4)]),
-    key("Y", "RETURN", ">=",   "STR$", &[(5, 4)]),
-    key("U", "IF",     "$",    "CHR$", &[(5, 3)]),
-    key("I", "INPUT",  "(",    "CODE", &[(5, 2)]),
-    key("O", "POKE",   ")",    "PEEK", &[(5, 1)]),
-    key("P", "PRINT",  "\"",   "TAB",  &[(5, 0)]),
+    key("Q", "PLOT",   "\"\"", "SIN",  "", &[(2, 0)]),
+    key("W", "UNPLOT", "OR",   "COS",  "", &[(2, 1)]),
+    key("E", "REM",    "STEP", "TAN",  "", &[(2, 2)]),
+    key("R", "RUN",    "<=",   "INT",  "", &[(2, 3)]),
+    key("T", "RAND",   "<>",   "RND",  "", &[(2, 4)]),
+    key("Y", "RETURN", ">=",   "STR$", "", &[(5, 4)]),
+    key("U", "IF",     "$",    "CHR$", "", &[(5, 3)]),
+    key("I", "INPUT",  "(",    "CODE", "", &[(5, 2)]),
+    key("O", "POKE",   ")",    "PEEK", "", &[(5, 1)]),
+    key("P", "PRINT",  "\"",   "TAB",  "", &[(5, 0)]),
 
-    key("A", "NEW",   "STOP",   "ARCSIN", &[(1, 0)]),
-    key("S", "SAVE",  "LPRINT", "ARCCOS", &[(1, 1)]),
-    key("D", "DIM",   "SLOW",   "ARCTAN", &[(1, 2)]),
-    key("F", "FOR",   "FAST",   "SGN",    &[(1, 3)]),
-    key("G", "GOTO",  "LLIST",  "ABS",    &[(1, 4)]),
-    key("H", "GOSUB", "**",     "SQR",    &[(6, 4)]),
-    key("J", "LOAD",  "\u{2212}", "VAL",  &[(6, 3)]),
-    key("K", "LIST",  "+",      "LEN",    &[(6, 2)]),
-    key("L", "LET",   "=",      "USR",    &[(6, 1)]),
-    key("NEWLINE", "", "",      "",       &[(6, 0)]),
+    key("A", "NEW",   "STOP",   "ARCSIN", "", &[(1, 0)]),
+    key("S", "SAVE",  "LPRINT", "ARCCOS", "", &[(1, 1)]),
+    key("D", "DIM",   "SLOW",   "ARCTAN", "", &[(1, 2)]),
+    key("F", "FOR",   "FAST",   "SGN",    "", &[(1, 3)]),
+    key("G", "GOTO",  "LLIST",  "ABS",    "", &[(1, 4)]),
+    key("H", "GOSUB", "**",     "SQR",    "", &[(6, 4)]),
+    key("J", "LOAD",  "\u{2212}", "VAL",  "", &[(6, 3)]),
+    key("K", "LIST",  "+",      "LEN",    "", &[(6, 2)]),
+    key("L", "LET",   "=",      "USR",    "", &[(6, 1)]),
+    key("NEWLINE", "", "",      "",       "", &[(6, 0)]),
 
-    key("SHIFT", "",   "",  "",       &[(0, 0)]),
-    key("Z", "COPY",   ":", "LN",     &[(0, 1)]),
-    key("X", "CLEAR",  ";", "EXP",    &[(0, 2)]),
-    key("C", "CONT",   "?", "AT",     &[(0, 3)]),
-    key("V", "CLS",    "/", "",       &[(0, 4)]),
-    key("B", "SCROLL", "*", "INKEY$", &[(7, 4)]),
-    key("N", "NEXT",   "<", "NOT",    &[(7, 3)]),
-    key("M", "PAUSE",  ">", "PI",     &[(7, 2)]),
-    key(".", "",       ",", "",       &[(7, 1)]),
-    key("SPACE", "",   "\u{00a3}", "BREAK", &[(7, 0)]),
+    key("SHIFT", "",   "",  "",       "", &[(0, 0)]),
+    key("Z", "COPY",   ":", "LN",     "", &[(0, 1)]),
+    key("X", "CLEAR",  ";", "EXP",    "", &[(0, 2)]),
+    key("C", "CONT",   "?", "AT",     "", &[(0, 3)]),
+    key("V", "CLS",    "/", "",       "", &[(0, 4)]),
+    key("B", "SCROLL", "*", "INKEY$", "", &[(7, 4)]),
+    key("N", "NEXT",   "<", "NOT",    "", &[(7, 3)]),
+    key("M", "PAUSE",  ">", "PI",     "", &[(7, 2)]),
+    key(".", "",       ",", "",       "", &[(7, 1)]),
+    key("SPACE", "",   "\u{00a3}", "BREAK", "", &[(7, 0)]),
 ];
 
 /// The keys of the machine in use.
@@ -277,15 +284,20 @@ impl Keys {
 /// to whatever aspect the window happens to have would not look like the
 /// machine, and the point of the picture is that it does.
 pub fn key_rects(area: egui::Rect, gap: f32) -> Vec<egui::Rect> {
+    key_rects_with(area, gap, gap)
+}
+
+/// The same, with room left under each row for the word printed there.
+pub fn key_rects_with(area: egui::Rect, gap: f32, row_gap: f32) -> Vec<egui::Rect> {
     let across = ACROSS as f32;
     let down = DOWN as f32;
     let by_width = (area.width() - gap * (across - 1.0)) / across;
-    let by_height = ((area.height() - gap * (down - 1.0)) / down) * KEY_ASPECT;
+    let by_height = ((area.height() - row_gap * (down - 1.0)) / down) * KEY_ASPECT;
     let key_w = by_width.min(by_height).max(1.0);
     let key_h = key_w / KEY_ASPECT;
     let size = egui::vec2(
         key_w * across + gap * (across - 1.0),
-        key_h * down + gap * (down - 1.0),
+        key_h * down + row_gap * (down - 1.0),
     );
     let origin = egui::pos2(
         area.center().x - size.x / 2.0,
@@ -295,7 +307,7 @@ pub fn key_rects(area: egui::Rect, gap: f32) -> Vec<egui::Rect> {
         .map(|i| {
             let (col, row) = (i % ACROSS, i / ACROSS);
             egui::Rect::from_min_size(
-                origin + egui::vec2(col as f32 * (key_w + gap), row as f32 * (key_h + gap)),
+                origin + egui::vec2(col as f32 * (key_w + gap), row as f32 * (key_h + row_gap)),
                 egui::vec2(key_w, key_h),
             )
         })
