@@ -374,8 +374,15 @@ pub fn tools() -> Json {
         ),
         schema_tool(
             "type_text",
-            "Type a line: letters, digits and spaces, with ENTER at the end. For anything \
-             behind a shift, use press_keys.",
+            "Type a BASIC line the way somebody at the keyboard would, keywords and all: \
+             LOAD *\"m\";1;\"prog\", FORMAT \"m\";1;\"cart\", CAT 1, SAVE \"game\"CODE. A \
+             Spectrum's keywords are one key each rather than spelled out, and the ones in \
+             extended mode — CAT, FORMAT, VERIFY, MERGE, CIRCLE, INVERSE — cannot be typed \
+             any other way. Symbols behind SYMBOL SHIFT are found too. Anything inside \
+             quotes is typed letter by letter, so a file called \"info\" is not IN and \"fo\". \
+             Letters come out in the machine's own case. A line starts with a keyword: at \
+             the start of a line a letter key types a whole word, and asking for a letter \
+             there is an error saying so.",
             [
                 ("text", prop("string", "what to type")),
                 (

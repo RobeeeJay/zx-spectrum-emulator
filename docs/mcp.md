@@ -161,6 +161,18 @@ rather than on the T-state clock. `play_recording` does that; see
 `src/mcp/json.rs` is a small implementation of exactly what JSON-RPC uses —
 the same bargain as `src/svg.rs`.
 
+## Driving the machine's own commands
+
+A Spectrum's keywords are one key each rather than words to spell out, so
+`type_text` reads a line the way the machine would have it typed: `LOAD` is the
+L key, `CAT` is extended mode with a shift on the 9, and the symbols are behind
+SYMBOL SHIFT. That is the only way to reach the extended-mode words at all, and
+it is what makes `LOAD *"m";1;"prog"` and `FORMAT "m";1;"cart"` typable. Text
+inside quotes is typed letter by letter, since a file called `"info"` is not
+`IN` followed by `fo`. A line starts with a keyword, and a letter asked for at
+the start of a line is an error rather than a keyword nobody wanted: the mode
+is read out of FLAGS at $5C3B rather than guessed.
+
 ## What is not exposed
 
 Still in the emulator and not offered here:
@@ -172,7 +184,7 @@ Still in the emulator and not offered here:
   ran in, which `frame_timing` answers a flatter version of;
 - the CRT and composite rendering (`crt.rs`), since what a model needs from the
   screen is what is on it rather than what a television did to it;
-- the +3's disk, and the ZX81's tape deck;
+- the ZX81's tape deck;
 - the RZX playback's visited-address set.
 
 The ZX81 answers the tools that mean something on it — loading a `.p`,
