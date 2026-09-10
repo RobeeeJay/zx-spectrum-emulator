@@ -473,6 +473,17 @@ microdrives should say so. `.sna` and `.z80` remain for the machines and
 emulators that want them, and the extension chosen when saving decides which
 is written.
 
+**A quicksave is a copy of the machine, not a snapshot file.** `Spectrum` is
+`Clone`, so each of the ten slots holds the whole of it: the peripherals, the
+tape where it had got to, the chips mid-note — none of which `.sna` can hold
+and not all of which `.szx` can. The kept copy is detached from the sound
+queue, and the one restored takes the live machine's output over with
+`Audio::take_output_from`, throwing away the samples it had not sent when it
+was taken, which would otherwise come out as a blip from the past. Restoring
+one also rolls back what is in the disk and microdrive drives, since those are
+part of the machine; the files are only written when a drive is ejected. The
+ZX81 is not `Clone`, so it has no quicksaves yet.
+
 **The machine and what is plugged into it are remembered between launches.**
 `machine`, `peripherals` and `microdrives` in the preferences; a ROM that has
 since moved is not an error, and the machine the emulator can actually be is

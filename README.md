@@ -580,6 +580,13 @@ through the **Joystick** window, which maps either onto the stick or onto keys
 of the machine's own keyboard. Snapshots are `.szx`, `.sna` and `.z80`, and screens are `.scr`
 both ways.
 
+**Quick**, beside Record on the main window, keeps ten quicksaves in memory:
+Save puts the machine in the slot shown on the button beside it, Load puts it
+back, and the button drops down to pick another slot. F1 to F9 save to slots 1
+to 9 and F10 to slot 0 from anywhere in the main window, and each selects its
+slot. A quicksave is the whole machine — what is plugged in, where the tape had
+got to — and it lasts until the emulator is closed.
+
 Not emulated, and what other emulators have that this does not — saving to
 tape, a gamepad, the printer, the other disk systems, the other machines — is
 written down in [`docs/missing.md`](docs/missing.md), checked against the

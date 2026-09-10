@@ -471,6 +471,10 @@ pub struct App {
     /// What is plugged into the back of the machine.
     pub show_hardware: bool,
     pub show_joystick: bool,
+    /// Ten quicksaves, kept in memory for as long as the emulator is open, and
+    /// the one Load would restore.
+    pub quick: [Option<Box<Spectrum>>; 10],
+    pub quick_slot: usize,
     /// What on the desk works the stick, and which line is waiting for a key.
     pub joystick_map: Vec<joystickwin::Binding>,
     pub joystick_binding: Option<usize>,
@@ -639,6 +643,8 @@ impl App {
             show_disk: false,
             show_hardware: false,
             show_joystick: false,
+            quick: Default::default(),
+            quick_slot: 1,
             joystick_map: joystickwin::defaults(),
             joystick_binding: None,
             gilrs: gilrs::Gilrs::new().ok(),
@@ -3282,7 +3288,133 @@ impl App {
             theme::group_label(ui, "Record");
             self.rzx_button(ui);
             self.video_button(ui);
+
+            theme::divider(ui);
+            theme::group_label(ui, "Quick");
+            self.quick_buttons(ui);
         });
+    }
+
+    /// Load and Save for the ten quicksaves, and the slot they work on.
+    fn quick_buttons(&mut self, ui: &mut egui::Ui) {
+        let zx81 = self.on_zx81();
+        let recording = self.rzx.is_some() || self.recorded_frames().is_some();
+        let filled = self.quick[self.quick_slot].is_some();
+        if ui
+            .add_enabled(!zx81 && !recording && filled, egui::Button::new("Load"))
+            .on_hover_text(if zx81 {
+                "Quicksaves are of a Spectrum: the ZX81 cannot be copied yet.".to_string()
+            } else if recording {
+                "Not while a recording is playing or being made: it would stop \
+                 describing the machine it plays into."
+                    .to_string()
+            } else if filled {
+                format!(
+                    "Put the machine back as it was in slot {}.",
+                    self.quick_slot
+                )
+            } else {
+                format!(
+                    "Slot {} is empty. Save puts something in it, or F{} from anywhere.",
+                    self.quick_slot,
+                    if self.quick_slot == 0 {
+                        10
+                    } else {
+                        self.quick_slot
+                    }
+                )
+            })
+            .clicked()
+        {
+            self.quick_load();
+        }
+        if ui
+            .add_enabled(!zx81, egui::Button::new("Save"))
+            .on_hover_text(format!(
+                "Keep the machine as it is now in slot {}, in memory, until the emulator \
+                 is closed. F1 to F9 save to slots 1 to 9 and F10 to slot 0.",
+                self.quick_slot
+            ))
+            .clicked()
+        {
+            self.quick_save(self.quick_slot);
+        }
+        let mut slot = self.quick_slot;
+        theme::dropdown(ui, 34.0, slot.to_string(), |ui| {
+            for n in 0..10 {
+                // A filled slot says so, so the one with something in it can
+                // be found without loading each in turn.
+                let label = if self.quick[n].is_some() {
+                    format!("{n} •")
+                } else {
+                    n.to_string()
+                };
+                if ui.selectable_label(slot == n, label).clicked() {
+                    slot = n;
+                    ui.close();
+                }
+            }
+        });
+        self.quick_slot = slot;
+    }
+
+    /// Keep the machine as it is in a slot, and make that slot the one Load
+    /// restores.
+    ///
+    /// A quicksave is a copy of the whole machine rather than a snapshot file:
+    /// everything on the back of it, the tape where it had got to, the chips
+    /// mid-note — none of which a .sna can hold and not all of which a .szx
+    /// can. The copy is cut off from the sound card, since a copy that shares
+    /// the queue would play into it.
+    pub fn quick_save(&mut self, slot: usize) {
+        let slot = slot % 10;
+        self.quick_slot = slot;
+        if self.on_zx81() {
+            self.set_status(
+                "Quicksaves are of a Spectrum: the ZX81 cannot be copied yet.".to_string(),
+                true,
+            );
+            return;
+        }
+        let mut copy = Box::new(self.spec.clone());
+        copy.bus.audio.detach();
+        self.quick[slot] = Some(copy);
+        self.set_status(format!("Saved to quick slot {slot}"), false);
+    }
+
+    /// Put the machine back as it was in the selected slot.
+    pub fn quick_load(&mut self) {
+        let slot = self.quick_slot;
+        if self.on_zx81() {
+            self.set_status(
+                "Quicksaves are of a Spectrum: the ZX81 cannot be copied yet.".to_string(),
+                true,
+            );
+            return;
+        }
+        if self.rzx.is_some() || self.recorded_frames().is_some() {
+            self.set_status(
+                "Not while a recording is playing or being made: it would stop describing \
+                 the machine it plays into."
+                    .to_string(),
+                true,
+            );
+            return;
+        }
+        let Some(saved) = self.quick[slot].as_ref() else {
+            self.set_status(format!("Quick slot {slot} is empty"), true);
+            return;
+        };
+        let mut restored = (**saved).clone();
+        restored
+            .bus
+            .audio
+            .take_output_from(&mut self.spec.bus.audio);
+        self.spec = restored;
+        // The time the emulator owes the machine belongs to the machine that
+        // has just gone.
+        self.leftover = 0.0;
+        self.set_status(format!("Loaded quick slot {slot}"), false);
     }
 
     /// Recording what the machine reads, so a run of a game can be played back
@@ -3926,6 +4058,7 @@ impl App {
         let ctx = ctx.clone();
         let dt = ctx.input(|i| i.stable_dt);
         self.read_keyboard(&ctx);
+        self.read_quick_keys(&ctx);
         self.advance(dt);
         self.sync_title(&ctx);
         self.remember_window("main", &ctx);
@@ -4485,6 +4618,32 @@ impl App {
                     && joystickwin::holding(binding.from, &down, &self.pads)
             });
             self.spec.bus.joystick.set(way, over);
+        }
+    }
+
+    /// F1 to F9 save to slots 1 to 9 and F10 to slot 0, and each makes its
+    /// slot the one Load restores.
+    ///
+    /// Read from the main window only: the debugger has F5, F7 and F8 for
+    /// stepping, and its window takes its own keys.
+    fn read_quick_keys(&mut self, ctx: &egui::Context) {
+        use egui::Key;
+        const KEYS: [(Key, usize); 10] = [
+            (Key::F1, 1),
+            (Key::F2, 2),
+            (Key::F3, 3),
+            (Key::F4, 4),
+            (Key::F5, 5),
+            (Key::F6, 6),
+            (Key::F7, 7),
+            (Key::F8, 8),
+            (Key::F9, 9),
+            (Key::F10, 0),
+        ];
+        for (key, slot) in KEYS {
+            if ctx.input(|i| i.key_pressed(key)) {
+                self.quick_save(slot);
+            }
         }
     }
 

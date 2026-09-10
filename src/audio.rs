@@ -343,6 +343,37 @@ impl Audio {
         self.queue = Some(queue);
     }
 
+    /// Whether this is the machine the sound card is listening to.
+    pub fn attached(&self) -> bool {
+        self.queue.is_some()
+    }
+
+    /// Take over the sound output from the machine being replaced.
+    ///
+    /// A restored quicksave is a copy of the machine as it was, chips and all,
+    /// but the sound card and the listener's settings belong to now: the
+    /// queue, the rate, the volume and the three switches come from the
+    /// machine going away. What the copy had not yet sent when it was taken is
+    /// thrown out rather than played — it is sound from the past, and it would
+    /// come out as a blip on top of the present.
+    pub fn take_output_from(&mut self, live: &mut Audio) {
+        live.flush();
+        self.queue = live.queue.take();
+        self.sample_rate = live.sample_rate;
+        self.t_per_sample = self.cpu_hz / self.sample_rate;
+        self.queue_cap = live.queue_cap;
+        self.enabled = live.enabled;
+        self.beeper_on = live.beeper_on;
+        self.ay_on = live.ay_on;
+        self.hardware_on = live.hardware_on;
+        self.volume = live.volume;
+        self.mute_off_speed = live.mute_off_speed;
+        self.speed_ok = live.speed_ok;
+        self.gain = live.gain;
+        self.tap = live.tap.take();
+        self.pending.clear();
+    }
+
     /// Stop sending samples anywhere.
     ///
     /// The queue is shared with the sound device, so a copy of a machine holds
