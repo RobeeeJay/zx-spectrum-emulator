@@ -730,11 +730,28 @@ pub fn tools() -> Json {
         ),
         tool(
             "sound_state",
-            "What the machine is making a noise with: the beeper bit of port $FE, and — on a \
-             128K — the AY's fourteen registers with what they mean, channel by channel: \
-             tone, noise, volume, period in Hz. Watch the ay or beeper events to find the \
-             routine doing it.",
+            "What the machine is making a noise with: the beeper bit of port $FE, the AY's \
+             fourteen registers with what they mean channel by channel — tone, noise, \
+             volume, period in Hz — and whatever is plugged into the back. A Fuller Box's \
+             chip is read here too, which is the only sound chip a 48K can have. The \
+             SpecDrum's converter says what it is playing this instant, and a µSpeech says \
+             what it has been saying. Watch the ay or beeper events to find the routine \
+             doing it.",
             [],
+        ),
+        schema_tool(
+            "set_sound",
+            "Silence part of the sound, or bring it back: beeper, ay (both the machine's \
+             chip and a Fuller Box's), hardware (the SpecDrum and the µSpeech). A muted part \
+             is silenced in the mixer and the machine is not told, so a program goes on \
+             playing it. Useful for hearing one thing at a time — a game's music without \
+             its beeper effects.",
+            [
+                ("beeper", prop("boolean", "the machine's own speaker")),
+                ("ay", prop("boolean", "the sound chips")),
+                ("hardware", prop("boolean", "what the add-ons make")),
+            ],
+            &[],
         ),
         tool(
             "frame_timing",

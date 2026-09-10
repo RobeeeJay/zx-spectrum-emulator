@@ -254,6 +254,7 @@ impl Session {
             "memory_activity" => crate::mcp::activity::memory_activity(self, args),
             "frame_timing" => crate::mcp::analysis::frame_timing(self, args),
             "sound_state" => crate::mcp::sound::sound_state(self, args),
+            "set_sound" => crate::mcp::sound::set_sound(self, args),
             "hardware" => crate::mcp::peripherals::hardware(self, args),
             "mount_cartridge" => crate::mcp::microdrive::mount_cartridge(self, args),
             "new_cartridge" => crate::mcp::microdrive::new_cartridge(self, args),
