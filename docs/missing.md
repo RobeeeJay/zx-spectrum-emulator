@@ -10,16 +10,10 @@ It is a description of the gap, not a plan. Nothing here is promised, and
 anything picked up should be taken on its own merits: several of these are an
 afternoon and one of them is a month.
 
-Three of the five this list opened with have since been done: `.szx`, `.scr`,
-and the joystick interfaces. What is left of that group is below.
+Four of the five this list opened with have since been done: `.szx`, `.scr`,
+the joystick interfaces, and gamepads. What is left of that group is below.
 
 ## The ones you would feel first
-
-**A gamepad.** The four joystick interfaces are emulated and the keys of the
-desk work them, but a real pad cannot be read: that needs a crate which is not
-in the lock file, and nothing may be added to it. The mapping is written as a
-source and an action so that a pad's buttons would be more sources and nothing
-else would change.
 
 **The machine cannot SAVE to tape.** Microdrive writes work and disk writes
 work; `SAVE "x"` goes nowhere, because there is no `.tap` or `.tzx` writer. An
@@ -78,7 +72,5 @@ the others still have that this does not:
 
 ## Where to start
 
-Saving to tape, then a gamepad, then divMMC. The first is the odd gap — the
-machine can write to a microdrive and to a disk but not to the tape it can
-read — and the second is a rule about the lock file rather than a piece of
-work.
+Saving to tape, then divMMC. The first is the odd gap — the machine can write
+to a microdrive and to a disk but not to the tape it can read.

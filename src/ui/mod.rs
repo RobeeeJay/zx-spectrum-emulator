@@ -474,6 +474,11 @@ pub struct App {
     /// What on the desk works the stick, and which line is waiting for a key.
     pub joystick_map: Vec<joystickwin::Binding>,
     pub joystick_binding: Option<usize>,
+    /// The gamepads, and what they were doing when they were last looked at.
+    /// `None` when the crate could not open them at all, which is a machine
+    /// with no gamepad support rather than an error worth stopping for.
+    pub gilrs: Option<gilrs::Gilrs>,
+    pub pads: joystickwin::Pads,
     /// The microdrives, drawn.
     pub show_microdrive: bool,
     /// Which drive Load, Blank and Eject act on.
@@ -636,6 +641,8 @@ impl App {
             show_joystick: false,
             joystick_map: joystickwin::defaults(),
             joystick_binding: None,
+            gilrs: gilrs::Gilrs::new().ok(),
+            pads: joystickwin::Pads::default(),
             show_microdrive: false,
             selected_drive: 0,
             pending_cartridge: None,
@@ -4426,17 +4433,17 @@ impl App {
         }
     }
 
-    /// Map host keys onto the 8x5 Spectrum keyboard matrix.
-    /// What the desk is doing to the stick, and the line waiting for a key.
+    /// What the desk and the pads are doing to the stick, and the line waiting
+    /// to be bound.
     ///
-    /// A binding is a key of the host keyboard and what it works; a gamepad
-    /// would be more sources and no other change, but reading one needs a
-    /// crate that is not in the lock file.
+    /// A binding is a source and an action: a key or a pad control, working
+    /// one of the stick's five switches or a key of the machine's own
+    /// keyboard.
     fn read_joystick(&mut self, ctx: &egui::Context) {
-        // A line that is waiting takes the next key pressed rather than
-        // working the stick with it.
+        // A line that is waiting takes the next thing pressed — a key or a pad
+        // control — rather than working the stick with it.
         if let Some(i) = self.joystick_binding {
-            let pressed = ctx.input(|input| {
+            let key = ctx.input(|input| {
                 input.events.iter().find_map(|event| match event {
                     egui::Event::Key {
                         key, pressed: true, ..
@@ -4444,27 +4451,44 @@ impl App {
                     _ => None,
                 })
             });
-            if let Some(key) = pressed {
+            let from = match key {
+                Some(key) => Some(joystickwin::From::Key(key)),
+                None => self
+                    .gilrs
+                    .as_mut()
+                    .and_then(joystickwin::pad_pressed)
+                    .map(joystickwin::From::Pad),
+            };
+            if let Some(from) = from {
                 if let Some(binding) = self.joystick_map.get_mut(i) {
-                    binding.from = key;
+                    binding.from = from;
                 }
                 self.joystick_binding = None;
             }
             return;
         }
+
+        // What the pads are doing, kept for the window to show as well.
+        self.pads = match self.gilrs.as_mut() {
+            Some(gilrs) => joystickwin::read_pads(gilrs),
+            None => joystickwin::Pads::default(),
+        };
+
         if self.spec.bus.joystick.kind == crate::joystick::Kind::None {
             self.spec.bus.joystick.release();
             return;
         }
+        let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key));
         for way in crate::joystick::Way::ALL {
-            let down = self.joystick_map.iter().any(|binding| {
+            let over = self.joystick_map.iter().any(|binding| {
                 binding.does == joystickwin::Does::Way(way)
-                    && ctx.input(|i| i.key_down(binding.from))
+                    && joystickwin::holding(binding.from, &down, &self.pads)
             });
-            self.spec.bus.joystick.set(way, down);
+            self.spec.bus.joystick.set(way, over);
         }
     }
 
+    /// Map host keys onto the 8x5 Spectrum keyboard matrix.
     fn read_keyboard(&mut self, ctx: &egui::Context) {
         use egui::Key;
         // A recording supplies every byte the machine reads from a port,
@@ -4481,10 +4505,19 @@ impl App {
         // A line waiting for a key takes the next one pressed rather than
         // acting on it.
         self.read_joystick(ctx);
-        let bound: Vec<egui::Key> = self.joystick_map.iter().map(|b| b.from).collect();
+        let bound: Vec<egui::Key> = self
+            .joystick_map
+            .iter()
+            .filter_map(|b| match b.from {
+                joystickwin::From::Key(key) => Some(key),
+                joystickwin::From::Pad(_) => None,
+            })
+            .collect();
+        let pads = self.pads.clone();
         for binding in &self.joystick_map {
             if let joystickwin::Does::Key(row, bit) = binding.does {
-                if ctx.input(|i| i.key_down(binding.from)) {
+                let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key));
+                if joystickwin::holding(binding.from, &down, &pads) {
                     press(row, bit);
                 }
             }

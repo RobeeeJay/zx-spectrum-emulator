@@ -5,7 +5,7 @@ use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use zx_rustrum::joystick::{Kind, Way};
 use zx_rustrum::machine::Spectrum;
-use zx_rustrum::ui::joystickwin::{self, Binding, Does};
+use zx_rustrum::ui::joystickwin::{self, Binding, Does, From, Pad, Pads};
 use zx_rustrum::ui::{App, Roms};
 
 fn test_app() -> App {
@@ -103,7 +103,7 @@ fn with_no_interface_the_stick_sees_nothing() {
 fn a_binding_can_press_a_key_of_the_machine() {
     let mut app = test_app();
     app.joystick_map = vec![Binding {
-        from: egui::Key::Tab,
+        from: From::Key(egui::Key::Tab),
         does: Does::Key(6, 0), // ENTER
     }];
     let mut h = harness_for(app);
@@ -122,11 +122,11 @@ fn a_binding_can_press_a_key_of_the_machine() {
 fn the_mapping_is_remembered_as_text() {
     let map = vec![
         Binding {
-            from: egui::Key::ArrowUp,
+            from: From::Key(egui::Key::ArrowUp),
             does: Does::Way(Way::Up),
         },
         Binding {
-            from: egui::Key::Tab,
+            from: From::Key(egui::Key::Tab),
             does: Does::Key(6, 0),
         },
     ];
@@ -142,13 +142,109 @@ fn the_mapping_is_remembered_as_text() {
     assert_eq!(salvaged.len(), 1, "{salvaged:?}");
 }
 
+/// A pad control is written down the same way a key is, and comes back the
+/// same: a mapping is a file somebody can read.
+#[test]
+fn a_pad_control_is_written_down_and_read_back() {
+    let map = vec![
+        Binding {
+            from: From::Pad(Pad::Button(gilrs::Button::South)),
+            does: Does::Way(zx_rustrum::joystick::Way::Fire),
+        },
+        Binding {
+            from: From::Pad(Pad::Axis(gilrs::Axis::LeftStickX, false)),
+            does: Does::Way(zx_rustrum::joystick::Way::Left),
+        },
+        Binding {
+            from: From::Pad(Pad::Button(gilrs::Button::Start)),
+            does: Does::Key(6, 0),
+        },
+    ];
+    let text = joystickwin::to_text(&map);
+    assert!(text.contains("pad.A:fire"), "{text}");
+    assert!(text.contains("pad.LeftX-:left"), "{text}");
+    assert!(text.contains("pad.Start:key6.0"), "{text}");
+    assert_eq!(joystickwin::from_text(&text), map, "and back again");
+
+    // A control this does not know is dropped rather than taking the rest of
+    // the mapping with it.
+    assert_eq!(joystickwin::from_text("pad.Nonsuch:fire").len(), 0);
+}
+
+/// Whether a binding is being worked is decided against a snapshot of the
+/// pads, so it can be tested without one plugged in — which is the only way
+/// to test it at all in a suite that runs on a machine with no pad.
+#[test]
+fn a_pad_binding_is_on_when_the_control_is_over() {
+    let pads = Pads {
+        buttons: vec![gilrs::Button::South],
+        // A stick a little off centre is not a stick that has been pushed.
+        axes: vec![
+            (gilrs::Axis::LeftStickX, -0.9),
+            (gilrs::Axis::LeftStickY, 0.2),
+        ],
+        count: 1,
+    };
+    let nothing = |_key| false;
+
+    assert!(joystickwin::holding(
+        From::Pad(Pad::Button(gilrs::Button::South)),
+        &nothing,
+        &pads
+    ));
+    assert!(!joystickwin::holding(
+        From::Pad(Pad::Button(gilrs::Button::East)),
+        &nothing,
+        &pads
+    ));
+    assert!(
+        joystickwin::holding(
+            From::Pad(Pad::Axis(gilrs::Axis::LeftStickX, false)),
+            &nothing,
+            &pads
+        ),
+        "the stick is well over to the left"
+    );
+    assert!(
+        !joystickwin::holding(
+            From::Pad(Pad::Axis(gilrs::Axis::LeftStickX, true)),
+            &nothing,
+            &pads
+        ),
+        "and that is not the same as being over to the right"
+    );
+    assert!(
+        !joystickwin::holding(
+            From::Pad(Pad::Axis(gilrs::Axis::LeftStickY, true)),
+            &nothing,
+            &pads
+        ),
+        "a stick resting a little off centre is not pushed: {} is inside the deadzone",
+        0.2
+    );
+
+    // And a key binding is decided by the keys, with the pads saying nothing
+    // about it either way.
+    let z_down = |key| key == egui::Key::Z;
+    assert!(joystickwin::holding(
+        From::Key(egui::Key::Z),
+        &z_down,
+        &pads
+    ));
+    assert!(!joystickwin::holding(
+        From::Key(egui::Key::X),
+        &z_down,
+        &pads
+    ));
+}
+
 /// What is plugged in and what works it are remembered between launches.
 #[test]
 fn the_interface_and_its_keys_are_remembered() {
     let mut app = test_app();
     app.spec.bus.joystick.kind = Kind::Sinclair2;
     app.joystick_map = vec![Binding {
-        from: egui::Key::Z,
+        from: From::Key(egui::Key::Z),
         does: Does::Way(Way::Fire),
     }];
     app.save_window_state();
@@ -161,5 +257,5 @@ fn the_interface_and_its_keys_are_remembered() {
     next.apply_prefs();
     assert_eq!(next.spec.bus.joystick.kind, Kind::Sinclair2);
     assert_eq!(next.joystick_map.len(), 1);
-    assert_eq!(next.joystick_map[0].from, egui::Key::Z);
+    assert_eq!(next.joystick_map[0].from, From::Key(egui::Key::Z));
 }

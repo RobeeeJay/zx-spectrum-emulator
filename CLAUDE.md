@@ -33,10 +33,18 @@ the actual values.
 **`cargo fmt` and `cargo clippy --all-targets` stay clean.** CI gates on
 `-D warnings`.
 
-**No crate can be added that is not already in the lock file.** (The network
-itself does work — that is how the ROM symbol files were fetched — but the
-build must stay offline-reproducible.) That is why `src/svg.rs` exists rather than a dependency, and why the
-logo is drawn in code rather than decoded from a file.
+**No crate can be added that is not already in the lock file**, unless the
+user says otherwise for a particular one. (The network itself does work — that
+is how the ROM symbol files were fetched — but the build must stay
+offline-reproducible.) That is why `src/svg.rs` exists rather than a
+dependency, why `src/mcp/json.rs` implements only what JSON-RPC uses, and why
+the logo is drawn in code rather than decoded from a file.
+
+One crate has been allowed in since: **`gilrs`**, on 10 September 2026, to read
+gamepads — which cannot be done through `eframe`, `winit` or anything else
+already there. It is the only dependency in the tree that is not either
+`eframe`'s or a file format's, and it came in by being asked for rather than
+by being convenient.
 
 **Prose:** plain, no salesmanship, British spelling. Say what happened,
 including what did not work.
@@ -451,8 +459,12 @@ a joystick, so none of this can be measured off one: the masks and the key
 mappings are Fuse's `joystick.c` and are written out in the tests so a change
 has to be deliberate. A key bound to the stick is taken away from the machine's
 own keyboard, or holding an arrow steers and types at once. A gamepad cannot be
-read at all without a crate that is not in the lock file, which is why a
-binding is a source and an action rather than a key and a direction.
+read through anything `eframe` brings with it, which is why `gilrs` was added
+for it — the one crate in the tree that is there for a peripheral rather than
+for the build. A binding is a source and an action so that a key and a pad
+control are the same kind of thing: the pad's state is taken as a snapshot
+each frame, which is what lets the deciding be tested on a machine with no pad
+plugged in.
 
 **`.szx` is a container, and what it cannot put back it says out loud.** The
 blocks it does not know are stepped over and named in what `load` returns,

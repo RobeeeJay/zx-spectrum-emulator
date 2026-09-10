@@ -575,9 +575,9 @@ the Fuller Audio Box and the SpecDrum are emulated as well —
 [`docs/peripherals.md`](docs/peripherals.md) says how far each goes.
 
 Four joystick interfaces — Kempston, the two Sinclair sticks and the Cursor
-one, plus the Fuller — are worked from the keys of the desk through the
-**Joystick** window, which maps them to the stick or to keys of the machine's
-own keyboard. Snapshots are `.szx`, `.sna` and `.z80`, and screens are `.scr`
+one, plus the Fuller — are worked from the keys of the desk or from a gamepad
+through the **Joystick** window, which maps either onto the stick or onto keys
+of the machine's own keyboard. Snapshots are `.szx`, `.sna` and `.z80`, and screens are `.scr`
 both ways.
 
 Not emulated, and what other emulators have that this does not — saving to

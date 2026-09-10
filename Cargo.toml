@@ -23,6 +23,7 @@ cpal = "0.18"
 # deflated and there is no network to fetch anything else with.
 flate2 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+gilrs = "0.11.2"
 
 [profile.dev]
 opt-level = 1
