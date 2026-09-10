@@ -633,6 +633,62 @@ pub fn tools() -> Json {
             [("address", address("the routine's entry point"))],
             &["address"],
         ),
+        schema_tool(
+            "mount_cartridge",
+            "Put an .mdr cartridge — or a .zip with one inside — in a microdrive. Needs an \
+             Interface 1: fit {\"what\": \"if1\"} first. Drives are numbered from 1, as the \
+             machine numbers them. Read-only unless told otherwise, because a program writes \
+             to the cartridge it loaded from: writable sends writes to the file, copy_to \
+             writes a copy first and sends them there.",
+            [
+                ("path", prop("string", "the .mdr, or a zip holding one")),
+                ("drive", prop("integer", "which drive, from 1 (default 1)")),
+                (
+                    "writable",
+                    prop("boolean", "let writes go to this file (default false)"),
+                ),
+                (
+                    "copy_to",
+                    prop("string", "copy it here first, and write to the copy"),
+                ),
+            ],
+            &["path"],
+        ),
+        schema_tool(
+            "new_cartridge",
+            "A blank formatted cartridge in a drive, writable. The machine's own FORMAT \
+             writes a sector of test pattern and leaves it there, so a cartridge formatted \
+             by the ROM reports a kilobyte less free than one made here.",
+            [
+                ("drive", prop("integer", "which drive, from 1 (default 1)")),
+                ("name", prop("string", "the cartridge's name (default \"blank\")")),
+                ("sectors", prop("integer", "how many, up to 254 (default 180)")),
+                ("path", prop("string", "write it here, so it survives the session")),
+            ],
+            &[],
+        ),
+        schema_tool(
+            "eject_cartridge",
+            "Take the cartridge out, writing it back to its file first if the machine \
+             changed it and the mount allowed it.",
+            [("drive", prop("integer", "which drive, from 1 (default 1)"))],
+            &[],
+        ),
+        tool(
+            "microdrive_info",
+            "The chain: how many drives, what is in each, which one is turning and where its \
+             head is, and whether the Interface 1's ROM is there — without that ROM the \
+             machine has no microdrive commands at all.",
+            [],
+        ),
+        schema_tool(
+            "cartridge_catalogue",
+            "What is on a cartridge: its name, its files with their sizes, how much is free, \
+             and which sectors do not add up. A worn cartridge really does have bad sectors, \
+             so that is a fact about the tape rather than a fault in the reading.",
+            [("drive", prop("integer", "which drive, from 1 (default 1)"))],
+            &[],
+        ),
         tool(
             "hardware",
             "What can be plugged into the back of the machine, what is plugged in now, and \

@@ -14,6 +14,7 @@ pub mod input;
 pub mod json;
 pub mod looking;
 pub mod memory;
+pub mod microdrive;
 pub mod names;
 pub mod peripherals;
 pub mod picture;

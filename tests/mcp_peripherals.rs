@@ -146,3 +146,112 @@ fn machine_info_says_what_is_plugged_in() {
         "and now it should say so:\n{after}"
     );
 }
+
+// ---- the microdrives -------------------------------------------------------
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("zx-rustrum-mcp-tests");
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    dir.join(name)
+}
+
+/// Without an Interface 1 there are no microdrives, and the error says how to
+/// get one rather than reporting an empty drive.
+#[test]
+fn the_microdrive_tools_say_when_there_is_no_interface() {
+    let mut session = Session::new();
+    for tool in [
+        "microdrive_info",
+        "cartridge_catalogue",
+        "eject_cartridge",
+        "new_cartridge",
+    ] {
+        let err = call(&mut session, tool, []).expect_err("no interface");
+        assert!(err.contains("fit") && err.contains("if1"), "{tool}: {err}");
+    }
+}
+
+/// A blank cartridge goes in, comes back in the catalogue, and can be written
+/// out and mounted again.
+#[test]
+fn a_cartridge_is_made_written_out_and_put_back() {
+    let mut session = Session::new();
+    call(
+        &mut session,
+        "fit",
+        [("what", Json::str("if1")), ("microdrives", Json::num(2.0))],
+    )
+    .expect("fitted");
+
+    let path = scratch("made.mdr");
+    let out = call(
+        &mut session,
+        "new_cartridge",
+        [
+            ("drive", Json::num(2.0)),
+            ("name", Json::str("TESTCART")),
+            ("sectors", Json::num(120.0)),
+            ("path", Json::str(path.display().to_string())),
+        ],
+    )
+    .expect("a blank cartridge");
+    assert!(out.contains("Drive 2"), "{out}");
+    assert!(path.exists(), "and it was written out");
+
+    let cat = call(
+        &mut session,
+        "cartridge_catalogue",
+        [("drive", Json::num(2.0))],
+    )
+    .expect("a catalogue");
+    assert!(cat.contains("TESTCART"), "{cat}");
+    assert!(
+        cat.contains("Nothing on it"),
+        "a blank one is empty:\n{cat}"
+    );
+    assert!(cat.contains("Every sector adds up"), "{cat}");
+
+    let info = call(&mut session, "microdrive_info", []).expect("the chain");
+    assert!(info.contains("drive 1: empty"), "{info}");
+    assert!(info.contains("TESTCART"), "{info}");
+
+    // Out and back in again, read-only this time.
+    call(&mut session, "eject_cartridge", [("drive", Json::num(2.0))]).expect("ejected");
+    let err = call(
+        &mut session,
+        "cartridge_catalogue",
+        [("drive", Json::num(2.0))],
+    )
+    .expect_err("empty now");
+    assert!(err.contains("empty"), "{err}");
+
+    let out = call(
+        &mut session,
+        "mount_cartridge",
+        [
+            ("path", Json::str(path.display().to_string())),
+            ("drive", Json::num(1.0)),
+        ],
+    )
+    .expect("mounted");
+    assert!(out.contains("Read-only"), "read-only unless asked: {out}");
+    assert!(out.contains("TESTCART"), "{out}");
+}
+
+/// A drive that is not on the chain is an error that says how long the chain
+/// is, rather than a panic on an index.
+#[test]
+fn asking_for_a_drive_that_is_not_there_says_how_many_there_are() {
+    let mut session = Session::new();
+    call(&mut session, "fit", [("what", Json::str("if1"))]).expect("fitted");
+    let err = call(&mut session, "microdrive_info", []).expect("info");
+    assert!(err.contains("1 microdrive"), "{err}");
+
+    let err = call(
+        &mut session,
+        "cartridge_catalogue",
+        [("drive", Json::num(5.0))],
+    )
+    .expect_err("no drive 5");
+    assert!(err.contains("chain has 1"), "{err}");
+}
