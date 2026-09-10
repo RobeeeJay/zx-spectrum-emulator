@@ -9,6 +9,7 @@ pub mod disk;
 pub mod diskface;
 pub mod diskwin;
 pub mod hardware;
+pub mod joystickwin;
 pub mod keyboard;
 pub mod microdrive;
 pub mod microdrivewin;
@@ -469,6 +470,10 @@ pub struct App {
     pub show_disk: bool,
     /// What is plugged into the back of the machine.
     pub show_hardware: bool,
+    pub show_joystick: bool,
+    /// What on the desk works the stick, and which line is waiting for a key.
+    pub joystick_map: Vec<joystickwin::Binding>,
+    pub joystick_binding: Option<usize>,
     /// The microdrives, drawn.
     pub show_microdrive: bool,
     /// Which drive Load, Blank and Eject act on.
@@ -628,6 +633,9 @@ impl App {
             show_keyboard: false,
             show_disk: false,
             show_hardware: false,
+            show_joystick: false,
+            joystick_map: joystickwin::defaults(),
+            joystick_binding: None,
             show_microdrive: false,
             selected_drive: 0,
             pending_cartridge: None,
@@ -898,6 +906,7 @@ impl App {
                 theme::toggle(ui, &mut self.show_disk, "Disk");
             }
             theme::toggle(ui, &mut self.show_hardware, "Hardware");
+            theme::toggle(ui, &mut self.show_joystick, "Joystick");
             if self
                 .spec
                 .bus
@@ -1880,6 +1889,16 @@ impl App {
                 }
             }
         }
+        if let Some(kind) = self.prefs.joystick.clone() {
+            if let Some(kind) = crate::joystick::Kind::from_key(&kind) {
+                self.spec.bus.joystick.kind = kind;
+            }
+        }
+        if let Some(map) = self.prefs.joystick_map.clone() {
+            // An empty mapping is somebody having taken every line out, which
+            // is theirs to do; a file with no mapping at all gets the arrows.
+            self.joystick_map = joystickwin::from_text(&map);
+        }
         if let Some(drives) = self.prefs.microdrives {
             self.spec.bus.hardware.if1_drives = drives.clamp(1, crate::if1::MAX_DRIVES);
             if let Some(if1) = self.spec.bus.if1.as_mut() {
@@ -1915,6 +1934,8 @@ impl App {
                 .collect(),
         );
         self.prefs.microdrives = Some(self.spec.bus.hardware.if1_drives);
+        self.prefs.joystick = Some(self.spec.bus.joystick.kind.key().to_string());
+        self.prefs.joystick_map = Some(joystickwin::to_text(&self.joystick_map));
     }
 
     /// Write the window layout and display settings out. Called on close.
@@ -2074,6 +2095,7 @@ impl App {
             self.show_keyboard = is_open("keyboard");
             self.show_disk = is_open("disk");
             self.show_hardware = is_open("hardware");
+            self.show_joystick = is_open("joystick");
             self.show_microdrive = is_open("microdrive");
         }
     }
@@ -2092,6 +2114,7 @@ impl App {
             ("keyboard", self.show_keyboard),
             ("disk", self.show_disk),
             ("hardware", self.show_hardware),
+            ("joystick", self.show_joystick),
             ("microdrive", self.show_microdrive),
         ]
         .into_iter()
@@ -4031,6 +4054,7 @@ impl App {
             ("keyboard", self.show_keyboard),
             ("disk", self.show_disk),
             ("hardware", self.show_hardware),
+            ("joystick", self.show_joystick),
             ("microdrive", self.show_microdrive),
         ] {
             if !shown {
@@ -4314,6 +4338,30 @@ impl App {
             self.show_keyboard = open;
         }
 
+        if self.show_joystick {
+            let mut open = true;
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("joystick"),
+                self.restore_window(
+                    "joystick",
+                    ViewportBuilder::default().with_title("Joystick"),
+                    [420.0, 200.0],
+                    [460.0, 520.0],
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("joystick", &ctx, [420.0, 200.0], [460.0, 520.0]) {
+                        self.remember_window("joystick", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| joystickwin::ui(self, ui));
+                },
+            );
+            self.show_joystick = open;
+        }
+
         if self.show_back_buffer {
             let mut open = true;
             ctx.show_viewport_immediate(
@@ -4340,6 +4388,44 @@ impl App {
     }
 
     /// Map host keys onto the 8x5 Spectrum keyboard matrix.
+    /// What the desk is doing to the stick, and the line waiting for a key.
+    ///
+    /// A binding is a key of the host keyboard and what it works; a gamepad
+    /// would be more sources and no other change, but reading one needs a
+    /// crate that is not in the lock file.
+    fn read_joystick(&mut self, ctx: &egui::Context) {
+        // A line that is waiting takes the next key pressed rather than
+        // working the stick with it.
+        if let Some(i) = self.joystick_binding {
+            let pressed = ctx.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Key {
+                        key, pressed: true, ..
+                    } => Some(*key),
+                    _ => None,
+                })
+            });
+            if let Some(key) = pressed {
+                if let Some(binding) = self.joystick_map.get_mut(i) {
+                    binding.from = key;
+                }
+                self.joystick_binding = None;
+            }
+            return;
+        }
+        if self.spec.bus.joystick.kind == crate::joystick::Kind::None {
+            self.spec.bus.joystick.release();
+            return;
+        }
+        for way in crate::joystick::Way::ALL {
+            let down = self.joystick_map.iter().any(|binding| {
+                binding.does == joystickwin::Does::Way(way)
+                    && ctx.input(|i| i.key_down(binding.from))
+            });
+            self.spec.bus.joystick.set(way, down);
+        }
+    }
+
     fn read_keyboard(&mut self, ctx: &egui::Context) {
         use egui::Key;
         // A recording supplies every byte the machine reads from a port,
@@ -4350,6 +4436,20 @@ impl App {
         }
         let mut matrix = [0xffu8; 8];
         let mut press = |row: usize, bit: u8| matrix[row] &= !(1 << bit);
+
+        // The stick first: a key bound to it works it instead of the machine's
+        // own keyboard, or holding the arrows would type as well as steer.
+        // A line waiting for a key takes the next one pressed rather than
+        // acting on it.
+        self.read_joystick(ctx);
+        let bound: Vec<egui::Key> = self.joystick_map.iter().map(|b| b.from).collect();
+        for binding in &self.joystick_map {
+            if let joystickwin::Does::Key(row, bit) = binding.does {
+                if ctx.input(|i| i.key_down(binding.from)) {
+                    press(row, bit);
+                }
+            }
+        }
 
         ctx.input(|i| {
             const MAP: &[(Key, usize, u8)] = &[
@@ -4393,7 +4493,7 @@ impl App {
                 (Key::B, 7, 4),
             ];
             for &(key, row, bit) in MAP {
-                if i.key_down(key) {
+                if i.key_down(key) && !bound.contains(&key) {
                     press(row, bit);
                 }
             }
@@ -4404,23 +4504,23 @@ impl App {
                 press(7, 1); // SYMBOL SHIFT
             }
             // Convenience keys that need CAPS SHIFT on real hardware.
-            if i.key_down(Key::Backspace) {
+            if i.key_down(Key::Backspace) && !bound.contains(&Key::Backspace) {
                 press(0, 0);
                 press(4, 0);
             }
-            if i.key_down(Key::ArrowLeft) {
+            if i.key_down(Key::ArrowLeft) && !bound.contains(&Key::ArrowLeft) {
                 press(0, 0);
                 press(3, 4);
             }
-            if i.key_down(Key::ArrowDown) {
+            if i.key_down(Key::ArrowDown) && !bound.contains(&Key::ArrowDown) {
                 press(0, 0);
                 press(4, 4);
             }
-            if i.key_down(Key::ArrowUp) {
+            if i.key_down(Key::ArrowUp) && !bound.contains(&Key::ArrowUp) {
                 press(0, 0);
                 press(4, 3);
             }
-            if i.key_down(Key::ArrowRight) {
+            if i.key_down(Key::ArrowRight) && !bound.contains(&Key::ArrowRight) {
                 press(0, 0);
                 press(4, 2);
             }

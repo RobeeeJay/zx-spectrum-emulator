@@ -181,6 +181,8 @@ pub struct SpectrumBus {
     pub multifaces: Vec<crate::multiface::Multiface>,
     /// The Currah µSpeech, if one is on the back.
     pub uspeech: Option<crate::uspeech::Uspeech>,
+    /// The joystick, and which interface it is plugged into.
+    pub joystick: crate::joystick::Joystick,
     /// The +3's disk controller. Present on every model, since a bus that
     /// changes shape with the machine is a bus that has to be rebuilt to swap
     /// one; the ports are only decoded on a machine that has the hardware.
@@ -352,6 +354,7 @@ impl SpectrumBus {
             nmi_pending: false,
             multifaces: Vec::new(),
             uspeech: None,
+            joystick: crate::joystick::Joystick::default(),
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
@@ -1172,10 +1175,14 @@ impl SpectrumBus {
 
     /// Keyboard: 0xFE reads return the AND of every selected half-row.
     fn keyboard(&self, port: u16, ear: bool) -> u8 {
+        // A Sinclair or Cursor interface is wired to five keys, so it pulls
+        // the same lines a finger would and a game reading the keyboard cannot
+        // tell the difference. That was the whole idea of it.
+        let stick = self.joystick.matrix();
         let mut result = 0x1f;
-        for row in 0..8 {
+        for (row, held) in stick.iter().enumerate() {
             if port & (1 << (8 + row)) == 0 {
-                result &= self.keys[row] & 0x1f;
+                result &= self.keys[row] & held & 0x1f;
             }
         }
         let mut v = result | 0xa0;
@@ -1902,12 +1909,14 @@ impl Spectrum {
         let if1 = self.bus.if1.take();
         let multifaces = std::mem::take(&mut self.bus.multifaces);
         let uspeech = self.bus.uspeech.take();
+        let joystick = std::mem::take(&mut self.bus.joystick);
 
         self.bus = SpectrumBus::new(model);
         self.bus.hardware = hardware;
         self.bus.if1 = if1;
         self.bus.multifaces = multifaces;
         self.bus.uspeech = uspeech;
+        self.bus.joystick = joystick;
         self.bus.set_late_timing(late);
         self.bus.audio = audio;
         self.bus.audio.set_cpu_hz(model.cpu_hz());
@@ -1946,6 +1955,9 @@ impl Spectrum {
         if let Some(uspeech) = &mut self.bus.uspeech {
             uspeech.reset();
         }
+        // A direction held across a reset would be held for ever, the same way
+        // a shift clicked in the keyboard window used to be.
+        self.bus.joystick.release();
         if let Some(chip) = self.bus.audio.speech.as_mut() {
             chip.reset();
         }
@@ -2278,6 +2290,12 @@ impl SpectrumBus {
             if self.breaks.ay && self.model.has_ay() && port & 0xc002 == 0xc000 {
                 self.break_hit.get_or_insert(Event::Ay);
             }
+            return byte;
+        }
+        // A joystick on a port answers before anything else looks: an
+        // unattached read gives the floating bus, and a stick would never be
+        // seen through it.
+        if let Some(byte) = self.joystick.io_read(port) {
             return byte;
         }
         // The µSpeech decodes the address bus and does not care that this is

@@ -135,6 +135,10 @@ pub struct Prefs {
     /// how many microdrives were on the chain.
     pub peripherals: Option<Vec<String>>,
     pub microdrives: Option<usize>,
+    /// Which joystick interface the stick is plugged into, and what on the
+    /// desk works it.
+    pub joystick: Option<String>,
+    pub joystick_map: Option<String>,
     /// Where each window was when the emulator last closed.
     pub windows: BTreeMap<String, WindowRect>,
     /// Display scale, as a multiple of the Spectrum's own pixels.
@@ -201,6 +205,8 @@ impl Prefs {
                 "overscan" => prefs.overscan = value.parse().ok(),
                 "machine" => prefs.machine = Some(value),
                 "microdrives" => prefs.microdrives = value.parse().ok(),
+                "joystick" => prefs.joystick = Some(value.to_string()),
+                "joystick_map" => prefs.joystick_map = Some(value.to_string()),
                 "peripherals" => {
                     prefs.peripherals = Some(
                         value
@@ -265,6 +271,12 @@ impl Prefs {
         }
         if let Some(fitted) = &self.peripherals {
             s.push_str(&format!("peripherals = \"{}\"\n", fitted.join(",")));
+        }
+        if let Some(joystick) = &self.joystick {
+            s.push_str(&format!("joystick = \"{joystick}\"\n"));
+        }
+        if let Some(map) = &self.joystick_map {
+            s.push_str(&format!("joystick_map = \"{map}\"\n"));
         }
         if let Some(drives) = self.microdrives {
             s.push_str(&format!("microdrives = \"{drives}\"\n"));

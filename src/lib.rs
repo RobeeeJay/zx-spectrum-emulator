@@ -18,6 +18,7 @@ pub mod flow;
 pub mod hardware;
 pub mod if1;
 pub mod ipf;
+pub mod joystick;
 pub mod keyboard;
 pub mod listing;
 pub mod logo;
