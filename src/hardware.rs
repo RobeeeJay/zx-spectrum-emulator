@@ -5,7 +5,7 @@
 //! than no switch, because it looks like the thing is working.
 //!
 //! Emulated: the Interface 1 and its microdrives (`src/if1.rs`), the Fuller
-//! Audio Box, and Cheetah's SpecDrum.
+//! Audio Box, Cheetah's SpecDrum and the Kempston mouse.
 //!
 //! Fitted and not emulated: the Currah µSpeech, the RAM Music Machine, and the
 //! three Multifaces. What each needs is written against it below — mostly a
@@ -23,10 +23,11 @@ pub enum Peripheral {
     MultifaceOne,
     Multiface128,
     Multiface3,
+    KempstonMouse,
 }
 
 impl Peripheral {
-    pub const ALL: [Peripheral; 8] = [
+    pub const ALL: [Peripheral; 9] = [
         Peripheral::Interface1,
         Peripheral::Uspeech,
         Peripheral::Fuller,
@@ -35,6 +36,7 @@ impl Peripheral {
         Peripheral::MultifaceOne,
         Peripheral::Multiface128,
         Peripheral::Multiface3,
+        Peripheral::KempstonMouse,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -47,6 +49,7 @@ impl Peripheral {
             Peripheral::MultifaceOne => "Multiface One",
             Peripheral::Multiface128 => "Multiface 128",
             Peripheral::Multiface3 => "Multiface 3",
+            Peripheral::KempstonMouse => "Kempston mouse",
         }
     }
 
@@ -61,6 +64,7 @@ impl Peripheral {
             Peripheral::MultifaceOne => "multiface1",
             Peripheral::Multiface128 => "multiface128",
             Peripheral::Multiface3 => "multiface3",
+            Peripheral::KempstonMouse => "kempston_mouse",
         }
     }
 
@@ -87,6 +91,10 @@ impl Peripheral {
             Peripheral::MultifaceOne => "A button that stops the machine and saves what is in it",
             Peripheral::Multiface128 => "The same, for the 128K",
             Peripheral::Multiface3 => "The same, for the +2A and +3, with the disk in mind",
+            Peripheral::KempstonMouse => {
+                "A mouse on three ports: two counters and the buttons. Moved by the host's \
+                 mouse over the screen"
+            }
         }
     }
 
@@ -98,7 +106,7 @@ impl Peripheral {
                 "roms/if1.rom — the 8K shadow ROM. Everything the microdrives do is done \
                  by it, so without one the interface pages in nothing.",
             ),
-            Peripheral::Fuller | Peripheral::SpecDrum => Emulated::Yes,
+            Peripheral::Fuller | Peripheral::SpecDrum | Peripheral::KempstonMouse => Emulated::Yes,
             // Two ROMs: Currah's, which is the interface, and the speech
             // chip's own, which is where the allophones live.
             Peripheral::Uspeech => Emulated::NeedsRom(

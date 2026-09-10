@@ -26,6 +26,7 @@ pub mod loops;
 pub mod machine;
 pub mod mcp;
 pub mod microdrive;
+pub mod mouse;
 pub mod multiface;
 pub mod notes;
 pub mod observe;

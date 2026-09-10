@@ -584,7 +584,10 @@ the Fuller Audio Box and the SpecDrum are emulated as well —
 Four joystick interfaces — Kempston, the two Sinclair sticks and the Cursor
 one, plus the Fuller — are worked from the keys of the desk or from a gamepad
 through the **Joystick** window, which maps either onto the stick or onto keys
-of the machine's own keyboard. Snapshots are `.szx`, `.sna` and `.z80`, and screens are `.scr`
+of the machine's own keyboard. A **Kempston mouse**, fitted in the Hardware
+window, is the host's mouse while it is over the picture — movement in the
+machine's pixels, and both buttons; with it fitted, a click on the picture goes
+to the mouse rather than to the debugger. Snapshots are `.szx`, `.sna` and `.z80`, and screens are `.scr`
 both ways.
 
 **Quick**, beside Record on the main window, keeps ten quicksaves in memory:

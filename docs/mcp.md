@@ -65,7 +65,8 @@ set to, for one that cannot. `graphics` reads memory as characters and sprites,
 eight bytes each, which is how graphics are found: point it at a candidate
 address and see whether letters, a sprite or rubbish comes out.
 
-**Typing at it.** `press_keys`, `type_text`.
+**Typing at it.** `press_keys`, `type_text`, and `mouse` for a fitted Kempston
+mouse — moves in the machine's pixels, buttons, then a few frames.
 
 The ROM scans the keyboard once a frame and wants a key on two scans running
 before it believes in it, so a key is held for ten frames by default. Several

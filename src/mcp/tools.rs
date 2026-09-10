@@ -190,9 +190,9 @@ impl Session {
             | "watch_routines" | "routines" | "routine" | "call_graph" | "code_map" | "xrefs"
             | "autodoc" | "blocks" | "profile" | "frame_timing" | "sound_state" | "paging"
             | "memory_activity" | "tape_blocks" | "loader" | "save_state" | "restore_state"
-            | "step_forward" | "step_back" | "press_keys" | "type_text" | "load_symbols"
-            | "symbols" | "identify" | "export_listing" | "load_tape" | "load_snapshot"
-            | "load_recording" | "play_recording" => Err(zx81::not_here(name)),
+            | "step_forward" | "step_back" | "press_keys" | "type_text" | "mouse"
+            | "load_symbols" | "symbols" | "identify" | "export_listing" | "load_tape"
+            | "load_snapshot" | "load_recording" | "play_recording" => Err(zx81::not_here(name)),
             other => Err(format!("no tool called {other:?}; try tools/list")),
         }
     }
@@ -235,6 +235,7 @@ impl Session {
             "watch_events" => crate::mcp::control::watch_events(self, args),
             "press_keys" => crate::mcp::input::press_keys(self, args),
             "type_text" => crate::mcp::input::type_text(self, args),
+            "mouse" => crate::mcp::input::mouse(self, args),
             "registers" => Ok(self.registers()),
             "read_memory" => crate::mcp::memory::read_memory(self, args),
             "write_memory" => crate::mcp::memory::write_memory(self, args),

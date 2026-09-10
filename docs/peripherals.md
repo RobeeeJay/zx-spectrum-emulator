@@ -230,6 +230,28 @@ The addresses, the mirroring and the busy bit are Thomas Busse's measurements
 of real hardware at <https://maziac.github.io/currah_uspeech_tests>, which is
 the only description precise enough to work from.
 
+## The Kempston mouse
+
+Three ports and no ROM (`src/mouse.rs`): $FADF the buttons, $FBDF an X
+counter and $FFDF a Y counter, decoded only on A0, A5, A8 and A10. The
+counters are eight bits and wrap — a program moves its pointer by the
+difference between two reads, so a counter that stopped at an edge would pin
+the pointer there. Y counts up the screen, the other way from the host's. The
+buttons are active low, left on bit 1 and right on bit 0. None of that can be
+read off a ROM, so it is Fuse's `kempmouse.c`, written out in
+`tests/mouse.rs`.
+
+The partial decode means the Kempston joystick's $1F falls inside the
+buttons' port. It does in Fuse too; the joystick is asked first on the bus, so
+a stick fitted alongside still answers there.
+
+The host's mouse is the Kempston mouse only while it is over the picture and
+the machine is running, and its movement is divided by the display's scale so
+it moves in the machine's pixels. What is left over after the division is
+carried to the next frame, or a slow drag across a scaled-up picture would be
+rounded away to nothing. With the mouse fitted, a click on the picture is the
+mouse's button and not the debugger's "which byte is this?".
+
 ## The ones that are switches only
 
 **The RAM Music Machine**'s port map has not been checked against a reference

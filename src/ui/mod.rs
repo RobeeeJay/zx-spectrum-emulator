@@ -475,6 +475,9 @@ pub struct App {
     /// the one Load would restore.
     pub quick: [Option<Box<Spectrum>>; 10],
     pub quick_slot: usize,
+    /// Pointer movement smaller than one of the machine's pixels, carried to
+    /// the next frame for the Kempston mouse.
+    mouse_rest: egui::Vec2,
     /// What on the desk works the stick, and which line is waiting for a key.
     pub joystick_map: Vec<joystickwin::Binding>,
     pub joystick_binding: Option<usize>,
@@ -645,6 +648,7 @@ impl App {
             show_joystick: false,
             quick: Default::default(),
             quick_slot: 1,
+            mouse_rest: egui::Vec2::ZERO,
             joystick_map: joystickwin::defaults(),
             joystick_binding: None,
             gilrs: gilrs::Gilrs::new().ok(),
@@ -1087,6 +1091,35 @@ impl App {
             }
             Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
         }
+    }
+
+    /// The host's mouse, while it is over the picture, is the Kempston
+    /// mouse: movement in the machine's pixels, and the two buttons.
+    ///
+    /// Movement is kept as a remainder in points, so a slow drag across a
+    /// scaled-up picture still moves the counters rather than being rounded
+    /// away a frame at a time.
+    fn feed_mouse(&mut self, ui: &egui::Ui, response: &egui::Response, picture: egui::Rect) {
+        let over = response.hover_pos().is_some_and(|p| picture.contains(p));
+        let (delta, left, right) = ui.input(|i| {
+            (
+                i.pointer.delta(),
+                i.pointer.primary_down(),
+                i.pointer.secondary_down(),
+            )
+        });
+        let mouse = &mut self.spec.bus.mouse;
+        if !over || !self.running {
+            mouse.set_buttons(false, false);
+            self.mouse_rest = egui::Vec2::ZERO;
+            return;
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        let moved = self.mouse_rest + delta / self.scale.max(0.01);
+        let whole = egui::vec2(moved.x.trunc(), moved.y.trunc());
+        self.mouse_rest = moved - whole;
+        mouse.move_by(whole.x as i32, whole.y as i32);
+        mouse.set_buttons(left, right);
     }
 
     /// Put a blank tape in the deck and start recording onto it.
@@ -4251,7 +4284,19 @@ impl App {
                 // debugger's dump: "what draws this?" starts with knowing
                 // which byte it is, and counting rows and thirds by hand to
                 // work out a display address is a job nobody should be doing.
-                if response.clicked() {
+                //
+                // Not with a Kempston mouse fitted: then a click over the
+                // picture is the mouse's button, and the machine has it.
+                let mouse = self.zx81.is_none()
+                    && self
+                        .spec
+                        .bus
+                        .hardware
+                        .fitted(crate::hardware::Peripheral::KempstonMouse);
+                if mouse {
+                    self.feed_mouse(ui, &response, picture);
+                }
+                if response.clicked() && !mouse {
                     if let Some(at) = response.interact_pointer_pos() {
                         if picture.contains(at) {
                             let px = ((at.x - picture.left()) / self.scale) as usize;

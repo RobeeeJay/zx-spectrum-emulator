@@ -186,6 +186,8 @@ pub struct SpectrumBus {
     /// Listening to MIC while a blank tape is in the deck, so what the machine
     /// saves goes onto it.
     pub recorder: Option<crate::recorder::Recorder>,
+    /// Answers only while the Kempston mouse is fitted.
+    pub mouse: crate::mouse::KempstonMouse,
     /// The +3's disk controller. Present on every model, since a bus that
     /// changes shape with the machine is a bus that has to be rebuilt to swap
     /// one; the ports are only decoded on a machine that has the hardware.
@@ -359,6 +361,7 @@ impl SpectrumBus {
             uspeech: None,
             joystick: crate::joystick::Joystick::default(),
             recorder: None,
+            mouse: crate::mouse::KempstonMouse::default(),
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
@@ -1934,6 +1937,7 @@ impl Spectrum {
         let uspeech = self.bus.uspeech.take();
         let joystick = std::mem::take(&mut self.bus.joystick);
         let recorder = self.bus.recorder.take();
+        let mouse = self.bus.mouse;
 
         self.bus = SpectrumBus::new(model);
         self.bus.hardware = hardware;
@@ -1942,6 +1946,7 @@ impl Spectrum {
         self.bus.uspeech = uspeech;
         self.bus.joystick = joystick;
         self.bus.recorder = recorder;
+        self.bus.mouse = mouse;
         self.bus.set_late_timing(late);
         self.bus.audio = audio;
         self.bus.audio.set_cpu_hz(model.cpu_hz());
@@ -2322,6 +2327,14 @@ impl SpectrumBus {
         // seen through it.
         if let Some(byte) = self.joystick.io_read(port) {
             return byte;
+        }
+        if self
+            .hardware
+            .fitted(crate::hardware::Peripheral::KempstonMouse)
+        {
+            if let Some(byte) = self.mouse.io_read(port) {
+                return byte;
+            }
         }
         // The µSpeech decodes the address bus and does not care that this is
         // an I/O cycle: $0038 turns it over, and its registers answer.

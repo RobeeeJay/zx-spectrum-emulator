@@ -255,3 +255,34 @@ fn asking_for_a_drive_that_is_not_there_says_how_many_there_are() {
     .expect_err("no drive 5");
     assert!(err.contains("chain has 1"), "{err}");
 }
+
+/// The mouse tool moves the Kempston mouse in the machine's pixels, and says
+/// so plainly when there is no mouse to move.
+#[test]
+fn the_mouse_tool_moves_a_fitted_mouse_and_refuses_otherwise() {
+    let mut session = Session::new();
+    let err = call(&mut session, "mouse", [("dx", Json::num(4))]).expect_err("nothing fitted");
+    assert!(err.contains("kempston_mouse"), "says how to fit one: {err}");
+
+    call(&mut session, "fit", [("what", Json::str("kempston_mouse"))]).expect("fitted");
+    let out = call(
+        &mut session,
+        "mouse",
+        [
+            ("dx", Json::num(-3)),
+            ("dy", Json::num(10)),
+            ("frames", Json::num(1)),
+        ],
+    )
+    .expect("moved");
+    let mouse = session.spec.bus.mouse;
+    assert_eq!(
+        (mouse.x, mouse.y),
+        (253, 246),
+        "left 3 wraps, down 10 counts down: {out}"
+    );
+    assert!(
+        out.contains("X 253") && out.contains("Y 246"),
+        "and says where: {out}"
+    );
+}

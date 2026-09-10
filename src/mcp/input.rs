@@ -269,3 +269,48 @@ pub fn key_named(name: &str, _model: Model) -> Result<(usize, u8), String> {
             )
         })
 }
+
+/// Move the Kempston mouse and set its buttons, then run a few frames so the
+/// program reading it has had a chance to.
+pub fn mouse(session: &mut Session, args: &Json) -> Result<String, String> {
+    use crate::hardware::Peripheral;
+    if !session.spec.bus.hardware.fitted(Peripheral::KempstonMouse) {
+        return Err(
+            "no Kempston mouse is fitted: fit it first (fit with what: kempston_mouse)".into(),
+        );
+    }
+    let signed = |key: &str| -> Result<i32, String> {
+        match args.get(key) {
+            None => Ok(0),
+            Some(v) => v
+                .as_i64()
+                .map(|n| n.clamp(-255, 255) as i32)
+                .ok_or_else(|| format!("{key} should be a whole number of pixels, not {v}")),
+        }
+    };
+    let (dx, dy) = (signed("dx")?, signed("dy")?);
+    let (left, right) = (flag(args, "left", false), flag(args, "right", false));
+    let frames = count(args, "frames", 5)?.min(600);
+
+    let mouse = &mut session.spec.bus.mouse;
+    mouse.move_by(dx, dy);
+    mouse.set_buttons(left, right);
+    for _ in 0..frames {
+        session.spec.run(FRAME_T);
+    }
+    let mouse = session.spec.bus.mouse;
+    Ok(format!(
+        "Moved by ({dx}, {dy}), buttons {}; ran {frames} frames. The counters read X {} \
+         and Y {} (Y counts up the screen), buttons ${:02X} at $FADF — active low, left \
+         is bit 1 and right bit 0.",
+        match (left, right) {
+            (false, false) => "up".to_string(),
+            (true, false) => "left held".to_string(),
+            (false, true) => "right held".to_string(),
+            (true, true) => "both held".to_string(),
+        },
+        mouse.x,
+        mouse.y,
+        mouse.buttons
+    ))
+}

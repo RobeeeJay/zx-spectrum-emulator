@@ -398,6 +398,24 @@ pub fn tools() -> Json {
             ],
             &["text"],
         ),
+        schema_tool(
+            "mouse",
+            "Move the Kempston mouse and set its buttons, then run some frames so the \
+             program sees it. The mouse is two eight-bit counters that wrap, so a program \
+             moves its pointer by the difference between reads: dx right and dy down are \
+             in the machine's pixels. Needs the Kempston mouse fitted (fit).",
+            [
+                ("dx", prop("integer", "pixels to the right; negative is left (default 0)")),
+                ("dy", prop("integer", "pixels down; negative is up (default 0)")),
+                ("left", prop("boolean", "left button held (default false)")),
+                ("right", prop("boolean", "right button held (default false)")),
+                (
+                    "frames",
+                    prop("integer", "frames to run with it so (default 5)"),
+                ),
+            ],
+            &[],
+        ),
         tool(
             "step_forward",
             "Step, keeping what it would take to undo it. Twenty of these can be taken back \

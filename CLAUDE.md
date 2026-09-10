@@ -407,9 +407,9 @@ an IPF: what is taken out of one is the sectors, and an IPF is more than that.
 
 **What is plugged into the back is a list that says how far each thing is
 emulated.** The Interface 1 and its microdrives, the three Multifaces, the
-Fuller Audio Box and the SpecDrum do something; the µSpeech and the Music
-Machine are switches with nothing behind them yet, and the Hardware window says
-so where somebody will see it. A switch that turns on nothing is worse than no
+µSpeech, the Fuller Audio Box, the SpecDrum and the Kempston mouse do
+something; the Music Machine is a switch with nothing behind it yet, and the
+Hardware window says so where somebody will see it. A switch that turns on nothing is worse than no
 switch. The Interface 1 pages its own ROM in when the machine fetches from
 $0008 or $1708 and out again at $0700, so without `roms/if1.rom` it pages in
 nothing — which is what an empty socket does.
@@ -460,6 +460,14 @@ and wraps, so widening it makes something that is not an SP0256. The chip runs
 on its own oscillator, so it lives with the mixer and is clocked in the
 machine's T-states. Checked against a recording of real hardware: the steady
 sounds correlate at 0.94-0.98 with their formants inside a hundred hertz.
+
+**The Kempston mouse is the host's mouse only over the picture.** Movement is
+divided by the display's scale so it counts in the machine's pixels, and the
+remainder is carried to the next frame, or a slow drag on a scaled-up picture
+rounds away to nothing. With it fitted a click on the picture is its button,
+not the debugger's "which byte is this?". Its buttons' port is only partly
+decoded and takes in the Kempston joystick's $1F, as in Fuse; the joystick is
+asked first.
 
 **A joystick is a choice, not a fact.** The machine has no joystick port, so
 every interface solved it differently: Kempston on a port, Sinclair and Cursor
