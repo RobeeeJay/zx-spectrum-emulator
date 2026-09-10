@@ -150,12 +150,14 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      # cpal links against ALSA, and rfd talks to the desktop portal.
-      - name: Install Linux audio and dialog libraries
+      # cpal links against ALSA, rfd talks to the desktop portal, and gilrs
+      # finds gamepads through udev — without libudev-dev its build script
+      # cannot find the library and nothing on Linux builds.
+      - name: Install Linux audio, dialog and gamepad libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
       # Formatting and lints are the same answer on every platform, and
       # clippy is a second full build of everything. They run on the cheap
       # runner only; what the other two are here for is the tests.
@@ -197,7 +199,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
 
       # The disk image is named for the version and the architecture by the
       # script itself, so the two macOS builds do not land on one file.
