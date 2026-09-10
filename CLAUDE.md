@@ -79,6 +79,9 @@ set of decisions rather than a manual:
   against what, and what is still open.
 - [`docs/tape-loading.md`](docs/tape-loading.md) — the tape formats and their
   traps, the ROM loader's contract, and the three loading speeds.
+- [`docs/missing.md`](docs/missing.md) — what other emulators have that this
+  does not, checked against the source rather than remembered. A description of
+  the gap and not a plan: nothing in it is promised.
 
 ## Boundaries
 

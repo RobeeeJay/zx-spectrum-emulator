@@ -569,8 +569,15 @@ Hz, volumes, mixer routing and envelope settings.
 16K/32K/64K of ROM plus 48K or 128K of RAM, ULA display with FLASH and
 per-scanline border capture (so raster bars show up), keyboard, beeper,
 AY-3-8912 on the 128K and later, cassette input, and an approximate floating bus
-on the machines that have one. Not emulated: the +3 disk controller, Interface 1
-and the printer.
+on the machines that have one. The +3's disk controller, the Interface 1 with
+its microdrives, the three Multifaces, the Currah µSpeech with its speech chip,
+the Fuller Audio Box and the SpecDrum are emulated as well —
+[`docs/peripherals.md`](docs/peripherals.md) says how far each goes.
+
+Not emulated, and what other emulators have that this does not — joysticks,
+saving to tape, `.szx`, the printer, the other disk systems, the other machines
+— is written down in [`docs/missing.md`](docs/missing.md), checked against the
+source rather than remembered.
 
 ## Tests
 
