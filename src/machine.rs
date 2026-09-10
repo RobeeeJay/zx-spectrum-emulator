@@ -583,6 +583,19 @@ impl SpectrumBus {
             .unwrap_or(0)
     }
 
+    /// Put what the display file holds on the screen at once, rather than
+    /// waiting for the beam to come round to it.
+    ///
+    /// The picture is what the ULA painted, so a screen poked straight into
+    /// memory — a `.scr` loaded, or a snapshot restored while the machine is
+    /// stopped — would not be seen until the machine had run a frame, and a
+    /// stopped machine never does.
+    pub fn show_screen_now(&mut self) {
+        let from = self.screen_bank() * 0x4000;
+        self.painted.copy_from_slice(&self.ram[from..from + 6912]);
+        self.screen_prev.copy_from_slice(&self.painted);
+    }
+
     /// Copy out every line the beam has passed since this was last asked.
     ///
     /// Called before anything writes to the screen, and again at the end of the

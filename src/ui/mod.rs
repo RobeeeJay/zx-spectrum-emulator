@@ -1057,6 +1057,54 @@ impl App {
         }
     }
 
+    /// Write the screen the machine is showing to a `.scr`.
+    ///
+    /// A screen is not a snapshot: it is the 6,912 bytes the ULA is drawing
+    /// from, which is what everyone means by a Spectrum screenshot and what
+    /// every paint package on the machine reads and writes.
+    pub fn save_screen(&mut self) {
+        if self.on_zx81() {
+            self.set_status(
+                "A .scr is a Spectrum's display file; the ZX81's screen is a different \
+                 thing altogether."
+                    .to_string(),
+                true,
+            );
+            return;
+        }
+        let bytes = crate::scr::save(&self.spec);
+        let suggested = self.snapshot_path().with_extension("scr");
+        let dialog = rfd::FileDialog::new()
+            .add_filter("Screen", &["scr"])
+            .set_file_name(
+                suggested
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "screen.scr".to_string()),
+            );
+        let directory = suggested
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.prefs.dir_for(FileKind::Snapshot).cloned())
+            .filter(|dir| dir.is_dir());
+        let dialog = match directory {
+            Some(dir) => dialog.set_directory(dir),
+            None => dialog,
+        };
+        let Some(path) = dialog.save_file() else {
+            self.set_status("Screen not saved".to_string(), false);
+            return;
+        };
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => self.set_status(
+                format!("Wrote {} ({} bytes)", path.display(), bytes.len()),
+                false,
+            ),
+            Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
+        }
+    }
+
     /// Stop recording and ask where to put it.
     ///
     /// The dialog opens beside the tape in the deck, under the same name with
@@ -1111,7 +1159,7 @@ impl App {
             Some(FileKind::Tape) => {
                 dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81", "zip"])
             }
-            Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80"]),
+            Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80", "scr"]),
             // No filter, deliberately. rfd's macOS backend sets the panel's
             // allowed types from the extension list through an API that wants
             // types the system knows, and nothing on the machine claims
@@ -1127,11 +1175,12 @@ impl App {
                 .add_filter(
                     "Tape, snapshot or ROM",
                     &[
-                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "rom", "bin", "rzx", "zip",
+                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "scr", "rom", "bin", "rzx",
+                        "zip",
                     ],
                 )
                 .add_filter("Tape", &["tzx", "tap", "p", "81", "p81"])
-                .add_filter("Snapshot", &["sna", "z80"])
+                .add_filter("Snapshot", &["sna", "z80", "scr"])
                 .add_filter("Archive", &["zip"])
                 .add_filter("ROM image", &["rom", "bin"]),
         };
@@ -1174,7 +1223,7 @@ impl App {
             }
         };
         let wanted = [
-            "tzx", "tap", "p", "81", "p81", "rzx", "sna", "z80", "dsk", "ipf",
+            "tzx", "tap", "p", "81", "p81", "rzx", "sna", "z80", "scr", "dsk", "ipf",
         ];
         let Some((name, bytes)) = crate::zip::first_with_extension(&data, &wanted) else {
             return self.set_status(
@@ -1208,6 +1257,12 @@ impl App {
                     self.open_disk_bytes(source, &bytes);
                 }
             }
+            // A screen is not a snapshot: it goes into the machine that is
+            // running rather than replacing it.
+            "scr" => match crate::scr::load(&mut self.spec, &bytes) {
+                Ok(()) => self.set_status(format!("{name} is on the screen"), false),
+                Err(e) => self.set_status(format!("{name}: {e}"), true),
+            },
             "sna" | "z80" => match snapshot::probe_model_bytes(&ext, &bytes) {
                 Ok(model) => {
                     self.switch_model(model);
@@ -1627,6 +1682,17 @@ impl App {
                     self.open_disk(path);
                 }
             }
+            // A screen goes into the machine that is running: it is 6,912
+            // bytes of display file, not a machine to switch to.
+            "scr" => match std::fs::read(path) {
+                Ok(bytes) => match crate::scr::load(&mut self.spec, &bytes) {
+                    Ok(()) => {
+                        self.set_status(format!("{} is on the screen", path.display()), false)
+                    }
+                    Err(e) => self.set_status(format!("{}: {e}", path.display()), true),
+                },
+                Err(e) => self.set_status(format!("{}: {e}", path.display()), true),
+            },
             "sna" | "z80" => match snapshot::probe_model(path) {
                 Ok(model) => {
                     self.switch_model(model);
@@ -3073,6 +3139,17 @@ impl App {
                     .clicked()
                 {
                     self.save_snapshot();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(!self.on_zx81(), egui::Button::new("Save screen…"))
+                    .on_hover_text(
+                        "Write what is on the screen to a .scr: the 6,912 bytes the ULA \
+                         draws from, which is what a Spectrum screenshot is.",
+                    )
+                    .clicked()
+                {
+                    self.save_screen();
                     ui.close();
                 }
                 ui.separator();

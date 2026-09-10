@@ -33,6 +33,7 @@ pub mod profiler;
 pub mod race;
 pub mod resources;
 pub mod rzx;
+pub mod scr;
 pub mod screen;
 pub mod snapshot;
 pub mod sp0256;
