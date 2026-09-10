@@ -353,6 +353,12 @@ past the game, and the game says "STOP THE TAPE" long before the tape agrees.
 Microsphere: taken out again, Chase H.Q. ends with a report line and 134 bytes
 of screen. The EAR feedback it does not care about.
 
+**It does not load with an Interface 1 fitted**, on either machine, and that is
+the interface's doing rather than the tape's: its BASIC loader reaches its own
+code through a deliberate report and ERR_SP, at an address the Interface 1
+moves by inserting its system variables on its first call.
+[`peripherals.md`](peripherals.md) has the whole of it.
+
 ## Dinamic, the Search loader and Digital Integration
 
 Five more loaders, eight more games, and none of them needed anything the

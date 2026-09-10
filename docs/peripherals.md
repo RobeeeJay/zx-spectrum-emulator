@@ -73,6 +73,32 @@ the ROM's own font. `CAT 1` of a 180-sector cartridge prints its name and 90K
 free. A real cartridge — Hewson's, 200 sectors — catalogues as ten files with
 1K free, which is what the emulator's own reading of it says as well.
 
+### What an Interface 1 does to a game that is not expecting one
+
+The first time the machine goes through `$0008` — any report at all, "0 OK"
+included — the interface sets itself up, and part of that is inserting 58 bytes
+of its own system variables at `$5CB6`. Everything above them moves up: the
+channel data, the BASIC program, the variables. Nothing is lost, but nothing is
+where it was, and a program that had been counting on where it was is broken by
+it. That is the real interface's own ROM doing it, not the emulator — the move
+is the ROM's call to MAKE-ROOM at `$1655`, and it can be watched happening.
+
+**Chase H.Q. is one of those programs**, on a 48K or a 128K alike. Its BASIC
+loader keeps machine code in a `REM` on its first line and points ERR_SP at it,
+then provokes report 2, *Variable not found* — the `RST 8` at `$1C2E`. With no
+interface, the ROM's error handler takes ERR_SP and returns straight into that
+code at `$5CE4`, which is how the loader gets going. With an Interface 1, the
+report is the interface's first call: it moves the program up by 58 bytes before
+the ROM gets as far as the return, the return lands where the code used to be,
+and the machine runs whatever is there now. Fastload makes no difference,
+because none of this involves the tape.
+
+It showed up as "Chase H.Q. does not load in 128K mode" because the Interface 1
+had been left fitted in the preferences and the machine happened to be a 128K.
+The measured Fastload time in `tape-loading.md` is without one. Nothing here
+detects a loader like this or warns about it: the machine is doing what that
+machine did.
+
 ## Cartridges
 
 An MDR file is a cartridge written out sector by sector: 543 bytes each,
