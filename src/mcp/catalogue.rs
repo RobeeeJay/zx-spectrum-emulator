@@ -634,6 +634,45 @@ pub fn tools() -> Json {
             &["address"],
         ),
         tool(
+            "hardware",
+            "What can be plugged into the back of the machine, what is plugged in now, and \
+             how far each thing is emulated. The Interface 1 and its microdrives, the three \
+             Multifaces, the Currah µSpeech, the Fuller Audio Box and the SpecDrum do \
+             something; each of the ones with a ROM says whether that ROM was found. Start \
+             here before fit.",
+            [],
+        ),
+        schema_tool(
+            "fit",
+            "Plug something in, or take it off. `what` is the peripheral's key — if1, \
+             uspeech, fuller, specdrum, multiface1, multiface128, multiface3, music_machine \
+             — and a wrong one is answered with the list. Fitting an Interface 1 builds its microdrives; fitting \
+             a µSpeech loads both its ROMs. A box whose ROM is missing is fitted and says so, \
+             because a machine that ignores a peripheral looks the same as a broken one.",
+            [
+                ("what", prop("string", "the peripheral's key")),
+                (
+                    "fitted",
+                    prop("boolean", "on or off (default true, meaning fit it)"),
+                ),
+                (
+                    "microdrives",
+                    prop("integer", "how many are on the Interface 1's chain, 1 to 8"),
+                ),
+            ],
+            &["what"],
+        ),
+        tool(
+            "red_button",
+            "Press the Multiface's red button. The machine takes an NMI wherever it is — \
+             interrupts disabled or not — and its ROM pages in over the bottom 16K and draws \
+             a menu, with every register of the stopped program still in it. run_frames, then \
+             screen, then press_keys to work the menu. save_state is the quieter way to keep \
+             a machine; this is the way a person did it in 1986, and the way to see what a \
+             game's own code looked like at that moment.",
+            [],
+        ),
+        tool(
             "sound_state",
             "What the machine is making a noise with: the beeper bit of port $FE, and — on a \
              128K — the AY's fourteen registers with what they mean, channel by channel: \

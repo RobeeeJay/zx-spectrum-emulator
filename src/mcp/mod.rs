@@ -15,6 +15,7 @@ pub mod json;
 pub mod looking;
 pub mod memory;
 pub mod names;
+pub mod peripherals;
 pub mod picture;
 pub mod sound;
 pub mod tools;

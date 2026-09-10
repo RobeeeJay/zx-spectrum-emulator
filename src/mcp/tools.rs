@@ -254,6 +254,9 @@ impl Session {
             "memory_activity" => crate::mcp::activity::memory_activity(self, args),
             "frame_timing" => crate::mcp::analysis::frame_timing(self, args),
             "sound_state" => crate::mcp::sound::sound_state(self, args),
+            "hardware" => crate::mcp::peripherals::hardware(self, args),
+            "fit" => crate::mcp::peripherals::fit(self, args),
+            "red_button" => crate::mcp::peripherals::red_button(self, args),
             "load_symbols" => crate::mcp::names::load_symbols(self, args),
             "symbols" => crate::mcp::names::list_symbols(self, args),
             "identify" => crate::mcp::names::identify(self, args),
@@ -293,6 +296,22 @@ impl Session {
                 bus.page_reg,
                 bus.rom_in_use(),
                 bus.visible_banks()
+            ));
+        }
+        // What is on the back, since it changes what the machine can do: a
+        // microdrive command on a machine with no Interface 1 is an error, not
+        // a mystery.
+        let fitted = bus.hardware.all_fitted();
+        if fitted.is_empty() {
+            out.push_str("nothing plugged into the back; `hardware` says what could be\n");
+        } else {
+            out.push_str(&format!(
+                "plugged in: {} — `hardware` says how far each is emulated\n",
+                fitted
+                    .iter()
+                    .map(|p| p.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         match &self.loaded {
