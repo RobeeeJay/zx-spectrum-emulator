@@ -252,6 +252,42 @@ carried to the next frame, or a slow drag across a scaled-up picture would be
 rounded away to nothing. With the mouse fitted, a click on the picture is the
 mouse's button and not the debugger's "which byte is this?".
 
+## The ZX Printer and the Alphacom 32
+
+`src/printer.rs` is Fuse's `printer.c` — itself Ian Collier's from xz80 —
+moved onto the machine's T-state clock. The machine does not send the printer
+a line: the stylus crosses the paper on a belt, the encoder says when it has
+reached the next dot, and the ROM switches the stylus on or off in time. So
+what is emulated is where the stylus has got to, from how long the motor has
+been running: 440 T-states a dot slow, 220 fast, 384 positions a line starting
+64 before the paper. Port $FB, decoded on A2 alone. Reading it: bit 0 the
+encoder, bit 6 low for a printer being there — which is how COPY knows to give
+up without one — and bit 7 the stylus at the left edge. Writing: bit 7 the
+stylus, bit 2 the motor off, bit 1 slow.
+
+What settles it is the ROM driving it. `tests/printer.rs` has the real 48K
+ROM `COPY` the screen, and all 176 lines of the paper equal lines 0-175 of the
+display file bit for bit; `LPRINT "hello"` comes out as eight lines that read
+back as `hello` through the machine's font.
+
+The Alphacom 32 is a thermal printer made to plug in the same way and be
+driven by the same ROM routines, so to the machine it is the same device and
+the two cannot both be fitted — fitting one takes the other off. It comes
+loaded with thermal paper. Its own timing has not been measured here; it runs
+at the ZX Printer's.
+
+The paper is a look, not a machine: the switch at the top of the Printer
+window puts the same dots on silver metallised paper (brushed streaks down the
+feed, near-black print) or on thermal paper (off-white gone yellowish, a
+blue-black that was uneven across the head and faded line by line, and a
+little blurred). Both are deterministic, so the PNG written by **Save PNG…** is
+the same every time for the same printout.
+
+The printout is part of the machine, so a quicksave restores the paper as it
+was when the save was made.
+
+The ZX81 had the ZX Printer first; its emulation here does not have one.
+
 ## The ones that are switches only
 
 **The RAM Music Machine**'s port map has not been checked against a reference

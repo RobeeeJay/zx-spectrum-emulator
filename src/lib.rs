@@ -31,6 +31,7 @@ pub mod multiface;
 pub mod notes;
 pub mod observe;
 pub mod prefs;
+pub mod printer;
 pub mod profiler;
 pub mod race;
 pub mod recorder;

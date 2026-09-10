@@ -587,7 +587,13 @@ through the **Joystick** window, which maps either onto the stick or onto keys
 of the machine's own keyboard. A **Kempston mouse**, fitted in the Hardware
 window, is the host's mouse while it is over the picture — movement in the
 machine's pixels, and both buttons; with it fitted, a click on the picture goes
-to the mouse rather than to the debugger. Snapshots are `.szx`, `.sna` and `.z80`, and screens are `.scr`
+to the mouse rather than to the debugger. A **ZX Printer** or an **Alphacom
+32** — one or the other, since they share a port — adds a **Printer** window
+the width of the tape window: the paper comes out of the bottom as each line
+is printed and grows upwards, **Save PNG…** writes it out a pixel a dot, **Tear
+off** starts again, and a switch at the top puts the printout on the ZX
+Printer's silver paper or on faded thermal paper. `COPY`, `LPRINT` and `LLIST`
+all print. Snapshots are `.szx`, `.sna` and `.z80`, and screens are `.scr`
 both ways.
 
 **Quick**, beside Record on the main window, keeps ten quicksaves in memory:

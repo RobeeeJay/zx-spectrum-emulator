@@ -154,6 +154,19 @@ pub fn fit(session: &mut Session, args: &Json) -> Result<String, String> {
             session.spec.bus.uspeech = None;
             session.spec.bus.audio.speech = None;
         }
+        // Both printers are the same device to the machine, on the same port,
+        // so fitting one takes the other off.
+        Peripheral::ZxPrinter | Peripheral::Alphacom32 if on => {
+            let (other, paper) = if what == Peripheral::ZxPrinter {
+                (Peripheral::Alphacom32, crate::printer::Paper::Metallised)
+            } else {
+                (Peripheral::ZxPrinter, crate::printer::Paper::Thermal)
+            };
+            session.spec.bus.hardware.fit(other, false);
+            session.spec.bus.printer = Some(crate::printer::ZxPrinter::new(paper));
+            out.push_str(" COPY, LPRINT and LLIST print to it; printout reads the paper back.");
+        }
+        Peripheral::ZxPrinter | Peripheral::Alphacom32 => session.spec.bus.printer = None,
         Peripheral::Fuller if on => session.spec.bus.audio.extra_ay = Some(Default::default()),
         Peripheral::Fuller => session.spec.bus.audio.extra_ay = None,
         Peripheral::SpecDrum if !on => session.spec.bus.audio.dac = 0.0,

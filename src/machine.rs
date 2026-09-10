@@ -188,6 +188,9 @@ pub struct SpectrumBus {
     pub recorder: Option<crate::recorder::Recorder>,
     /// Answers only while the Kempston mouse is fitted.
     pub mouse: crate::mouse::KempstonMouse,
+    /// The ZX Printer or the Alphacom 32, whichever is fitted: to the machine
+    /// they are the same thing on the same port.
+    pub printer: Option<crate::printer::ZxPrinter>,
     /// The +3's disk controller. Present on every model, since a bus that
     /// changes shape with the machine is a bus that has to be rebuilt to swap
     /// one; the ports are only decoded on a machine that has the hardware.
@@ -362,6 +365,7 @@ impl SpectrumBus {
             joystick: crate::joystick::Joystick::default(),
             recorder: None,
             mouse: crate::mouse::KempstonMouse::default(),
+            printer: None,
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
@@ -1581,6 +1585,13 @@ impl Bus for SpectrumBus {
             // idles at half scale.
             self.audio.dac = (value as f32 - 128.0) / 128.0 * 0.4;
         }
+        // The printer: the stylus and the motor, on $FB.
+        if crate::printer::ZxPrinter::decodes(port) && self.printer.is_some() {
+            let (now, frame_t) = (self.total_t(), self.model.frame_t() as u64);
+            if let Some(printer) = &mut self.printer {
+                printer.write(now, frame_t, value);
+            }
+        }
         // The Interface 1's data and control registers.
         if self.if1.is_some() {
             let now = self.total_t();
@@ -1938,6 +1949,7 @@ impl Spectrum {
         let joystick = std::mem::take(&mut self.bus.joystick);
         let recorder = self.bus.recorder.take();
         let mouse = self.bus.mouse;
+        let printer = self.bus.printer.take();
 
         self.bus = SpectrumBus::new(model);
         self.bus.hardware = hardware;
@@ -1947,6 +1959,7 @@ impl Spectrum {
         self.bus.joystick = joystick;
         self.bus.recorder = recorder;
         self.bus.mouse = mouse;
+        self.bus.printer = printer;
         self.bus.set_late_timing(late);
         self.bus.audio = audio;
         self.bus.audio.set_cpu_hz(model.cpu_hz());
@@ -1988,6 +2001,9 @@ impl Spectrum {
         // A direction held across a reset would be held for ever, the same way
         // a shift clicked in the keyboard window used to be.
         self.bus.joystick.release();
+        if let Some(printer) = &mut self.bus.printer {
+            printer.halt();
+        }
         if let Some(chip) = self.bus.audio.speech.as_mut() {
             chip.reset();
         }
@@ -2334,6 +2350,11 @@ impl SpectrumBus {
         {
             if let Some(byte) = self.mouse.io_read(port) {
                 return byte;
+            }
+        }
+        if crate::printer::ZxPrinter::decodes(port) {
+            if let Some(printer) = &self.printer {
+                return printer.read(self.total_t(), self.model.frame_t() as u64);
             }
         }
         // The µSpeech decodes the address bus and does not care that this is

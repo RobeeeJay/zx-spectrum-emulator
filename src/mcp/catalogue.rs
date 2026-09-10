@@ -399,6 +399,15 @@ pub fn tools() -> Json {
             &["text"],
         ),
         schema_tool(
+            "printout",
+            "What the ZX Printer or Alphacom 32 has printed: the paper as a PNG, a pixel a \
+             dot, and any text on it read back through the machine's font. COPY prints the \
+             top 22 rows of the screen, LPRINT and LLIST print text. Needs a printer fitted \
+             (fit with what: zx_printer or alphacom32).",
+            [("image", prop("boolean", "include the PNG (default true)"))],
+            &[],
+        ),
+        schema_tool(
             "mouse",
             "Move the Kempston mouse and set its buttons, then run some frames so the \
              program sees it. The mouse is two eight-bit counters that wrap, so a program \

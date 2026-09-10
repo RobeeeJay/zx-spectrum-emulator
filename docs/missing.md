@@ -25,7 +25,6 @@ the emulator feel current.
 
 | | |
 | --- | --- |
-| **ZX Printer / Alphacom 32** | `COPY` does nothing. The output is a bitmap and a window to show it in. |
 | **Interface 2 cartridges** | `.rom` files, sixteen games, and a joystick port. Perhaps forty lines of paging. |
 | **The Fuller's joystick** | Its sound chip is emulated; the joystick in the same box is not. |
 | **Interface 1's RS232 and ZX Net** | Deliberately stubbed — nothing is on the other end of $F7 — but the network is what made microdrives interesting in a classroom. |

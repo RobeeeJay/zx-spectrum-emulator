@@ -5,7 +5,8 @@
 //! than no switch, because it looks like the thing is working.
 //!
 //! Emulated: the Interface 1 and its microdrives (`src/if1.rs`), the Fuller
-//! Audio Box, Cheetah's SpecDrum and the Kempston mouse.
+//! Audio Box, Cheetah's SpecDrum, the Kempston mouse, and the ZX Printer and
+//! Alphacom 32.
 //!
 //! Fitted and not emulated: the Currah µSpeech, the RAM Music Machine, and the
 //! three Multifaces. What each needs is written against it below — mostly a
@@ -24,10 +25,12 @@ pub enum Peripheral {
     Multiface128,
     Multiface3,
     KempstonMouse,
+    ZxPrinter,
+    Alphacom32,
 }
 
 impl Peripheral {
-    pub const ALL: [Peripheral; 9] = [
+    pub const ALL: [Peripheral; 11] = [
         Peripheral::Interface1,
         Peripheral::Uspeech,
         Peripheral::Fuller,
@@ -37,6 +40,8 @@ impl Peripheral {
         Peripheral::Multiface128,
         Peripheral::Multiface3,
         Peripheral::KempstonMouse,
+        Peripheral::ZxPrinter,
+        Peripheral::Alphacom32,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -50,6 +55,8 @@ impl Peripheral {
             Peripheral::Multiface128 => "Multiface 128",
             Peripheral::Multiface3 => "Multiface 3",
             Peripheral::KempstonMouse => "Kempston mouse",
+            Peripheral::ZxPrinter => "ZX Printer",
+            Peripheral::Alphacom32 => "Alphacom 32",
         }
     }
 
@@ -65,6 +72,8 @@ impl Peripheral {
             Peripheral::Multiface128 => "multiface128",
             Peripheral::Multiface3 => "multiface3",
             Peripheral::KempstonMouse => "kempston_mouse",
+            Peripheral::ZxPrinter => "zx_printer",
+            Peripheral::Alphacom32 => "alphacom32",
         }
     }
 
@@ -95,6 +104,13 @@ impl Peripheral {
                 "A mouse on three ports: two counters and the buttons. Moved by the host's \
                  mouse over the screen"
             }
+            Peripheral::ZxPrinter => {
+                "Sinclair's spark printer: 256 dots across silver paper, for COPY, LPRINT \
+                 and LLIST"
+            }
+            Peripheral::Alphacom32 => {
+                "A thermal printer on the same port, driven the same way, on white paper"
+            }
         }
     }
 
@@ -106,7 +122,11 @@ impl Peripheral {
                 "roms/if1.rom — the 8K shadow ROM. Everything the microdrives do is done \
                  by it, so without one the interface pages in nothing.",
             ),
-            Peripheral::Fuller | Peripheral::SpecDrum | Peripheral::KempstonMouse => Emulated::Yes,
+            Peripheral::Fuller
+            | Peripheral::SpecDrum
+            | Peripheral::KempstonMouse
+            | Peripheral::ZxPrinter
+            | Peripheral::Alphacom32 => Emulated::Yes,
             // Two ROMs: Currah's, which is the interface, and the speech
             // chip's own, which is where the allophones live.
             Peripheral::Uspeech => Emulated::NeedsRom(

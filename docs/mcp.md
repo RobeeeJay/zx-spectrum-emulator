@@ -68,6 +68,10 @@ address and see whether letters, a sprite or rubbish comes out.
 **Typing at it.** `press_keys`, `type_text`, and `mouse` for a fitted Kempston
 mouse — moves in the machine's pixels, buttons, then a few frames.
 
+**The printer.** `printout` gives what a fitted ZX Printer or Alphacom 32 has
+printed: the paper as a PNG, a pixel a dot, and any text on it read back
+through the font CHARS points at, as Fuse reads it.
+
 The ROM scans the keyboard once a frame and wants a key on two scans running
 before it believes in it, so a key is held for ten frames by default. Several
 keys at once is a chord: `["CAPS SHIFT", "1"]`. This is how a game is driven to

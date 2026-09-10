@@ -469,6 +469,16 @@ not the debugger's "which byte is this?". Its buttons' port is only partly
 decoded and takes in the Kempston joystick's $1F, as in Fuse; the joystick is
 asked first.
 
+**The printer is where the stylus has got to, not a stream of lines.** The ROM
+watches the ZX Printer's encoder and switches the stylus dot by dot, so
+`src/printer.rs` works out the stylus's position from how long the motor has
+run on the machine's clock (Fuse's `printer.c`). The Alphacom 32 is the same
+device on the same port, so only one can be fitted; the difference the user
+sees is the paper, which is a switch in the window rather than a property of
+the machine. The ROM's `COPY` is checked against the display file bit for bit.
+`Session::new` has no ROM in it: an MCP test that types at the machine has to
+put one in, or it types into `RST $38` and looks like the peripheral failing.
+
 **A joystick is a choice, not a fact.** The machine has no joystick port, so
 every interface solved it differently: Kempston on a port, Sinclair and Cursor
 wired to five keys each — which is why they work with games that know nothing

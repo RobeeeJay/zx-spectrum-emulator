@@ -63,3 +63,38 @@ pub fn graphics(session: &mut Session, args: &Json) -> Result<Reply, String> {
     }
     Ok(Reply::Text(words))
 }
+
+/// The printout: the paper as a PNG, and the text on it read back through the
+/// font CHARS points at — the one the machine printed with, as Fuse reads it.
+pub fn printout(session: &mut Session, args: &Json) -> Result<Reply, String> {
+    let bus = &session.spec.bus;
+    let Some(printer) = bus.printer.as_ref() else {
+        return Err("no printer is fitted: fit zx_printer or alphacom32 first".into());
+    };
+    let chars = u16::from_le_bytes([bus.peek_raw(0x5C36), bus.peek_raw(0x5C37)]);
+    let font: Vec<u8> = (0..96 * 8u16)
+        .map(|i| bus.peek_raw(chars.wrapping_add(256 + i)))
+        .collect();
+    let text = printer.text(&font);
+    let lines = printer.lines.len();
+    let words = format!(
+        "{lines} lines of dots on the paper{}. {}",
+        if printer.running() {
+            ", and the motor is running"
+        } else {
+            ""
+        },
+        if text.is_empty() {
+            "No text could be read off it: only characters in the machine's font are read."
+                .to_string()
+        } else {
+            format!("Read as text:\n{}", text.join("\n"))
+        }
+    );
+    if flag(args, "image", true) && lines > 0 {
+        let rgba = crate::printer::render(&printer.lines, 0, printer.paper);
+        let png = crate::mcp::picture::encode(&rgba, crate::printer::DOTS, lines)?;
+        return Ok(Reply::Picture { png, text: words });
+    }
+    Ok(Reply::Text(words))
+}

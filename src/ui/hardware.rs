@@ -10,6 +10,7 @@ use eframe::egui;
 use crate::hardware::{Emulated, Peripheral};
 use crate::if1::{If1, MAX_DRIVES};
 use crate::multiface::{Model as MfModel, Multiface};
+use crate::printer::{Paper, ZxPrinter};
 use crate::sp0256::Sp0256;
 use crate::ui::theme;
 use crate::ui::App;
@@ -43,6 +44,21 @@ impl App {
                 self.show_microdrive = false;
             }
             // The sound add-ons that are emulated bring their own chip.
+            // Both printers are the same device to the machine, on the same
+            // port, so fitting one takes the other off.
+            Peripheral::ZxPrinter | Peripheral::Alphacom32 if yes => {
+                let (other, paper) = if what == Peripheral::ZxPrinter {
+                    (Peripheral::Alphacom32, Paper::Metallised)
+                } else {
+                    (Peripheral::ZxPrinter, Paper::Thermal)
+                };
+                self.spec.bus.hardware.fit(other, false);
+                self.spec.bus.printer = Some(ZxPrinter::new(paper));
+            }
+            Peripheral::ZxPrinter | Peripheral::Alphacom32 => {
+                self.spec.bus.printer = None;
+                self.show_printer = false;
+            }
             Peripheral::Fuller if yes => {
                 self.spec.bus.audio.extra_ay = Some(Default::default());
             }

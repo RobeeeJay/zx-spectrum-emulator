@@ -154,6 +154,7 @@ impl Session {
         }
         match name {
             "screen" => return crate::mcp::looking::screen(self, args),
+            "printout" => return crate::mcp::looking::printout(self, args),
             "graphics" => return crate::mcp::looking::graphics(self, args),
             _ => {}
         }
@@ -190,7 +191,7 @@ impl Session {
             | "watch_routines" | "routines" | "routine" | "call_graph" | "code_map" | "xrefs"
             | "autodoc" | "blocks" | "profile" | "frame_timing" | "sound_state" | "paging"
             | "memory_activity" | "tape_blocks" | "loader" | "save_state" | "restore_state"
-            | "step_forward" | "step_back" | "press_keys" | "type_text" | "mouse"
+            | "step_forward" | "step_back" | "press_keys" | "type_text" | "mouse" | "printout"
             | "load_symbols" | "symbols" | "identify" | "export_listing" | "load_tape"
             | "load_snapshot" | "load_recording" | "play_recording" => Err(zx81::not_here(name)),
             other => Err(format!("no tool called {other:?}; try tools/list")),

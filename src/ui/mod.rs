@@ -13,6 +13,7 @@ pub mod joystickwin;
 pub mod keyboard;
 pub mod microdrive;
 pub mod microdrivewin;
+pub mod printerwin;
 pub mod profiler;
 pub mod ram_map;
 pub mod sprites;
@@ -471,6 +472,8 @@ pub struct App {
     /// What is plugged into the back of the machine.
     pub show_hardware: bool,
     pub show_joystick: bool,
+    pub show_printer: bool,
+    printer_view: printerwin::View,
     /// Ten quicksaves, kept in memory for as long as the emulator is open, and
     /// the one Load would restore.
     pub quick: [Option<Box<Spectrum>>; 10],
@@ -646,6 +649,8 @@ impl App {
             show_disk: false,
             show_hardware: false,
             show_joystick: false,
+            show_printer: false,
+            printer_view: printerwin::View::default(),
             quick: Default::default(),
             quick_slot: 1,
             mouse_rest: egui::Vec2::ZERO,
@@ -931,6 +936,9 @@ impl App {
                 .fitted(crate::hardware::Peripheral::Interface1)
             {
                 theme::toggle(ui, &mut self.show_microdrive, "Microdrive");
+            }
+            if self.spec.bus.printer.is_some() && !self.on_zx81() {
+                theme::toggle(ui, &mut self.show_printer, "Printer");
             }
             self.buttons(ui);
         });
@@ -1925,7 +1933,7 @@ impl App {
             // The disk window is built around a picture of the drive, which is
             // as wide as it is; the tape window's width suits it and two
             // windows of one width sit together without a ragged edge.
-            "tape" | "ram_map" | "disk" | "microdrive" => Some(cassette::WINDOW_W),
+            "tape" | "ram_map" | "disk" | "microdrive" | "printer" => Some(cassette::WINDOW_W),
             _ => None,
         }
     }
@@ -2251,6 +2259,7 @@ impl App {
             self.show_disk = is_open("disk");
             self.show_hardware = is_open("hardware");
             self.show_joystick = is_open("joystick");
+            self.show_printer = is_open("printer");
             self.show_microdrive = is_open("microdrive");
         }
     }
@@ -2270,6 +2279,7 @@ impl App {
             ("disk", self.show_disk),
             ("hardware", self.show_hardware),
             ("joystick", self.show_joystick),
+            ("printer", self.show_printer),
             ("microdrive", self.show_microdrive),
         ]
         .into_iter()
@@ -4354,6 +4364,7 @@ impl App {
             ("disk", self.show_disk),
             ("hardware", self.show_hardware),
             ("joystick", self.show_joystick),
+            ("printer", self.show_printer),
             ("microdrive", self.show_microdrive),
         ] {
             if !shown {
@@ -4659,6 +4670,32 @@ impl App {
                 },
             );
             self.show_joystick = open;
+        }
+
+        if self.show_printer && self.spec.bus.printer.is_some() && self.zx81.is_none() {
+            let mut open = true;
+            let size = [cassette::WINDOW_W, 360.0];
+            let default = [cassette::WINDOW_W, 620.0];
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("printer"),
+                self.restore_window(
+                    "printer",
+                    ViewportBuilder::default().with_title("Printer"),
+                    size,
+                    default,
+                ),
+                |ui, _class| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("printer", &ctx, size, default) {
+                        self.remember_window("printer", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| printerwin::ui(self, ui));
+                },
+            );
+            self.show_printer = open;
         }
 
         if self.show_back_buffer {
