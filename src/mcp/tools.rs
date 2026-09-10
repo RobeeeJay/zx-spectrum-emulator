@@ -491,19 +491,38 @@ impl Session {
 
     fn load_snapshot(&mut self, args: &Json) -> Result<String, String> {
         let path = PathBuf::from(text(args, "path")?);
-        let model = snapshot::probe_model(&path)?;
+        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // A .szx says which machine it is in its header and carries the
+        // paging, the AY and the joystick; the other two are memory with the
+        // registers on the front.
+        let szx = crate::szx::is_szx(&bytes);
+        let model = if szx {
+            crate::szx::probe_model(&bytes)?
+        } else {
+            snapshot::probe_model(&path)?
+        };
         let rom = self.rom_for(model)?;
         self.spec.set_model(model, &rom);
-        snapshot::load(&mut self.spec, &path)?;
+        let note = if szx {
+            crate::szx::load(&mut self.spec, &bytes)?
+        } else {
+            snapshot::load(&mut self.spec, &path)?;
+            String::new()
+        };
         self.rom_loaded = true;
         self.notes = Notes::for_file(&path);
         self.loaded = Some(format!("snapshot {}", path.display()));
         Ok(format!(
-            "{} loaded into a {}. PC ${:04X}, SP ${:04X}",
+            "{} loaded into a {}. PC ${:04X}, SP ${:04X}{}",
             path.display(),
             model.name(),
             self.spec.cpu.pc,
-            self.spec.cpu.sp
+            self.spec.cpu.sp,
+            if note.is_empty() {
+                String::new()
+            } else {
+                format!(". {note}")
+            }
         ))
     }
 
@@ -701,7 +720,18 @@ impl Session {
             .and_then(|n| n.as_str())
             .unwrap_or("last")
             .to_string();
-        let data = snapshot::save_sna(&self.spec);
+        // A path ending in .szx gets the container format, which keeps the
+        // paging, the AY and what is plugged in; anything else gets the .sna
+        // that every emulator reads.
+        let szx = args
+            .get("path")
+            .and_then(|p| p.as_str())
+            .is_some_and(|p| p.to_ascii_lowercase().ends_with(".szx"));
+        let data = if szx {
+            crate::szx::save(&self.spec)
+        } else {
+            snapshot::save_sna(&self.spec)
+        };
         let mut out = format!(
             "Saved the machine as {name:?}: {} bytes, PC ${:04X}",
             data.len(),

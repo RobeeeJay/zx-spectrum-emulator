@@ -443,6 +443,24 @@ on its own oscillator, so it lives with the mixer and is clocked in the
 machine's T-states. Checked against a recording of real hardware: the steady
 sounds correlate at 0.94-0.98 with their formants inside a hundred hertz.
 
+**A joystick is a choice, not a fact.** The machine has no joystick port, so
+every interface solved it differently: Kempston on a port, Sinclair and Cursor
+wired to five keys each — which is why they work with games that know nothing
+about them — and the Fuller at $7F with its bits the other way up. No ROM reads
+a joystick, so none of this can be measured off one: the masks and the key
+mappings are Fuse's `joystick.c` and are written out in the tests so a change
+has to be deliberate. A key bound to the stick is taken away from the machine's
+own keyboard, or holding an arrow steers and types at once. A gamepad cannot be
+read at all without a crate that is not in the lock file, which is why a
+binding is a source and an action rather than a key and a direction.
+
+**`.szx` is a container, and what it cannot put back it says out loud.** The
+blocks it does not know are stepped over and named in what `load` returns,
+rather than being lost quietly — a machine that comes back missing its
+microdrives should say so. `.sna` and `.z80` remain for the machines and
+emulators that want them, and the extension chosen when saving decides which
+is written.
+
 **The machine and what is plugged into it are remembered between launches.**
 `machine`, `peripherals` and `microdrives` in the preferences; a ROM that has
 since moved is not an error, and the machine the emulator can actually be is

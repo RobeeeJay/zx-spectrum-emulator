@@ -109,7 +109,9 @@ pub fn tools() -> Json {
         ),
         schema_tool(
             "load_snapshot",
-            "Load a .sna or .z80. The model comes from the file. This is the quickest way \
+            "Load a .szx, .sna or .z80. The model comes from the file. A .szx is the one \
+             that carries the paging, the AY and which joystick is plugged in, and it says \
+             what it stepped over rather than losing it quietly. This is the quickest way \
              into the middle of a game.",
             [("path", prop("string", "the snapshot file"))],
             &["path"],

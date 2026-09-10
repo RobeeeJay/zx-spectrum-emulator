@@ -1030,15 +1030,14 @@ impl App {
             self.set_status("The ZX81 has no snapshot format here".to_string(), true);
             return;
         }
-        let bytes = snapshot::save_sna(&self.spec);
-        let suggested = self.snapshot_path();
+        let suggested = self.snapshot_path().with_extension("szx");
         let dialog = rfd::FileDialog::new()
-            .add_filter("Snapshot", &["sna"])
+            .add_filter("Snapshot", &["szx", "sna"])
             .set_file_name(
                 suggested
                     .file_name()
                     .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "snapshot.sna".to_string()),
+                    .unwrap_or_else(|| "snapshot.szx".to_string()),
             );
         let directory = suggested
             .parent()
@@ -1053,6 +1052,17 @@ impl App {
         let Some(path) = dialog.save_file() else {
             self.set_status("Snapshot not saved".to_string(), false);
             return;
+        };
+        // The name says which format: .szx carries the paging, the AY and
+        // what is plugged in, and .sna is a 48K memory dump with the
+        // registers on the front.
+        let szx = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("szx"));
+        let bytes = if szx {
+            crate::szx::save(&self.spec)
+        } else {
+            snapshot::save_sna(&self.spec)
         };
         match std::fs::write(&path, &bytes) {
             Ok(()) => {
@@ -1168,7 +1178,9 @@ impl App {
             Some(FileKind::Tape) => {
                 dialog.add_filter("Tape", &["tzx", "tap", "p", "81", "p81", "zip"])
             }
-            Some(FileKind::Snapshot) => dialog.add_filter("Snapshot", &["sna", "z80", "scr"]),
+            Some(FileKind::Snapshot) => {
+                dialog.add_filter("Snapshot", &["sna", "z80", "szx", "scr"])
+            }
             // No filter, deliberately. rfd's macOS backend sets the panel's
             // allowed types from the extension list through an API that wants
             // types the system knows, and nothing on the machine claims
@@ -1184,12 +1196,12 @@ impl App {
                 .add_filter(
                     "Tape, snapshot or ROM",
                     &[
-                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "scr", "rom", "bin", "rzx",
-                        "zip",
+                        "tzx", "tap", "p", "81", "p81", "sna", "z80", "szx", "scr", "rom", "bin",
+                        "rzx", "zip",
                     ],
                 )
                 .add_filter("Tape", &["tzx", "tap", "p", "81", "p81"])
-                .add_filter("Snapshot", &["sna", "z80", "scr"])
+                .add_filter("Snapshot", &["sna", "z80", "szx", "scr"])
                 .add_filter("Archive", &["zip"])
                 .add_filter("ROM image", &["rom", "bin"]),
         };
@@ -1232,7 +1244,7 @@ impl App {
             }
         };
         let wanted = [
-            "tzx", "tap", "p", "81", "p81", "rzx", "sna", "z80", "scr", "dsk", "ipf",
+            "tzx", "tap", "p", "81", "p81", "rzx", "sna", "z80", "szx", "scr", "dsk", "ipf",
         ];
         let Some((name, bytes)) = crate::zip::first_with_extension(&data, &wanted) else {
             return self.set_status(
@@ -1270,6 +1282,16 @@ impl App {
             // running rather than replacing it.
             "scr" => match crate::scr::load(&mut self.spec, &bytes) {
                 Ok(()) => self.set_status(format!("{name} is on the screen"), false),
+                Err(e) => self.set_status(format!("{name}: {e}"), true),
+            },
+            "szx" => match crate::szx::probe_model(&bytes) {
+                Ok(model) => {
+                    self.switch_model(model);
+                    match crate::szx::load(&mut self.spec, &bytes) {
+                        Ok(note) => self.set_status(format!("Loaded {name}: {note}"), false),
+                        Err(e) => self.set_status(format!("{name}: {e}"), true),
+                    }
+                }
                 Err(e) => self.set_status(format!("{name}: {e}"), true),
             },
             "sna" | "z80" => match snapshot::probe_model_bytes(&ext, &bytes) {
@@ -1699,6 +1721,22 @@ impl App {
                         self.set_status(format!("{} is on the screen", path.display()), false)
                     }
                     Err(e) => self.set_status(format!("{}: {e}", path.display()), true),
+                },
+                Err(e) => self.set_status(format!("{}: {e}", path.display()), true),
+            },
+            "szx" => match std::fs::read(path) {
+                Ok(bytes) => match crate::szx::probe_model(&bytes) {
+                    Ok(model) => {
+                        self.switch_model(model);
+                        match crate::szx::load(&mut self.spec, &bytes) {
+                            Ok(note) => {
+                                self.prefs.remember_file(FileKind::Snapshot, path);
+                                self.set_status(format!("Loaded {}: {note}", path.display()), false)
+                            }
+                            Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
+                        }
+                    }
+                    Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
                 },
                 Err(e) => self.set_status(format!("{}: {e}", path.display()), true),
             },
@@ -3156,8 +3194,9 @@ impl App {
                 if ui
                     .add_enabled(!self.on_zx81(), egui::Button::new("Save snapshot…"))
                     .on_hover_text(
-                        "Write the machine as it stands to a .sna, to be loaded \
-                         back later or carried to another emulator.",
+                        "Write the machine as it stands, to be loaded back later or \
+                         carried to another emulator. Name it .szx to keep the paging, \
+                         the AY and the joystick with it; .sna is the old 48K dump.",
                     )
                     .clicked()
                 {

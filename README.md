@@ -574,9 +574,15 @@ its microdrives, the three Multifaces, the Currah µSpeech with its speech chip,
 the Fuller Audio Box and the SpecDrum are emulated as well —
 [`docs/peripherals.md`](docs/peripherals.md) says how far each goes.
 
-Not emulated, and what other emulators have that this does not — joysticks,
-saving to tape, `.szx`, the printer, the other disk systems, the other machines
-— is written down in [`docs/missing.md`](docs/missing.md), checked against the
+Four joystick interfaces — Kempston, the two Sinclair sticks and the Cursor
+one, plus the Fuller — are worked from the keys of the desk through the
+**Joystick** window, which maps them to the stick or to keys of the machine's
+own keyboard. Snapshots are `.szx`, `.sna` and `.z80`, and screens are `.scr`
+both ways.
+
+Not emulated, and what other emulators have that this does not — saving to
+tape, a gamepad, the printer, the other disk systems, the other machines — is
+written down in [`docs/missing.md`](docs/missing.md), checked against the
 source rather than remembered.
 
 ## Tests

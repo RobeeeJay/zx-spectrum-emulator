@@ -39,6 +39,7 @@ pub mod screen;
 pub mod snapshot;
 pub mod sp0256;
 pub mod svg;
+pub mod szx;
 pub mod tape;
 pub mod timeline;
 pub mod tracker;

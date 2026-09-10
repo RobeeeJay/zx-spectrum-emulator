@@ -10,28 +10,21 @@ It is a description of the gap, not a plan. Nothing here is promised, and
 anything picked up should be taken on its own merits: several of these are an
 afternoon and one of them is a month.
 
-## The five you would feel first
+Three of the five this list opened with have since been done: `.szx`, `.scr`,
+and the joystick interfaces. What is left of that group is below.
 
-**Joysticks — nothing at all.** No Kempston port ($1F is unread), no Sinclair
-or Interface 2 pair, no cursor-key joystick, and no mapping from a host
-gamepad. Most arcade games from 1984 on expect one and a fair number cannot be
-played on the keys at all. It is the largest single gap, and the Kempston half
-of it is one port read.
+## The ones you would feel first
+
+**A gamepad.** The four joystick interfaces are emulated and the keys of the
+desk work them, but a real pad cannot be read: that needs a crate which is not
+in the lock file, and nothing may be added to it. The mapping is written as a
+source and an action so that a pad's buttons would be more sources and nothing
+else would change.
 
 **The machine cannot SAVE to tape.** Microdrive writes work and disk writes
 work; `SAVE "x"` goes nowhere, because there is no `.tap` or `.tzx` writer. An
 odd asymmetry, given that reading tapes is the most developed part of the
 emulator.
-
-**No `.szx` snapshots.** Only `.sna` and `.z80`, and neither can represent this
-machine any more. SZX is the format that carries what is plugged in — the
-microdrives and their cartridges, the Multiface, the +3's disk, the AY — so
-saving a machine today loses everything on its back. This matters more here
-than in most emulators precisely because the peripherals are emulated.
-
-**No screenshot, and no `.scr`.** The picture cannot be saved and a `.scr`
-cannot be loaded. Worth doing twice over: `.scr` is also how a rendering is
-checked against a reference, so it would pay for itself in the test suite.
 
 **No divMMC/divIDE with esxDOS.** This is how people load things on real
 hardware now: an SD card and a file browser. The biggest job on the list — an
@@ -85,6 +78,7 @@ the others still have that this does not:
 
 ## Where to start
 
-Joystick, then `.szx`, then saving tapes. Those three are what stop somebody
-using this as their everyday emulator. `.scr` next, because it earns its keep
-in the tests as well as in the window.
+Saving to tape, then a gamepad, then divMMC. The first is the odd gap — the
+machine can write to a microdrive and to a disk but not to the tape it can
+read — and the second is a rule about the lock file rather than a piece of
+work.
