@@ -270,6 +270,16 @@ own format work through the same path. Each machine has its own deck, because a
 tape is timed in the T-states of the machine playing it and the two clocks
 differ.
 
+**Saving is read back off MIC, not trapped.** A blank tape arms
+`src/recorder.rs`, which keeps when bit 3 of $FE changed and, after half a
+second of quiet, reads the pulses back into a standard block at the ROM's
+timings. Nothing about SA-BYTES is intercepted, so the machine saves the way it
+always does and a program that calls the ROM from somewhere odd is recorded
+the same. A saver with timings of its own is counted as unread rather than
+written down wrongly. The recorder is flushed after the frame count moves on:
+before it, the clock reads a frame early, which looks like a reset and drops
+the block — the real ROM's SAVE in `tests/tape_save.rs` is what caught that.
+
 **Nothing is written against an address until somebody says so.** The Call
 flow window's detectors are asked to look — pressing *Main game loop* is what
 starts the machine being watched — and what they find is offered with a score

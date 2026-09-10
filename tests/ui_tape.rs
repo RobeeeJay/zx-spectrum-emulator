@@ -914,3 +914,73 @@ fn the_list_stops_following_when_it_is_scrolled_by_hand() {
         "the list should follow again once the block being played is in view"
     );
 }
+
+/// The deck's own row works with nothing in the deck, which is when it is
+/// wanted: Blank puts in a tape to record onto and arms the recorder, and
+/// Save… waits until there is something on the tape to write.
+#[test]
+fn blank_puts_a_tape_in_to_record_onto() {
+    let mut h = harness_for(test_app());
+    h.run_steps(3);
+    assert!(h.query_by_label("Load…").is_some(), "a Load… button");
+    assert!(
+        h.get_by_label("Save…").accesskit_node().is_disabled(),
+        "nothing to save with the deck empty"
+    );
+
+    h.get_by_label("Blank").click();
+    h.run_steps(2);
+    let app = h.state();
+    let tape = app.spec.bus.tape.as_ref().expect("a tape in the deck");
+    assert_eq!(tape.name, "Blank tape");
+    assert!(
+        tape.blocks.is_empty(),
+        "with nothing on it: {:?}",
+        tape.blocks
+    );
+    assert!(
+        app.spec.bus.recorder.is_some(),
+        "and the recorder listening"
+    );
+    assert!(
+        h.get_by_label("Save…").accesskit_node().is_disabled(),
+        "a blank tape has nothing on it to save"
+    );
+
+    // A block arrives, as the machine's SAVE would put it there.
+    h.state_mut()
+        .spec
+        .bus
+        .tape
+        .as_mut()
+        .unwrap()
+        .blocks
+        .push(Block::Standard {
+            pause_ms: 1000,
+            data: vec![0x00; 19],
+        });
+    h.run_steps(2);
+    assert!(
+        !h.get_by_label("Save…").accesskit_node().is_disabled(),
+        "once something is on the tape it can be written out"
+    );
+}
+
+/// A tape put in the deck is there to be played. Recording onto it would
+/// write the next SAVE onto the end of somebody's game.
+#[test]
+fn loading_a_tape_stops_the_recording() {
+    let Some(path) = a_tape_file() else {
+        eprintln!("no tapes/; skipping");
+        return;
+    };
+    let mut app = test_app();
+    app.blank_tape();
+    assert!(app.spec.bus.recorder.is_some());
+    app.load_path(&path);
+    assert!(
+        app.spec.bus.recorder.is_none(),
+        "the recorder is off once {} is in the deck",
+        path.display()
+    );
+}

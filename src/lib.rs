@@ -32,6 +32,7 @@ pub mod observe;
 pub mod prefs;
 pub mod profiler;
 pub mod race;
+pub mod recorder;
 pub mod resources;
 pub mod rzx;
 pub mod scr;

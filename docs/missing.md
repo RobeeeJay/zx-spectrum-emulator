@@ -10,15 +10,11 @@ It is a description of the gap, not a plan. Nothing here is promised, and
 anything picked up should be taken on its own merits: several of these are an
 afternoon and one of them is a month.
 
-Four of the five this list opened with have since been done: `.szx`, `.scr`,
-the joystick interfaces, and gamepads. What is left of that group is below.
+All five this list opened with have since been done: `.szx`, `.scr`, the
+joystick interfaces, gamepads, and saving to tape (**Blank** in the tape
+window records what the machine sends through MIC). What is left is below.
 
 ## The ones you would feel first
-
-**The machine cannot SAVE to tape.** Microdrive writes work and disk writes
-work; `SAVE "x"` goes nowhere, because there is no `.tap` or `.tzx` writer. An
-odd asymmetry, given that reading tapes is the most developed part of the
-emulator.
 
 **No divMMC/divIDE with esxDOS.** This is how people load things on real
 hardware now: an SD card and a file browser. The biggest job on the list — an
@@ -72,5 +68,5 @@ the others still have that this does not:
 
 ## Where to start
 
-Saving to tape, then divMMC. The first is the odd gap — the machine can write
-to a microdrive and to a disk but not to the tape it can read.
+divMMC. It is the biggest job here and the one that would change how the
+emulator is used most.

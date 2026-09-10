@@ -1089,6 +1089,77 @@ impl App {
         }
     }
 
+    /// Put a blank tape in the deck and start recording onto it.
+    ///
+    /// What the machine saves through MIC is read back into blocks as it
+    /// arrives, and each one is added to the tape once MIC has been quiet long
+    /// enough for it to be over, so the tape window lists them as they are
+    /// made.
+    pub fn blank_tape(&mut self) {
+        if self.on_zx81() {
+            self.set_status(
+                "Saving to a blank tape is a Spectrum's for now.".into(),
+                true,
+            );
+            return;
+        }
+        self.set_tape(Some(crate::tape::Tape::from_blocks(
+            "Blank tape".into(),
+            Vec::new(),
+        )));
+        self.spec.bus.recorder = Some(crate::recorder::Recorder::new());
+        self.set_status(
+            "A blank tape is in the deck and recording: SAVE \"name\" on the machine writes \
+             onto it, and Save… in the tape window writes the tape out."
+                .into(),
+            false,
+        );
+    }
+
+    /// Write the tape in the deck out: `.tzx` keeps the pauses, `.tap` is what
+    /// everything reads.
+    pub fn save_tape(&mut self) {
+        let Some(tape) = self.spec.bus.tape.as_ref() else {
+            self.set_status("There is no tape in the deck".into(), true);
+            return;
+        };
+        if tape.blocks.is_empty() {
+            self.set_status(
+                "The tape is blank: nothing has been saved to it yet".into(),
+                true,
+            );
+            return;
+        }
+        let dialog = rfd::FileDialog::new()
+            .add_filter("Tape", &["tzx", "tap"])
+            .set_file_name("recording.tzx");
+        let dialog = match self.prefs.dir_for(FileKind::Tape).cloned() {
+            Some(dir) if dir.is_dir() => dialog.set_directory(dir),
+            _ => dialog,
+        };
+        let Some(path) = dialog.save_file() else {
+            self.set_status("Tape not saved".into(), false);
+            return;
+        };
+        let tap = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("tap"));
+        let blocks = &self.spec.bus.tape.as_ref().expect("checked").blocks;
+        let bytes = if tap {
+            crate::recorder::to_tap(blocks)
+        } else {
+            crate::recorder::to_tzx(blocks)
+        };
+        match bytes.and_then(|b| {
+            std::fs::write(&path, &b)
+                .map(|_| b.len())
+                .map_err(|e| e.to_string())
+        }) {
+            Ok(len) => self.set_status(format!("Wrote {} ({len} bytes)", path.display()), false),
+            Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
+        }
+    }
+
     /// Write the screen the machine is showing to a `.scr`.
     ///
     /// A screen is not a snapshot: it is the 6,912 bytes the ULA is drawing
@@ -2236,6 +2307,10 @@ impl App {
     }
 
     pub fn set_tape(&mut self, tape: Option<crate::tape::Tape>) {
+        // A tape put in the deck is to be played, not recorded onto: a SAVE
+        // would otherwise be written onto the end of somebody's game.
+        // `blank_tape` arms the recorder again after it comes through here.
+        self.spec.bus.recorder = None;
         match &mut self.zx81 {
             Some(zx) => zx.bus.tape = tape,
             None => self.spec.bus.tape = tape,

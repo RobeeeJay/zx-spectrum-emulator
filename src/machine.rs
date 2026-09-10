@@ -183,6 +183,9 @@ pub struct SpectrumBus {
     pub uspeech: Option<crate::uspeech::Uspeech>,
     /// The joystick, and which interface it is plugged into.
     pub joystick: crate::joystick::Joystick,
+    /// Listening to MIC while a blank tape is in the deck, so what the machine
+    /// saves goes onto it.
+    pub recorder: Option<crate::recorder::Recorder>,
     /// The +3's disk controller. Present on every model, since a bus that
     /// changes shape with the machine is a bus that has to be rebuilt to swap
     /// one; the ports are only decoded on a machine that has the hardware.
@@ -355,6 +358,7 @@ impl SpectrumBus {
             multifaces: Vec::new(),
             uspeech: None,
             joystick: crate::joystick::Joystick::default(),
+            recorder: None,
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
@@ -1322,6 +1326,19 @@ impl SpectrumBus {
             self.snow_marks = 0;
         }
         self.frame += 1;
+        // A block the machine has finished saving goes onto the tape in the
+        // deck, once MIC has been quiet long enough for it to be over. It is
+        // done after the frame count has moved on: before it, `tstates` has
+        // already had the frame taken off and the clock reads a frame early,
+        // which the recorder takes for a reset and drops the block.
+        if self.recorder.as_ref().is_some_and(|r| r.pending()) {
+            let now = self.total_t();
+            if let Some(block) = self.recorder.as_mut().and_then(|r| r.finish_if_quiet(now)) {
+                if let Some(tape) = self.tape.as_mut() {
+                    tape.blocks.push(block);
+                }
+            }
+        }
         // While a recording is playing, the frame boundary is where the
         // recording says it is — an instruction count, not a T-state count —
         // so the interrupt is raised there instead of here.
@@ -1526,6 +1543,12 @@ impl Bus for SpectrumBus {
                     self.break_hit.get_or_insert(Event::Beeper);
                 }
                 self.audio_sync();
+                if mic != self.mic {
+                    let now = self.total_t();
+                    if let Some(recorder) = &mut self.recorder {
+                        recorder.edge(now);
+                    }
+                }
                 self.speaker = speaker;
                 self.mic = mic;
                 self.update_beeper();
@@ -1910,6 +1933,7 @@ impl Spectrum {
         let multifaces = std::mem::take(&mut self.bus.multifaces);
         let uspeech = self.bus.uspeech.take();
         let joystick = std::mem::take(&mut self.bus.joystick);
+        let recorder = self.bus.recorder.take();
 
         self.bus = SpectrumBus::new(model);
         self.bus.hardware = hardware;
@@ -1917,6 +1941,7 @@ impl Spectrum {
         self.bus.multifaces = multifaces;
         self.bus.uspeech = uspeech;
         self.bus.joystick = joystick;
+        self.bus.recorder = recorder;
         self.bus.set_late_timing(late);
         self.bus.audio = audio;
         self.bus.audio.set_cpu_hz(model.cpu_hz());

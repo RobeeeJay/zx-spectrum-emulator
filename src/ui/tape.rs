@@ -80,6 +80,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         .id_salt("tape-window")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            deck(app, ui);
             ui.add_enabled_ui(loaded, |ui| transport(app, ui));
             ui.separator();
             // The deck itself, above the trace it produces.
@@ -93,6 +94,55 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             ui.separator();
             block_list(app, ui);
         });
+}
+
+/// What is in the deck: load a tape, put a blank one in to save to, and write a
+/// tape out. These work with the deck empty, which is when they are wanted.
+fn deck(app: &mut App, ui: &mut egui::Ui) {
+    let zx81 = app.on_zx81();
+    let recording = !zx81 && app.spec.bus.recorder.is_some();
+    let blocks = app.tape_ref().map_or(0, |t| t.blocks.len());
+    ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Tape");
+        if ui
+            .button("Load…")
+            .on_hover_text("Put a tape in the deck: .tzx, .tap, or a zip with one inside")
+            .clicked()
+        {
+            if let Some(path) = app.pick_file(Some(crate::prefs::FileKind::Tape)) {
+                app.insert_tape(&path);
+            }
+        }
+        if ui
+            .add_enabled(!zx81, egui::Button::new("Blank"))
+            .on_hover_text(if zx81 {
+                "Saving to a blank tape is a Spectrum's for now."
+            } else {
+                "Put a blank tape in the deck and record onto it: SAVE on the machine \
+                 writes to it, block by block, and Save… writes the tape out."
+            })
+            .clicked()
+        {
+            app.blank_tape();
+        }
+        if ui
+            .add_enabled(!zx81 && blocks > 0, egui::Button::new("Save…"))
+            .on_hover_text("Write the tape in the deck to a file: .tzx keeps the pauses, .tap is what everything reads")
+            .clicked()
+        {
+            app.save_tape();
+        }
+        if recording {
+            ui.label(
+                egui::RichText::new(format!(
+                    "● recording — {blocks} block{} on it",
+                    if blocks == 1 { "" } else { "s" }
+                ))
+                .small()
+                .color(theme::RED),
+            );
+        }
+    });
 }
 
 /// How fast the tape is got through, on a row of its own: three switches, one

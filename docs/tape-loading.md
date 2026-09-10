@@ -779,6 +779,36 @@ side B — 13,385 host frames played, 670 at Max, 26 at Fastload — and Out Run
 Europa asks to have the tape stopped, which is what its twenty-two seconds of
 trailing silence are for.
 
+## Saving onto a blank tape
+
+**Blank** in the tape window puts an empty tape in the deck and arms
+`src/recorder.rs`, which keeps the T-state of every change of the MIC bit —
+bit 3 of port $FE. When MIC has been still for half a second of the machine's
+time the pulses are read back: a run of at least 256 pilot pulses between
+1,800 and 2,600 T, two sync pulses under 1,000, then bits as pairs whose total
+is either side of 2,565 (the ROM's pairs are 1,710 and 3,420). What comes out
+is a standard block, flag and checksum included, and it is added to the tape
+there and then. The pause in front of it is the silence that was in front of
+it, so a `.tzx` written from it keeps the ROM's second between header and
+data.
+
+Only the ROM's timings are read. A saver with its own is counted in `unread`
+and dropped, because a wrong block is worse than none. Reading back the
+pulses rather than trapping SA-BYTES is deliberate: the same path works for a
+program that calls the ROM from a page of its own, and nothing about the
+machine is short-circuited.
+
+One trap cost time. The frame's housekeeping first ran before the frame count
+was moved on, where `tstates` has already had a frame taken off it — so the
+clock read a frame early, the recorder took that for the clock going
+backwards (which a reset or a snapshot does, and which drops what was half
+heard), and every block vanished without a trace. `tests/tape_save.rs`, which
+has the real ROM save a program and load it back, is what found it; the
+pulse-train tests in `tests/recorder.rs` could not have.
+
+Loading a tape switches the recorder off, so the next SAVE is not written onto
+the end of a game.
+
 ## The ZX81
 
 A ZX81 tape is a different format and the ZX81's ROM has no LD-BYTES, so

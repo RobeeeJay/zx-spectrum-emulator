@@ -259,6 +259,13 @@ the machine playing it and the ZX81's 3.25 MHz clock is not the Spectrum's
 
 ### Tape window
 
+* **Deck** — **Load…** puts a tape in; **Blank** puts in an empty one and
+  records onto it, so `SAVE "name"` on the machine writes a block to the tape
+  for each block the ROM sends, listed as it arrives; **Save…** writes whatever
+  is in the deck out as `.tzx` (pauses kept) or `.tap`. Loading a real tape
+  stops the recording, so a SAVE never lands on the end of somebody's game.
+  Only the ROM's own timings are read back — a program with a saver of its own
+  is counted as not read rather than written down wrongly.
 * **Block list** — every block with its type, size and, for standard blocks, the
   decoded ZX header (`Program "JETPAC"`, `Bytes "JPSP"`, …). Click any block to
   move the tape straight to it. The block being played is highlighted and kept in
