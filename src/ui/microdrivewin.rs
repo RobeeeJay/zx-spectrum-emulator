@@ -15,7 +15,48 @@ use crate::ui::theme;
 use crate::ui::App;
 
 /// How tall the picture of a cartridge is.
-const CARTRIDGE_H: f32 = 74.0;
+///
+/// Tall enough for four things in a column with a gap between each: the lamp
+/// and its line, the label, the loop of tape, and the line saying what is on
+/// the cartridge. It used to be 74, which put that last line through the loop
+/// of tape.
+pub const CARTRIDGE_H: f32 = 88.0;
+
+/// Where the parts of a drive go inside its block.
+///
+/// Worked out apart from the drawing so the spacing can be checked: the loop
+/// of tape and the line of text under it overlapped, and a picture is a bad
+/// thing to find that in.
+pub struct Parts {
+    /// The line with the lamp on it.
+    pub header: f32,
+    /// The cartridge's label.
+    pub label: egui::Rect,
+    /// The loop of tape, a mark per sector.
+    pub tape: egui::Rect,
+    /// Where the line under it sits.
+    pub info: f32,
+}
+
+/// How tall the text under the loop is, so the gap can be measured against it.
+pub const INFO_TEXT: f32 = 10.0;
+
+pub fn parts(face: egui::Rect) -> Parts {
+    let label = egui::Rect::from_min_size(
+        egui::pos2(face.left() + 10.0, face.top() + 26.0),
+        egui::vec2(face.width() - 20.0, 20.0),
+    );
+    let tape = egui::Rect::from_min_size(
+        egui::pos2(face.left() + 10.0, label.bottom() + 5.0),
+        egui::vec2(face.width() - 20.0, 8.0),
+    );
+    Parts {
+        header: face.top() + 13.0,
+        label,
+        tape,
+        info: face.bottom() - 8.0,
+    }
+}
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     if !app.spec.bus.hardware.fitted(Peripheral::Interface1) {
@@ -127,8 +168,10 @@ fn cartridge(app: &mut App, ui: &mut egui::Ui, drive: usize) {
     let face = rect.shrink(5.0);
     painter.rect_filled(face, 3.0, theme::CASE);
 
+    let parts = parts(face);
+
     // The lamp: on while this drive's tape is running.
-    let lamp = egui::pos2(face.left() + 14.0, face.top() + 13.0);
+    let lamp = egui::pos2(face.left() + 14.0, parts.header);
     painter.circle_filled(
         lamp,
         5.0,
@@ -159,10 +202,7 @@ fn cartridge(app: &mut App, ui: &mut egui::Ui, drive: usize) {
 
     if let Some(cartridge) = held {
         // The cartridge's own label, written the way the tape's is.
-        let label = egui::Rect::from_min_size(
-            egui::pos2(face.left() + 10.0, face.top() + 26.0),
-            egui::vec2(face.width() - 20.0, 20.0),
-        );
+        let label = parts.label;
         painter.rect_filled(label, 2.0, theme::CASE_DARK);
         crate::ui::cassette::written_on(
             &painter,
@@ -176,10 +216,7 @@ fn cartridge(app: &mut App, ui: &mut egui::Ui, drive: usize) {
         // The loop of tape: a mark per sector, with the one under the head
         // lit. A cartridge is a loop, so it is drawn as one long strip that
         // wraps rather than as a reel.
-        let loop_rect = egui::Rect::from_min_size(
-            egui::pos2(face.left() + 10.0, label.bottom() + 5.0),
-            egui::vec2(face.width() - 20.0, 8.0),
-        );
+        let loop_rect = parts.tape;
         painter.rect_filled(loop_rect, 1.0, theme::LCD_BG);
         let step = loop_rect.width() / sectors.max(1) as f32;
         for (i, sector) in cartridge.sectors.iter().enumerate() {
@@ -198,7 +235,7 @@ fn cartridge(app: &mut App, ui: &mut egui::Ui, drive: usize) {
         }
 
         painter.text(
-            egui::pos2(face.left() + 10.0, face.bottom() - 8.0),
+            egui::pos2(face.left() + 10.0, parts.info),
             egui::Align2::LEFT_CENTER,
             format!(
                 "{what}{}{}",
@@ -210,7 +247,7 @@ fn cartridge(app: &mut App, ui: &mut egui::Ui, drive: usize) {
         );
         if let Some(file) = file {
             painter.text(
-                egui::pos2(face.right() - 10.0, face.bottom() - 8.0),
+                egui::pos2(face.right() - 10.0, parts.info),
                 egui::Align2::RIGHT_CENTER,
                 file,
                 egui::FontId::proportional(10.0),

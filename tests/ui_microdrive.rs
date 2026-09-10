@@ -319,3 +319,40 @@ fn the_peripherals_stay_on_the_back_when_the_machine_changes() {
     assert_eq!(app.spec.bus.multifaces.len(), 1, "and so is the Multiface");
     assert!(app.spec.bus.hardware.fitted(Peripheral::Interface1));
 }
+
+/// The line saying what is on a cartridge sits under the loop of tape, not
+/// through it.
+///
+/// The drive is a picture, so nothing about it is queryable: what can be
+/// checked is the spacing the drawing uses, which is why it is worked out
+/// apart from the painting. At 74 points tall the block put that line of text
+/// straight through the marks — the text is centred on its baseline, so half
+/// of it was above the line it was meant to be below.
+#[test]
+fn the_line_under_a_cartridge_clears_the_loop_of_tape() {
+    use egui::{pos2, vec2, Rect};
+    use zx_rustrum::ui::microdrivewin::{parts, CARTRIDGE_H, INFO_TEXT};
+
+    // The block as the window allocates it — the height the drawing uses, so
+    // that the height is what is being checked — less the five points of case
+    // around it.
+    let block = Rect::from_min_size(pos2(0.0, 0.0), vec2(520.0, CARTRIDGE_H));
+    let face = block.shrink(5.0);
+    let parts = parts(face);
+
+    let text_top = parts.info - INFO_TEXT / 2.0;
+    assert!(
+        text_top >= parts.tape.bottom(),
+        "the text starts at {text_top} and the tape ends at {}: they overlap by {}",
+        parts.tape.bottom(),
+        parts.tape.bottom() - text_top
+    );
+    assert!(
+        parts.tape.top() >= parts.label.bottom(),
+        "and the tape is under the label, not through it"
+    );
+    assert!(
+        parts.info + INFO_TEXT / 2.0 <= face.bottom(),
+        "and the text is inside the block"
+    );
+}
