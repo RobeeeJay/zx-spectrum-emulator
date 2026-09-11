@@ -58,7 +58,7 @@ the floating bus is sampled at the start of the IORQ cycle and reads back `$FF`
 for the four idle T-states in each group of eight.
 
 **Early and late timing.** Real 48K machines came in two variants, one running
-the display a T-state later relative to the interrupt. **Machine ▸ Late timing**
+the display a T-state later relative to the interrupt. **Late**, beside the machine dropdown on a 48K,
 switches between them; the emulator matches the reference photograph for each.
 
 **Race the beam.** With this on, hovering the picture shows the frame

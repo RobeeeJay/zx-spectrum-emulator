@@ -664,8 +664,8 @@ length of a pulse pair moving, since that is what it times.
 Reading port $FE bit 6 with no tape playing does not give zero: the machine
 hears its own loudspeaker. On an issue 3 board the bit follows bit 4 of the
 last write to $FE; on an issue 2 it follows the MIC bit, bit 3, as well. The
-emulator models both and has the MIC feedback on by default, with a switch
-beside Late timing.
+emulator models both and has the MIC feedback on by default, with a switch —
+**I2** — beside **Late** on a 48K's toolbar.
 
 **Head over Heels does not load without it**, and the way it fails is worth
 knowing because nothing about it looks like a tape problem. Every block of that

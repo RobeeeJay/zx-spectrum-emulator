@@ -268,7 +268,19 @@ pub fn clock_dropdown(mult: &mut f32, base: f64, ui: &mut egui::Ui) {
     // The button carries the clock alone; the list says which is the machine's
     // own and what each of the others is a multiple of.
     let closed = format!("{:.2}MHz", base * *mult as f64 / 1_000_000.0);
-    theme::dropdown(ui, 88.0, closed, |ui| {
+    // As wide as the widest thing it can say, so choosing 28MHz does not push
+    // everything after it along the toolbar. The widest label is laid out as
+    // a real button, unseen, and its width taken: text plus padding comes out
+    // a point and a half short of what egui makes of a button, which is how
+    // the first attempt at this still grew at 14MHz.
+    let widest = ('0'..='9')
+        .map(|d| format!("{d}{d}.{d}{d}MHz  \u{25be}"))
+        .map(|text| {
+            let mut unseen = ui.new_child(egui::UiBuilder::new().invisible());
+            unseen.add(egui::Button::new(text)).rect.width()
+        })
+        .fold(0.0, f32::max);
+    theme::dropdown(ui, widest, closed, |ui| {
         for m in CLOCK_MULTIPLES {
             if ui
                 .selectable_label(
@@ -3359,14 +3371,6 @@ impl App {
             }
 
             theme::divider(ui);
-            theme::group_label(ui, "Speed");
-            // Choosing a speed by hand is choosing not to race.
-            speed_dropdown(&mut self.speed, ui);
-            if self.racing && self.speed != RACE_SPEED {
-                self.racing = false;
-            }
-
-            theme::divider(ui);
             theme::group_label(ui, "Machine");
             self.machine_dropdown(ui);
             if SHOW_CLOCK {
@@ -3375,6 +3379,7 @@ impl App {
                 let before = self.clock_mult;
                 let held = self.turbo_held_because();
                 clock_dropdown(&mut self.clock_mult, base, ui);
+                self.speed_control(ui);
                 if let Some(why) = held {
                     ui.label(
                         egui::RichText::new(format!("at {:.2}MHz — {why}", base / 1e6))
@@ -3389,6 +3394,8 @@ impl App {
                     // at.
                     self.apply_clock();
                 }
+            } else {
+                self.speed_control(ui);
             }
             self.late_timing(ui);
             if ui.button("Reset").clicked() {
@@ -3940,15 +3947,24 @@ impl App {
         self.racing = on;
     }
 
+    /// How fast the machine is run, beside the clock it is run at.
+    fn speed_control(&mut self, ui: &mut egui::Ui) {
+        // Choosing a speed by hand is choosing not to race.
+        speed_dropdown(&mut self.speed, ui);
+        if self.racing && self.speed != RACE_SPEED {
+            self.racing = false;
+        }
+    }
+
     /// The 48K's two timings, which only it has.
     fn late_timing(&mut self, ui: &mut egui::Ui) {
         if self.on_zx81() || self.spec.bus.model != Model::Spectrum48 {
             return;
         }
         let mut late = self.spec.bus.late_timing;
-        if theme::toggle(ui, &mut late, "Late timing")
+        if theme::toggle(ui, &mut late, "Late")
             .on_hover_text(
-                "Later 48K machines run the display one T-state later \
+                "Late timing. Later 48K machines run the display one T-state later \
                  relative to the interrupt. HALT2INT tells them apart.",
             )
             .changed()
@@ -3964,9 +3980,9 @@ impl App {
         // protection that listens for the line to be alive hears the MIC bit
         // on an issue 2 board and nothing on an issue 3 one.
         let mut issue2 = self.spec.bus.issue2;
-        if theme::toggle(ui, &mut issue2, "Issue 2")
+        if theme::toggle(ui, &mut issue2, "I2")
             .on_hover_text(
-                "The EAR input hears the machine's own loudspeaker. An issue 2 \
+                "Issue 2 board. The EAR input hears the machine's own loudspeaker. An issue 2 \
                  board hears the MIC bit as well as the speaker's, which is what \
                  a tape protection listening for a live line expects — Head over \
                  Heels needs it. Switch it off for a strict issue 3.",

@@ -85,7 +85,7 @@ fn the_main_windows_controls_are_all_one_height() {
 
     // The machine row and the video row beneath it: each sits on one line,
     // and every control in both is the same height, whichever line it is on.
-    let machine = heights(&harness, &["File", "▶ Run", "Late timing", "Reset"]);
+    let machine = heights(&harness, &["File", "▶ Run", "Late", "Reset"]);
     let video = heights(
         &harness,
         &["Race the Beam", "Cursor Beam", "Overscan", "Next frame"],
