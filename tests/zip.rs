@@ -182,3 +182,41 @@ fn a_tape_inside_an_archive_loads() {
         "the tape that was in the deck should still be"
     );
 }
+
+/// The tape window's Load… takes a zip as the main window's does. It used to
+/// hand the file straight to the tape reader, which found no tape in a zip and
+/// left the deck empty while the main window's Load, given the same file,
+/// mounted the tape inside.
+#[test]
+fn the_tape_windows_load_takes_a_zip_too() {
+    use zx_rustrum::machine::Spectrum;
+    use zx_rustrum::ui::{tape, App, Roms};
+
+    let mut header = vec![0x00, 0x00];
+    header.extend_from_slice(b"BOUNCE    ");
+    header.extend_from_slice(&[0x1B, 0x00, 0x0A, 0x00, 0x1B, 0x00]);
+    let mut block: Vec<u8> = vec![(header.len() + 1) as u8, 0x00];
+    block.extend_from_slice(&header);
+    block.push(header.iter().fold(0u8, |sum, byte| sum ^ byte));
+
+    let scratch = std::env::temp_dir().join(format!("zxrs-zip-deck-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let path = scratch.join("bounce.zip");
+    std::fs::write(&path, archive(&[("bounce.tap", &block, true)])).unwrap();
+
+    let mut app = App::with_roms(Spectrum::new(), String::new(), Roms::default(), None);
+    tape::load_chosen(&mut app, &path);
+    let loaded = app
+        .spec
+        .bus
+        .tape
+        .as_ref()
+        .map(|t| (t.name.clone(), t.blocks.len()));
+    assert_eq!(
+        loaded,
+        Some(("bounce.tap".to_string(), 1)),
+        "the tape inside the zip is in the deck; status said {:?}",
+        app.status
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}

@@ -96,6 +96,14 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
+/// What Load… does with the file chosen: the same as the main window's Load,
+/// so a zip is unpacked and a ZX81 program goes to the ZX81. Calling the
+/// tape reader directly, as this first did, handed it the zip itself and it
+/// found no tape there.
+pub fn load_chosen(app: &mut App, path: &std::path::Path) {
+    app.load_path(path);
+}
+
 /// What is in the deck: load a tape, put a blank one in to save to, and write a
 /// tape out. These work with the deck empty, which is when they are wanted.
 fn deck(app: &mut App, ui: &mut egui::Ui) {
@@ -110,7 +118,7 @@ fn deck(app: &mut App, ui: &mut egui::Ui) {
             .clicked()
         {
             if let Some(path) = app.pick_file(Some(crate::prefs::FileKind::Tape)) {
-                app.insert_tape(&path);
+                load_chosen(app, &path);
             }
         }
         if ui
