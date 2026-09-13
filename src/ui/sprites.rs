@@ -382,9 +382,7 @@ fn sheet(app: &mut App, ui: &mut egui::Ui) {
             if let Some(addr) = under_pointer {
                 response.clone().on_hover_text(format!("${addr:04X}"));
                 if response.clicked() {
-                    app.dbg.mem_addr = addr;
-                    app.dbg.mem_text = format!("{addr:04X}");
-                    app.show_debugger = true;
+                    app.show_memory_at(addr);
                 }
             }
         });

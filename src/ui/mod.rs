@@ -2755,6 +2755,16 @@ impl App {
         self.dbg.raise = true;
     }
 
+    /// Open the debugger's memory dump at an address and bring the debugger to
+    /// the front: whatever asked wants to read the bytes, and a debugger left
+    /// behind another window is not somewhere they can be read.
+    pub fn show_memory_at(&mut self, addr: u16) {
+        self.dbg.mem_addr = addr;
+        self.dbg.mem_text = format!("{addr:04X}");
+        self.show_debugger = true;
+        self.dbg.raise = true;
+    }
+
     pub fn poke_byte(&mut self, addr: u16, value: u8) {
         match &mut self.zx81 {
             Some(zx) => zx.bus.poke(addr, value),

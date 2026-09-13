@@ -383,3 +383,16 @@ fn a_block_clicked_on_the_screen_is_found_in_memory() {
         "and Show puts the viewer there"
     );
 }
+
+/// Clicking a graphic opens the debugger's memory dump at it and brings the
+/// debugger to the front, rather than opening it behind the Graphics window.
+/// The sheet is painted rather than made of widgets, so this goes through
+/// what the click calls.
+#[test]
+fn a_graphic_clicked_brings_the_debugger_forward() {
+    let mut app = app();
+    app.show_memory_at(0x9000);
+    assert_eq!(app.dbg.mem_addr, 0x9000);
+    assert!(app.show_debugger, "the debugger is open");
+    assert!(app.dbg.raise, "and asked to come to the front");
+}
