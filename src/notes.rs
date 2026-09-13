@@ -254,6 +254,7 @@ impl Notes {
         let mut out = String::from(
             "# ZX-Rustrum notes. One line per address:\n\
              #   ADDR [label] [; comment]\n\
+             # a comment's line breaks are written \\n, and a backslash \\\\\n\
              # and where the routines and the data are:\n\
              #   block CODE|DATA FROM-TO\n",
         );
@@ -271,12 +272,45 @@ impl Notes {
             // was typed until the field is left.
             if !note.comment.trim().is_empty() {
                 let mark = if note.comment_auto { "@" } else { "" };
-                out.push_str(&format!(" ; {mark}{}", note.comment.trim()));
+                out.push_str(&format!(" ; {mark}{}", escape(note.comment.trim())));
             }
             out.push('\n');
         }
         out
     }
+}
+
+/// A comment as the file keeps it: on one line, its line breaks written as
+/// `\n` and a backslash as `\\`, so it reads back whole. Written out as it
+/// stood, the second line of a comment became a line of its own, which the
+/// reader skipped — or, if it began with something like `BEEF`, read as a
+/// note for an address nobody wrote one against.
+fn escape(comment: &str) -> String {
+    comment
+        .replace('\\', "\\\\")
+        .replace('\r', "")
+        .replace('\n', "\\n")
+}
+
+/// And back: `\n` a line break, `\\` a backslash, and any other backslash
+/// left as it is, since the file may have been written by hand.
+fn unescape(comment: &str) -> String {
+    let mut out = String::with_capacity(comment.len());
+    let mut chars = comment.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('\\', Some('n')) => {
+                out.push('\n');
+                chars.next();
+            }
+            ('\\', Some('\\')) => {
+                out.push('\\');
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// The block lines from a notes file, in address order.
@@ -308,7 +342,7 @@ pub fn parse(text: &str) -> BTreeMap<u16, Note> {
         };
         let note = Note {
             label: label.trim_start_matches('@').to_string(),
-            comment: comment.trim_start_matches('@').to_string(),
+            comment: unescape(comment.trim_start_matches('@')),
             label_auto: label.starts_with('@'),
             comment_auto: comment.starts_with('@'),
         };

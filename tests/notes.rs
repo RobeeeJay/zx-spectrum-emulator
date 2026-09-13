@@ -264,3 +264,33 @@ fn a_comment_being_typed_keeps_its_last_space() {
         "set_comment still tidies"
     );
 }
+
+/// A comment of more than one line comes back whole, and the file still has
+/// one line per address. Written as it stood, the second line of a comment
+/// was a line of its own: skipped on reading back, or — beginning with
+/// something like BEEF — read as a note for an address nobody wrote against.
+#[test]
+fn a_comment_of_several_lines_comes_back_whole() {
+    let mut notes = Notes::default();
+    notes.set_comment(0x8000, "first line\nBEEF is the second");
+    notes.set_comment(0x8003, "a path, C:\\games, and a literal \\n");
+    let text = notes.to_text();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
+    assert_eq!(lines.len(), 2, "one line per address: {text}");
+    let back = parse(&text);
+    assert_eq!(back.len(), 2, "no note for $BEEF: {back:?}");
+    assert_eq!(back[&0x8000].comment, "first line\nBEEF is the second");
+    assert_eq!(
+        back[&0x8003].comment,
+        "a path, C:\\games, and a literal \\n"
+    );
+}
+
+/// Written by hand, `\n` in a comment is a line break, and a backslash before
+/// anything else is left alone.
+#[test]
+fn a_hand_written_line_break_is_read_as_one() {
+    let back = parse("8000 ; one\\ntwo\n8001 ; C:\\games\n");
+    assert_eq!(back[&0x8000].comment, "one\ntwo");
+    assert_eq!(back[&0x8001].comment, "C:\\games");
+}
