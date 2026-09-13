@@ -1296,6 +1296,10 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
                                     .frame(egui::Frame::NONE),
                             );
                             if resp.changed() {
+                                app.notes.type_comment(addr, &comment);
+                            }
+                            if resp.lost_focus() {
+                                // Tidied now that it is finished with.
                                 app.notes.set_comment(addr, &comment);
                             }
                             finished_editing |= resp.lost_focus();

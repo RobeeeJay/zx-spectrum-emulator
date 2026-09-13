@@ -238,3 +238,29 @@ fn an_empty_guess_does_not_erase_a_previous_one() {
     assert_eq!(notes.label(0x9000), "decompress_9000");
     assert_eq!(notes.comment(0x9000), "Unpacks compressed data");
 }
+
+/// A comment being typed keeps the space at its end, which is the gap before
+/// the next word; `set_comment` — the tidy version, used when the field is
+/// left and by the MCP server — still trims, and the file never has the
+/// space in it either way.
+#[test]
+fn a_comment_being_typed_keeps_its_last_space() {
+    let mut notes = zx_rustrum::notes::Notes::default();
+    notes.type_comment(0x8000, "wait for ");
+    assert_eq!(
+        notes.comment(0x8000),
+        "wait for ",
+        "the space is kept while typing"
+    );
+    assert!(
+        notes.to_text().contains("8000 ; wait for\n"),
+        "and trimmed in the file: {}",
+        notes.to_text()
+    );
+    notes.set_comment(0x8000, "wait for ");
+    assert_eq!(
+        notes.comment(0x8000),
+        "wait for",
+        "set_comment still tidies"
+    );
+}

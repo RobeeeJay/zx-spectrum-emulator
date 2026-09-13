@@ -131,6 +131,18 @@ impl Notes {
         });
     }
 
+    /// A comment as it is being typed. Only the start is trimmed: a space typed
+    /// at the end is the gap before the next word, and trimming it on every
+    /// keystroke — as `set_comment` does — took it away before the next word
+    /// arrived, so a comment could not be typed with spaces in it at all. It is
+    /// tidied when the field is left and whenever the file is written.
+    pub fn type_comment(&mut self, addr: u16, comment: &str) {
+        self.edit(addr, |note| {
+            note.comment = comment.trim_start().to_string();
+            note.comment_auto = false;
+        });
+    }
+
     /// What AutoDoc worked out. A guess replaces an earlier guess — a later
     /// run may have better code to look at — but never a line the user wrote,
     /// and never puts an empty guess over an existing one.
@@ -255,9 +267,11 @@ impl Notes {
                 let mark = if note.label_auto { "@" } else { "" };
                 out.push_str(&format!(" {mark}{}", note.label));
             }
-            if !note.comment.is_empty() {
+            // Trimmed on the way out, since what is being typed is kept as it
+            // was typed until the field is left.
+            if !note.comment.trim().is_empty() {
                 let mark = if note.comment_auto { "@" } else { "" };
-                out.push_str(&format!(" ; {mark}{}", note.comment));
+                out.push_str(&format!(" ; {mark}{}", note.comment.trim()));
             }
             out.push('\n');
         }
