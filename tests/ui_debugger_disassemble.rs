@@ -43,6 +43,14 @@ fn app_with_program() -> App {
     for (i, b) in PROGRAM.iter().enumerate() {
         app.spec.bus.poke(0x8000 + i as u16, *b);
     }
+    // Just before it, bytes that read as LD HL,$1234 if taken for code. They
+    // never run, so in Disassemble mode the row above $8000 is the byte at
+    // $7FFF; disassembling everything it would be $7FFD — which is what tells
+    // the two ways of stepping back apart. Over the zeros that were here
+    // before, a byte back is a NOP back, and both ways agreed.
+    for (i, b) in [0x21u8, 0x34, 0x12].iter().enumerate() {
+        app.spec.bus.poke(0x7FFD + i as u16, *b);
+    }
     app.spec.cpu.pc = 0x8000;
     app.spec.run(FRAME_T);
     app
@@ -81,6 +89,10 @@ fn disassemble_shows_data_where_nothing_has_run() {
     assert!(shown(&h, "DEFB $41"), "the byte nothing ran is data");
     assert!(!shown(&h, &as_code), "and not {as_code}");
     assert!(!shown(&h, "DEFB $05"), "the LD's operand is part of the LD");
+    assert!(
+        shown(&h, "DEFB $21") && !shown(&h, "LD HL,$1234"),
+        "the bytes before it never ran either, so they are data too"
+    );
 
     // Centred on $8004, the rows above it are the JR and the LD that ran,
     // then a byte at a time back through what has not.
