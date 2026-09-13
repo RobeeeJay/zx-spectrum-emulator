@@ -203,7 +203,26 @@ fn the_hardware_window_says_what_each_peripheral_does() {
         "the switches with nothing behind them are marked"
     );
 
-    // And fitting one from the window fits it on the machine.
+    // And fitting one from the window fits it on the machine. In sections
+    // the list is longer than the window's 720 points, and the SpecDrum,
+    // under Audio, starts out below the bottom of it: it is scrolled to, as
+    // somebody would, before it is clicked.
+    let over = h
+        .get_by_label("Kempston mouse")
+        .accesskit_node()
+        .bounding_box()
+        .expect("the top of the list");
+    h.event(egui::Event::PointerMoved(egui::pos2(
+        over.x0 as f32 + 20.0,
+        over.y0 as f32 + 5.0,
+    )));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -700.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(3);
     h.get_by_label("Cheetah SpecDrum").click();
     h.run_steps(2);
     assert!(h.state().spec.bus.hardware.fitted(Peripheral::SpecDrum));

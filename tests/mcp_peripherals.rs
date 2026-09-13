@@ -309,3 +309,29 @@ fn the_mouse_tool_queues_steps_for_an_amx_mouse() {
     assert_eq!(amx.buttons, 0x7F, "left held, bit 7: {out}");
     assert!(out.contains("AMX") && out.contains("(3, -2)"), "{out}");
 }
+
+/// The hardware list is in the same sections as the window, and fitting the
+/// DK'Tronics plugs the stick into its Kempston socket.
+#[test]
+fn the_hardware_list_is_in_sections() {
+    let mut session = Session::new();
+    let out = call(&mut session, "hardware", []).expect("a list");
+    let at = |heading: &str| {
+        out.find(heading)
+            .unwrap_or_else(|| panic!("{heading} in {out}"))
+    };
+    assert!(
+        at("Mice:") < at("Multiface:") && at("Joysticks:") < at("Drives:"),
+        "{out}"
+    );
+    call(
+        &mut session,
+        "fit",
+        [("what", Json::str("dktronics_joystick"))],
+    )
+    .expect("fitted");
+    assert_eq!(
+        session.spec.bus.joystick.kind,
+        zx_rustrum::joystick::Kind::DkTronicsKempston
+    );
+}

@@ -143,3 +143,58 @@ fn every_interface_has_a_name_and_a_key() {
     assert_eq!(Kind::from_key("kempston"), Some(Kind::Kempston));
     assert_eq!(Kind::from_key("nonesuch"), None);
 }
+
+/// DK'Tronics' keyed socket is Interface 2's first with up and down the other
+/// way round: its manual's own test prints 6, 7, 8, 9, 0 for left, right, up,
+/// down and fire, where Sinclair's gives up 9 and down 8.
+#[test]
+fn dktronics_port_1_has_up_and_down_the_other_way_round() {
+    let held = |kind: Kind, way: Way| {
+        let mut stick = Joystick::new();
+        stick.kind = kind;
+        stick.set(way, true);
+        stick.matrix()
+    };
+    // Row 4 is 0 9 8 7 6 from bit 0 up.
+    for (way, bit) in [
+        (Way::Left, 4),
+        (Way::Right, 3),
+        (Way::Up, 2),
+        (Way::Down, 1),
+        (Way::Fire, 0),
+    ] {
+        let rows = held(Kind::DkTronicsKeys, way);
+        assert_eq!(
+            rows[4],
+            !(1u8 << bit),
+            "DK'Tronics {}: {:02X?}",
+            way.name(),
+            rows
+        );
+    }
+    assert_eq!(
+        held(Kind::Sinclair1, Way::Up)[4],
+        !(1u8 << 1),
+        "Sinclair's up is 9"
+    );
+    assert_eq!(
+        held(Kind::DkTronicsKeys, Way::Up)[4],
+        !(1u8 << 2),
+        "DK'Tronics' is 8"
+    );
+}
+
+/// Its other socket is Kempston's IN 31, and it pulls no keys.
+#[test]
+fn dktronics_port_2_is_kempstons_port() {
+    let mut stick = Joystick::new();
+    stick.kind = Kind::DkTronicsKempston;
+    stick.set(Way::Fire, true);
+    stick.set(Way::Up, true);
+    assert_eq!(
+        stick.io_read(0x001F),
+        Some(0x18),
+        "fire and up, as Kempston"
+    );
+    assert_eq!(stick.matrix(), [0xFF; 8], "and no keys");
+}

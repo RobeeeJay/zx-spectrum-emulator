@@ -426,8 +426,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         if kind != app.spec.bus.joystick.kind {
             // Whatever was over is let go: a direction held on an interface
             // nobody is reading any more would be held for ever.
-            app.spec.bus.joystick.release();
-            app.spec.bus.joystick.kind = kind;
+            app.spec.bus.set_joystick(kind);
         }
     });
     ui.label(

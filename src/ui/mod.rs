@@ -2203,7 +2203,10 @@ impl App {
         }
         if let Some(kind) = self.prefs.joystick.clone() {
             if let Some(kind) = crate::joystick::Kind::from_key(&kind) {
-                self.spec.bus.joystick.kind = kind;
+                // Through the same door as the windows, so a file from before
+                // the interfaces were in the Hardware window fits the one its
+                // stick needs.
+                self.spec.bus.set_joystick(kind);
             }
         }
         if let Some(map) = self.prefs.joystick_map.clone() {

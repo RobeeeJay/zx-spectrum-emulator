@@ -34,7 +34,19 @@ pub fn hardware(session: &mut Session, _args: &Json) -> Result<String, String> {
         "What can be plugged in. `fit` puts one on or takes it off; each one that does \
          something needs its own ROM in the directory the machine's ROMs came from.\n\n",
     );
-    for what in Peripheral::ALL {
+    for (what, first) in crate::hardware::Section::ALL
+        .into_iter()
+        .flat_map(|section| {
+            Peripheral::ALL
+                .into_iter()
+                .filter(move |p| p.section() == section)
+                .enumerate()
+                .map(|(i, p)| (p, i == 0))
+        })
+    {
+        if first {
+            out.push_str(&format!("{}:\n", what.section().name()));
+        }
         let fitted = session.spec.bus.hardware.fitted(what);
         let state = match what.emulated() {
             Emulated::Yes => "emulated".to_string(),
@@ -42,7 +54,7 @@ pub fn hardware(session: &mut Session, _args: &Json) -> Result<String, String> {
             Emulated::No(why) => format!("not emulated — {why}"),
         };
         out.push_str(&format!(
-            "{} [{}] — {}. {state}\n",
+            "  {} [{}] — {}. {state}\n",
             what.name(),
             if fitted { "fitted" } else { "not fitted" },
             what.what(),
@@ -156,6 +168,23 @@ pub fn fit(session: &mut Session, args: &Json) -> Result<String, String> {
         }
         // Both printers are the same device to the machine, on the same port,
         // so fitting one takes the other off.
+        // One stick, so one interface to plug it into.
+        Peripheral::KempstonJoystick if on => session
+            .spec
+            .bus
+            .set_joystick(crate::joystick::Kind::Kempston),
+        Peripheral::DkTronicsJoystick if on => {
+            session
+                .spec
+                .bus
+                .set_joystick(crate::joystick::Kind::DkTronicsKempston);
+            out.push_str(" The stick is in its Kempston socket, port No. 2.");
+        }
+        Peripheral::KempstonJoystick | Peripheral::DkTronicsJoystick => {
+            if session.spec.bus.joystick.kind.interface() == Some(what) {
+                session.spec.bus.set_joystick(crate::joystick::Kind::None);
+            }
+        }
         // The two mice both answer at $DF, so there is room for one.
         Peripheral::KempstonMouse | Peripheral::AmxMouse if on => {
             let other = if what == Peripheral::KempstonMouse {

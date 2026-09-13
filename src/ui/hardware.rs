@@ -7,8 +7,9 @@
 
 use eframe::egui;
 
-use crate::hardware::{Emulated, Peripheral};
+use crate::hardware::{Emulated, Peripheral, Section};
 use crate::if1::{If1, MAX_DRIVES};
+use crate::joystick::Kind;
 use crate::multiface::{Model as MfModel, Multiface};
 use crate::printer::{Paper, ZxPrinter};
 use crate::sp0256::Sp0256;
@@ -46,6 +47,18 @@ impl App {
             // The sound add-ons that are emulated bring their own chip.
             // Both printers are the same device to the machine, on the same
             // port, so fitting one takes the other off.
+            // One stick, so one interface to plug it into. The DK'Tronics
+            // comes with the stick in its Kempston socket, which is what most
+            // games want.
+            Peripheral::KempstonJoystick if yes => self.spec.bus.set_joystick(Kind::Kempston),
+            Peripheral::DkTronicsJoystick if yes => {
+                self.spec.bus.set_joystick(Kind::DkTronicsKempston)
+            }
+            Peripheral::KempstonJoystick | Peripheral::DkTronicsJoystick => {
+                if self.spec.bus.joystick.kind.interface() == Some(what) {
+                    self.spec.bus.set_joystick(Kind::None);
+                }
+            }
             // The two mice both answer at $DF, so there is room for one.
             Peripheral::KempstonMouse | Peripheral::AmxMouse if yes => {
                 let other = if what == Peripheral::KempstonMouse {
@@ -232,8 +245,16 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for what in Peripheral::ALL {
-                peripheral(app, ui, what);
+            for section in Section::ALL {
+                theme::group_label(ui, section.name());
+                ui.add_space(2.0);
+                for what in Peripheral::ALL
+                    .into_iter()
+                    .filter(|p| p.section() == section)
+                {
+                    peripheral(app, ui, what);
+                    ui.add_space(6.0);
+                }
                 ui.add_space(6.0);
             }
         });

@@ -2359,6 +2359,25 @@ impl Spectrum {
 }
 
 impl SpectrumBus {
+    /// Plug the stick in. There is one stick, so one joystick interface at a
+    /// time: a choice that needs one fits it and takes the other off, and a
+    /// key-wired choice — Interface 2, a cursor interface — takes both off.
+    /// The Hardware window, the Input window, the preferences and the MCP
+    /// server all come through here, so the two windows cannot disagree.
+    pub fn set_joystick(&mut self, kind: crate::joystick::Kind) {
+        use crate::hardware::Peripheral;
+        let wanted = kind.interface();
+        for interface in [Peripheral::KempstonJoystick, Peripheral::DkTronicsJoystick] {
+            self.hardware.fit(interface, wanted == Some(interface));
+        }
+        if kind != self.joystick.kind {
+            // Whatever was over is let go: a direction held on an interface
+            // nobody is reading any more would be held for ever.
+            self.joystick.release();
+        }
+        self.joystick.kind = kind;
+    }
+
     /// What an IN gives back, before the recording is told about it.
     fn io_read_uncaptured(&mut self, port: u16) -> u8 {
         let sampled = self.contend_io(port);

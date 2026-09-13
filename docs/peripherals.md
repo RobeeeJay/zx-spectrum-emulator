@@ -294,6 +294,26 @@ port with A7 low is the ULA's too. The AMX answers ahead of a Kempston
 joystick, which would share $1F; and it and the Kempston mouse both answer at
 $DF, so fitting one takes the other off.
 
+## Joystick interfaces
+
+The Hardware window lists two of the joystick interfaces, under Joysticks; the
+Input window has the rest, which are wired to keys and have nothing to fit
+(`src/joystick.rs` has all of them). There is one stick, so there is one
+interface: fitting one takes the other off, and choosing a key-wired one in the
+Input window takes both off — `SpectrumBus::set_joystick` is the one way in.
+
+**Kempston**: a port, IN 31, decoded on A5, A6 and A7 low, giving a bit for
+each direction and fire, set while the stick is over. Fuse's masks.
+
+**DK'Tronics**: a box with two sockets and the stick in one of them, chosen in
+the Input window. Its own manual calls the Kempston socket port No. 2 and the
+keyed one port No. 1, and its test for port No. 1 prints 6, 7, 8, 9 and 0 for
+left, right, up, down and fire. Interface 2's first stick has up on 9 and down
+on 8, so DK'Tronics has the two the other way round; Spectrum Computing
+records the same swap as a known error. The manual does not say how IN 31 is
+decoded, so it is decoded as Kempston's. Fitting it puts the stick in the
+Kempston socket, which is what most games ask for.
+
 ## The ZX Printer and the Alphacom 32
 
 `src/printer.rs` is Fuse's `printer.c` — itself Ian Collier's from xz80 —

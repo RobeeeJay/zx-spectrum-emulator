@@ -13,6 +13,39 @@
 //! ROM that cannot be shipped, and in µSpeech's case a speech chip that has to
 //! be synthesised rather than played back.
 
+/// The parts the Hardware window is in, in the order it lists them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Section {
+    Mice,
+    Multiface,
+    Printers,
+    Audio,
+    Joysticks,
+    Drives,
+}
+
+impl Section {
+    pub const ALL: [Section; 6] = [
+        Section::Mice,
+        Section::Multiface,
+        Section::Printers,
+        Section::Audio,
+        Section::Joysticks,
+        Section::Drives,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Section::Mice => "Mice",
+            Section::Multiface => "Multiface",
+            Section::Printers => "Printers",
+            Section::Audio => "Audio",
+            Section::Joysticks => "Joysticks",
+            Section::Drives => "Drives",
+        }
+    }
+}
+
 /// Everything that can be plugged in.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Peripheral {
@@ -28,10 +61,12 @@ pub enum Peripheral {
     ZxPrinter,
     Alphacom32,
     AmxMouse,
+    KempstonJoystick,
+    DkTronicsJoystick,
 }
 
 impl Peripheral {
-    pub const ALL: [Peripheral; 12] = [
+    pub const ALL: [Peripheral; 14] = [
         Peripheral::Interface1,
         Peripheral::Uspeech,
         Peripheral::Fuller,
@@ -44,6 +79,8 @@ impl Peripheral {
         Peripheral::ZxPrinter,
         Peripheral::Alphacom32,
         Peripheral::AmxMouse,
+        Peripheral::KempstonJoystick,
+        Peripheral::DkTronicsJoystick,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -60,6 +97,8 @@ impl Peripheral {
             Peripheral::ZxPrinter => "ZX Printer",
             Peripheral::Alphacom32 => "Alphacom 32",
             Peripheral::AmxMouse => "AMX mouse",
+            Peripheral::KempstonJoystick => "Kempston Joystick Interface",
+            Peripheral::DkTronicsJoystick => "DK'Tronics Joystick Interface",
         }
     }
 
@@ -78,11 +117,30 @@ impl Peripheral {
             Peripheral::ZxPrinter => "zx_printer",
             Peripheral::Alphacom32 => "alphacom32",
             Peripheral::AmxMouse => "amx_mouse",
+            Peripheral::KempstonJoystick => "kempston_joystick",
+            Peripheral::DkTronicsJoystick => "dktronics_joystick",
         }
     }
 
     pub fn from_key(key: &str) -> Option<Peripheral> {
         Peripheral::ALL.into_iter().find(|p| p.key() == key)
+    }
+
+    /// Which part of the Hardware window it is listed in.
+    pub fn section(&self) -> Section {
+        match self {
+            Peripheral::KempstonMouse | Peripheral::AmxMouse => Section::Mice,
+            Peripheral::MultifaceOne | Peripheral::Multiface128 | Peripheral::Multiface3 => {
+                Section::Multiface
+            }
+            Peripheral::ZxPrinter | Peripheral::Alphacom32 => Section::Printers,
+            Peripheral::Uspeech
+            | Peripheral::Fuller
+            | Peripheral::SpecDrum
+            | Peripheral::MusicMachine => Section::Audio,
+            Peripheral::KempstonJoystick | Peripheral::DkTronicsJoystick => Section::Joysticks,
+            Peripheral::Interface1 => Section::Drives,
+        }
     }
 
     /// What it does, in a line.
@@ -119,6 +177,14 @@ impl Peripheral {
                 "Advanced Memory Systems' mouse: a Z80 PIO that interrupts the machine for \
                  every step it moves, and three buttons"
             }
+            Peripheral::KempstonJoystick => {
+                "One socket on a port: IN 31 gives a bit for each direction and fire. The \
+                 one most games ask for"
+            }
+            Peripheral::DkTronicsJoystick => {
+                "Two sockets: one on the Kempston port, one wired to keys 6 to 0 as \
+                 Interface 2's first. The stick is in one of them, chosen in the Input window"
+            }
         }
     }
 
@@ -135,7 +201,9 @@ impl Peripheral {
             | Peripheral::KempstonMouse
             | Peripheral::ZxPrinter
             | Peripheral::Alphacom32
-            | Peripheral::AmxMouse => Emulated::Yes,
+            | Peripheral::AmxMouse
+            | Peripheral::KempstonJoystick
+            | Peripheral::DkTronicsJoystick => Emulated::Yes,
             // Two ROMs: Currah's, which is the interface, and the speech
             // chip's own, which is where the allophones live.
             Peripheral::Uspeech => Emulated::NeedsRom(

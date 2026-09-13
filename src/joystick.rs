@@ -13,6 +13,13 @@
 //!   cursor keys are on: 5, 6, 7, 8 and 0.
 //! * **Fuller** put it on a port like Kempston, at $7F, but the other way up:
 //!   its bits are clear while the stick is over.
+//! * **DK'Tronics** made a box with two sockets and the stick in one of them:
+//!   port No. 2 is Kempston's IN 31, and port No. 1 is wired to 6, 7, 8, 9 and
+//!   0 like Interface 2's first — except that its own manual's test prints 6,
+//!   7, 8, 9, 0 for left, right, up, down and fire, where Sinclair's has up on
+//!   9 and down on 8. Spectrum Computing records the same swap as a known
+//!   error. The manual does not say how IN 31 is decoded, so it is decoded as
+//!   Kempston's.
 //!
 //! Which of those a game wants is not something the game says, which is why an
 //! emulator has to offer all of them and let somebody choose.
@@ -65,16 +72,20 @@ pub enum Kind {
     Sinclair2,
     Cursor,
     Fuller,
+    DkTronicsKeys,
+    DkTronicsKempston,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 8] = [
         Kind::None,
         Kind::Kempston,
         Kind::Sinclair1,
         Kind::Sinclair2,
         Kind::Cursor,
         Kind::Fuller,
+        Kind::DkTronicsKeys,
+        Kind::DkTronicsKempston,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -85,6 +96,8 @@ impl Kind {
             Kind::Sinclair2 => "Sinclair 2",
             Kind::Cursor => "Cursor",
             Kind::Fuller => "Fuller",
+            Kind::DkTronicsKeys => "DK'Tronics port 1",
+            Kind::DkTronicsKempston => "DK'Tronics port 2",
         }
     }
 
@@ -97,6 +110,8 @@ impl Kind {
             Kind::Sinclair2 => "sinclair2",
             Kind::Cursor => "cursor",
             Kind::Fuller => "fuller",
+            Kind::DkTronicsKeys => "dktronics1",
+            Kind::DkTronicsKempston => "dktronics2",
         }
     }
 
@@ -118,6 +133,23 @@ impl Kind {
                 "AGF and Protek: the keys the ROM's own cursors are on — 5 6 7 8 and 0."
             }
             Kind::Fuller => "A port at $7F, like Kempston but with its bits the other way up.",
+            Kind::DkTronicsKeys => {
+                "DK'Tronics' keyed socket: 6 7 for left and right, then 8 for up and 9 for \
+                 down — the other way round from Interface 2 — and 0 to fire."
+            }
+            Kind::DkTronicsKempston => "DK'Tronics' other socket: IN 31, as Kempston.",
+        }
+    }
+
+    /// The interface in the Hardware window that a stick plugged in this way
+    /// needs, for the ones that are there to be fitted.
+    pub fn interface(&self) -> Option<crate::hardware::Peripheral> {
+        match self {
+            Kind::Kempston => Some(crate::hardware::Peripheral::KempstonJoystick),
+            Kind::DkTronicsKeys | Kind::DkTronicsKempston => {
+                Some(crate::hardware::Peripheral::DkTronicsJoystick)
+            }
+            _ => None,
         }
     }
 
@@ -131,6 +163,8 @@ impl Kind {
             Kind::Sinclair2 => Some([(3, 0), (3, 1), (3, 3), (3, 2), (3, 4)]),
             // 5 8 7 6 0
             Kind::Cursor => Some([(3, 4), (4, 2), (4, 3), (4, 4), (4, 0)]),
+            // 6 7 8 9 0: up and down the other way round from Sinclair's
+            Kind::DkTronicsKeys => Some([(4, 4), (4, 3), (4, 2), (4, 1), (4, 0)]),
             _ => None,
         }
     }
@@ -179,7 +213,7 @@ impl Joystick {
     /// answers neither, and the floating bus has the port instead.
     pub fn io_read(&self, port: u16) -> Option<u8> {
         match self.kind {
-            Kind::Kempston if port & 0x00E0 == 0x0000 => {
+            Kind::Kempston | Kind::DkTronicsKempston if port & 0x00E0 == 0x0000 => {
                 let mut value = 0x00;
                 for way in Way::ALL {
                     if self.is_down(way) {

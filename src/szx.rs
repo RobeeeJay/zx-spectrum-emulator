@@ -261,7 +261,7 @@ fn read_joy(spec: &mut Spectrum, d: &[u8]) {
         return;
     }
     // Only the first stick: this emulator has one.
-    spec.bus.joystick.kind = joystick_of(d[4]);
+    spec.bus.set_joystick(joystick_of(d[4]));
 }
 
 /// The joystick ids SZX uses, which are not the order anything else keeps.
@@ -285,6 +285,12 @@ fn joystick_id(kind: crate::joystick::Kind) -> u8 {
         Kind::Sinclair1 => 2,
         Kind::Sinclair2 => 3,
         Kind::Fuller => 6,
+        // The format has no DK'Tronics, so each socket goes as what it
+        // behaves like: port No. 2 is Kempston's IN 31, and port No. 1 is
+        // Interface 2's first — which loses its up and down being the other
+        // way round, since there is nowhere in the format to say so.
+        Kind::DkTronicsKempston => 0,
+        Kind::DkTronicsKeys => 2,
         // 5 is "none" in the format's own numbering.
         Kind::None => 5,
     }

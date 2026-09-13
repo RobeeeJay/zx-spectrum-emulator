@@ -509,6 +509,15 @@ in, a mouse button while its mouse is fitted. Taking every bound key away
 whatever was plugged in is how Space, the stick's fire by default, stopped
 typing a space on a machine with no stick at all.
 
+**The Hardware window is in sections, and a stick has one interface.** Mice,
+Multiface, Printers, Audio, Joysticks and Drives, in that order; the MCP
+`hardware` list uses the same. The Kempston and DK'Tronics joystick interfaces
+are entries there as well as choices in the Input window, and both windows go
+through `SpectrumBus::set_joystick`: there is one stick, so fitting one
+interface takes the other off, and choosing a key-wired interface in the Input
+window takes both off. A preferences file from before this says only the
+stick's kind, and loading it fits the interface that kind needs.
+
 **Every window's keyboard is the machine's.** Each emulator window is a window
 of its own to the window system, with its own keyboard, and the one clicked
 last has it. What each window other than the main one is holding down is
