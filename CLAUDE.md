@@ -465,6 +465,17 @@ on its own oscillator, so it lives with the mixer and is clocked in the
 machine's T-states. Checked against a recording of real hardware: the steady
 sounds correlate at 0.94-0.98 with their formants inside a hundred hertz.
 
+**Finding a graphic looks for one column of it, every way it could be kept.**
+The Graphics window's Find takes the eight bytes of the 8x8 block clicked and
+looks for them as eight bytes in a row and as every 2nd to 64th byte, each as
+is, mirrored and inverted (`src/gfxfind.rs`): one column of a sprite is all a
+block can be, and how far apart its rows are is the sprite's width, or half
+it with a mask beside each byte. The viewer gained a row-by-row layout and a
+mirror to show what it finds. A block of one repeated byte is refused rather
+than found everywhere. Not found: a sprite drawn at a pixel position that is
+not a multiple of eight, which straddles two cells; one stored upside down;
+and anything in a 128K bank not paged in.
+
 **The Kempston mouse takes the pointer when the screen is clicked.** Until
 then the pointer is the desk's and the mouse sees nothing; after it, the
 pointer is hidden and held — locked on macOS, confined elsewhere, since each

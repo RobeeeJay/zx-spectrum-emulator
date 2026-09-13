@@ -274,3 +274,112 @@ fn skipped_bytes_are_left_out_of_the_picture() {
     );
     assert_eq!(harness.state().sprites.stride(), 18);
 }
+
+/// Kept a row of pixels at a time, a graphic's rows are its width apart —
+/// plus whatever is kept beside each row — and a cell across is a byte along.
+#[test]
+fn a_graphic_kept_in_rows_is_read_a_row_of_pixels_at_a_time() {
+    use zx_rustrum::ui::sprites::Layout;
+    let view = SpriteView {
+        layout: Layout::Rows,
+        cells_across: 3,
+        cells_down: 2,
+        skip_after_row: 1,
+        ..Default::default()
+    };
+    assert_eq!(view.byte_of(0x9000, 0, 1, 2), 0x9000 + 2 * 4 + 1);
+    assert_eq!(
+        view.byte_of(0x9000, 1, 0, 0),
+        0x9000 + 8 * 4,
+        "the second row of cells"
+    );
+    assert_eq!(view.stride(), 4 * 16, "four bytes a row, sixteen rows");
+}
+
+/// Find pauses the machine and waits for a block of the screen.
+#[test]
+fn find_pauses_the_machine_and_waits_for_a_block() {
+    let mut app = app();
+    app.running = true;
+    app.show_sprites = true;
+    let mut h = Harness::builder()
+        .with_size([1500.0, 1200.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(2);
+    h.get_by_label("Find…").click();
+    h.run_steps(2);
+    assert!(!h.state().running, "the machine is paused");
+    assert!(h.state().gfx_picking, "and waiting for a block");
+
+    h.event(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert!(!h.state().gfx_picking, "Esc gives up");
+}
+
+/// A block clicked on the screen is looked for in memory, found where it was
+/// put, and Show puts the viewer there.
+#[test]
+fn a_block_clicked_on_the_screen_is_found_in_memory() {
+    const BLOCK: [u8; 8] = [0x18, 0x3C, 0x7E, 0xDB, 0xFF, 0x24, 0x5A, 0xC1];
+    let mut app = app();
+    // The whole screen shows the block, so whichever cell the click lands
+    // on, it is the block that is picked.
+    for y in 0..192u16 {
+        for col in 0..32u16 {
+            let at = zx_rustrum::machine::screen_bitmap_addr(y, col);
+            app.spec.bus.poke(at, BLOCK[(y % 8) as usize]);
+        }
+    }
+    for (i, b) in BLOCK.iter().enumerate() {
+        app.spec.bus.poke(0x9000 + i as u16, *b);
+    }
+    app.start_graphics_find();
+    let mut h = Harness::builder()
+        .with_size([1500.0, 1200.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(2);
+    let centre = egui::pos2(750.0, 600.0);
+    h.event(egui::Event::PointerMoved(centre));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: centre,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+
+    let picked = h.state().gfx_found.clone().expect("a block was picked");
+    assert!(!h.state().gfx_picking, "and the picking is over");
+    assert_eq!(picked.pattern, BLOCK, "the block's own eight bytes");
+    let search = picked.result.expect("found");
+    assert!(
+        search
+            .matches
+            .iter()
+            .any(|m| m.addr == 0x9000 && m.pitch == 1),
+        "at $9000, as a character: {:?}",
+        search.matches
+    );
+    assert!(h.state().show_sprites, "the Graphics window is brought up");
+
+    h.get_all_by_label("Show")
+        .next()
+        .expect("a Show button")
+        .click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().sprites.addr,
+        0x9000,
+        "and Show puts the viewer there"
+    );
+}

@@ -498,6 +498,11 @@ pub struct App {
     pub mouse_captured: bool,
     /// What is being looked for in the Keyboard window.
     pub key_search: String,
+    /// Waiting for a block of the screen to be clicked, for the Graphics
+    /// window's Find.
+    pub gfx_picking: bool,
+    /// What the last Find looked for and turned up.
+    pub gfx_found: Option<crate::gfxfind::Picked>,
     /// The direction of the DK'Tronics Programmable being given a key in the
     /// Input window.
     pub dkprog_picking: Option<crate::joystick::Way>,
@@ -683,6 +688,8 @@ impl App {
             mouse_rest: egui::Vec2::ZERO,
             mouse_captured: false,
             key_search: String::new(),
+            gfx_picking: false,
+            gfx_found: None,
             dkprog_picking: None,
             host_buttons: [false; 3],
             window_keys_next: HeldKeys::default(),
@@ -1237,6 +1244,82 @@ impl App {
         held.shift |= modifiers.shift;
         held.symbol |= modifiers.alt || modifiers.ctrl;
         held.pressed.extend(pressed);
+    }
+
+    /// The Graphics window's Find: stop the machine, so what is on the screen
+    /// stays there, and wait for a block of it to be clicked.
+    pub fn start_graphics_find(&mut self) {
+        self.running = false;
+        self.gfx_picking = true;
+        self.set_status(
+            "Click an 8x8 block on the screen to look for it in memory; Esc to give up".into(),
+            false,
+        );
+    }
+
+    /// While a Find is waiting: ring the block under the pointer, and on a
+    /// click take its eight bytes from the display file and look for them.
+    fn pick_graphics_block(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        picture: egui::Rect,
+        painter: &egui::Painter,
+    ) {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.gfx_picking = false;
+            self.set_status("No block picked".into(), false);
+            return;
+        }
+        let view = self.view();
+        let scale = self.scale;
+        let cell_at = |p: egui::Pos2| -> Option<(u16, u16)> {
+            let x = ((p.x - picture.left()) / scale) as i32 - view.border_x as i32;
+            let y = ((p.y - picture.top()) / scale) as i32 - view.border_top as i32;
+            ((0..256).contains(&x) && (0..192).contains(&y))
+                .then_some(((x / 8) as u16, (y / 8) as u16))
+        };
+        let Some((col, row)) = response.hover_pos().and_then(cell_at) else {
+            return;
+        };
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        let corner = picture.min
+            + egui::vec2(
+                (view.border_x as f32 + col as f32 * 8.0) * scale,
+                (view.border_top as f32 + row as f32 * 8.0) * scale,
+            );
+        painter.rect_stroke(
+            egui::Rect::from_min_size(corner, egui::vec2(8.0 * scale, 8.0 * scale)),
+            0.0,
+            egui::Stroke::new(2.0, theme::YELLOW),
+            egui::StrokeKind::Outside,
+        );
+        if !response.clicked() {
+            return;
+        }
+        let pattern: [u8; 8] = std::array::from_fn(|i| {
+            self.peek(crate::machine::screen_bitmap_addr(row * 8 + i as u16, col))
+        });
+        self.gfx_picking = false;
+        let result = crate::gfxfind::search(&|a| self.peek(a), pattern);
+        let said = match &result {
+            Ok(s) if s.matches.is_empty() => "The block is nowhere else in memory".to_string(),
+            Ok(s) => format!(
+                "Found the block {}{} time{} in memory",
+                if s.more { "more than " } else { "" },
+                s.matches.len(),
+                if s.matches.len() == 1 { "" } else { "s" }
+            ),
+            Err(why) => why.clone(),
+        };
+        self.set_status(said, result.is_err());
+        self.gfx_found = Some(crate::gfxfind::Picked {
+            cell: (col, row),
+            pattern,
+            result,
+        });
+        self.show_sprites = true;
+        self.sprites.raise = true;
     }
 
     /// Whether either mouse is plugged in.
@@ -4484,10 +4567,16 @@ impl App {
                 // Not with a Kempston mouse fitted: then a click over the
                 // picture is the mouse's button, and the machine has it.
                 let mouse = self.mouse_fitted();
-                if mouse {
+                // Picking a block for the Graphics window's Find has the pointer
+                // to itself: the click is the pick, not a mouse button or the
+                // debugger's "which byte is this?".
+                let picking = self.gfx_picking;
+                if picking {
+                    self.pick_graphics_block(ui, &response, picture, &painter);
+                } else if mouse {
                     self.feed_mouse(ui, &response);
                 }
-                if response.clicked() && !mouse {
+                if response.clicked() && !mouse && !picking {
                     if let Some(at) = response.interact_pointer_pos() {
                         if picture.contains(at) {
                             let px = ((at.x - picture.left()) / self.scale) as usize;

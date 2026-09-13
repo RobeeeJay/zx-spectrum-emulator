@@ -594,7 +594,15 @@ The **Keyboard** window is the machine's keyboard, pressable and lit by the
 real one. A box at its top right finds words on the keys — `print`, `merge`,
 `cat`, `not`, `beep` — and rings the key each is on in yellow and the shifts it
 takes in cyan, with a line saying how to type it: "BEEP: extended mode, then
-SYMBOL SHIFT with Z". Commas look for several at once. A **Kempston mouse** or an **AMX mouse** — one or the
+SYMBOL SHIFT with Z". Commas look for several at once.
+
+The **Graphics** window reads memory as pictures, in cells (eight bytes a
+character, as the font is kept) or in rows (a row of pixels at a time, as most
+games keep their sprites), mirrored or inverted. **Find…** pauses the machine
+and rings the 8×8 block under the pointer on the main window; clicking one
+looks for its eight bytes everywhere in the 64K the machine can see — as a
+character, as a column of a sprite up to 64 bytes a row (32 with a mask beside
+each byte), mirrored and inverted — and **Show** puts any find in the viewer. A **Kempston mouse** or an **AMX mouse** — one or the
 other, since both answer at $DF — fitted in the Hardware window, takes the
 host's mouse when the screen is clicked: the pointer is
 hidden and held, and its movement and both buttons go to the machine, in the

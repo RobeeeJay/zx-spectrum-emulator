@@ -6,6 +6,12 @@
 //! the one thing this asks for. Get the width right and a sheet of graphics
 //! appears; get it wrong and it shears, which is itself the clue.
 //!
+//! Graphics are kept two ways. In cells — eight bytes a character, cells one
+//! after another — which is how the ROM keeps its font; or in rows — each row
+//! of pixels as many bytes as the sprite is wide, one row after another —
+//! which is how most games keep their sprites. The Find button picks a block
+//! off the screen and looks for it both ways (`crate::gfxfind`).
+//!
 //! Nor is the data always packed. A format may carry a mask byte, an attribute
 //! or a byte of padding after each row of cells, which shears the picture in
 //! the same way and is cured by stepping over them.
@@ -14,8 +20,20 @@ use egui::{Color32, RichText};
 
 use crate::ui::{theme, App};
 
+/// How a graphic's bytes are laid out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Layout {
+    /// Eight bytes a character cell, cells one after another.
+    Cells,
+    /// A row of pixels at a time, as many bytes as the graphic is wide.
+    Rows,
+}
+
 /// How the memory is being read as pictures.
 pub struct SpriteView {
+    pub layout: Layout,
+    /// Draw each byte the other way round, for a sprite kept facing left.
+    pub mirrored: bool,
     /// Where the sheet starts.
     pub addr: u16,
     /// The address box, so it can be typed into without jumping about.
@@ -46,6 +64,8 @@ pub struct SpriteView {
 impl Default for SpriteView {
     fn default() -> Self {
         SpriteView {
+            layout: Layout::Cells,
+            mirrored: false,
             addr: 0x8000,
             addr_text: "8000".into(),
             cells_across: 2,
@@ -64,7 +84,14 @@ impl SpriteView {
     /// Bytes in one graphic, the skipped ones included: the next graphic
     /// starts after the padding of the last row, not before it.
     pub fn stride(&self) -> u16 {
-        ((self.cells_across * 8) as u16 + self.skip_after_row) * self.cells_down as u16
+        match self.layout {
+            Layout::Cells => {
+                ((self.cells_across * 8) as u16 + self.skip_after_row) * self.cells_down as u16
+            }
+            Layout::Rows => {
+                (self.cells_across as u16 + self.skip_after_row) * (self.cells_down * 8) as u16
+            }
+        }
     }
 
     /// Bytes in one row of cells, before whatever is skipped after it.
@@ -76,14 +103,51 @@ impl SpriteView {
     /// graphic. Cells are stored one after another within a row of them, eight
     /// bytes each, and whatever the format keeps between rows is stepped over.
     pub fn byte_of(&self, at: u16, cell_y: usize, cell_x: usize, row: usize) -> u16 {
-        let row_start =
-            at.wrapping_add((self.row_bytes() + self.skip_after_row).wrapping_mul(cell_y as u16));
-        row_start.wrapping_add((cell_x * 8 + row) as u16)
+        match self.layout {
+            Layout::Cells => {
+                let row_start = at.wrapping_add(
+                    (self.row_bytes() + self.skip_after_row).wrapping_mul(cell_y as u16),
+                );
+                row_start.wrapping_add((cell_x * 8 + row) as u16)
+            }
+            // A row of pixels is a byte for each cell across, then whatever is
+            // skipped — a mask, padding — before the next row.
+            Layout::Rows => {
+                let pitch = self.cells_across as u16 + self.skip_after_row;
+                at.wrapping_add(pitch.wrapping_mul((cell_y * 8 + row) as u16))
+                    .wrapping_add(cell_x as u16)
+            }
+        }
+    }
+
+    /// Point the viewer at something the search found, laid out as it was
+    /// found. Only the column that matched is known, so a row-major sprite is
+    /// shown as wide as its rows are apart, starting at that column: the
+    /// arrows move it along if the sprite starts further left.
+    pub fn show(&mut self, found: &crate::gfxfind::Match) {
+        self.addr = found.addr;
+        self.addr_text = format!("{:04X}", found.addr);
+        self.mirrored = found.mirrored;
+        self.inverted = found.inverted;
+        self.block_length = None;
+        self.raise = true;
+        if found.pitch == 1 {
+            self.layout = Layout::Cells;
+            self.cells_across = 1;
+            self.cells_down = 1;
+            self.skip_after_row = 0;
+        } else {
+            self.layout = Layout::Rows;
+            self.cells_across = (found.pitch as usize).min(8);
+            self.cells_down = 2;
+            self.skip_after_row = found.pitch - self.cells_across as u16;
+        }
     }
 }
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     controls(app, ui);
+    found(app, ui);
     if let Some(length) = app.sprites.block_length {
         ui.label(
             RichText::new(format!(
@@ -136,6 +200,26 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         size_picker(ui, &mut app.sprites.cells_across, "wide");
         size_picker(ui, &mut app.sprites.cells_down, "tall");
         skip_picker(ui, &mut app.sprites.skip_after_row);
+        let layout = match app.sprites.layout {
+            Layout::Cells => "in cells",
+            Layout::Rows => "in rows",
+        };
+        theme::dropdown(ui, 80.0, layout, |ui| {
+            if ui
+                .selectable_label(app.sprites.layout == Layout::Cells, "in cells")
+                .on_hover_text("Eight bytes a character, cells one after another, as the font")
+                .clicked()
+            {
+                app.sprites.layout = Layout::Cells;
+            }
+            if ui
+                .selectable_label(app.sprites.layout == Layout::Rows, "in rows")
+                .on_hover_text("A row of pixels at a time, as most games keep their sprites")
+                .clicked()
+            {
+                app.sprites.layout = Layout::Rows;
+            }
+        });
 
         theme::divider(ui);
         theme::group_label(ui, "Sheet");
@@ -149,12 +233,25 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         );
         theme::toggle(ui, &mut app.sprites.inverted, "Invert")
             .on_hover_text("Some sheets are stored as masks, which read inside out");
+        theme::toggle(ui, &mut app.sprites.mirrored, "Mirror")
+            .on_hover_text("A sprite kept facing the other way reads backwards");
+
+        theme::divider(ui);
+        let find = ui
+            .add_enabled(!app.on_zx81(), egui::Button::new("Find…"))
+            .on_hover_text(
+                "Pause the machine, then click an 8x8 block on the screen to look for it \
+                 in memory: as a character, as part of a wider sprite, mirrored or inverted",
+            );
+        if find.clicked() {
+            app.start_graphics_find();
+        }
     });
 
     if app.sprites.skip_after_row > 0 {
         ui.label(
             RichText::new(format!(
-                "Stepping over {} byte{} after each row of cells: {} of the {} bytes \
+                "Stepping over {} byte{} after each row of {}: {} of the {} bytes \
                  a graphic takes are not drawn.",
                 app.sprites.skip_after_row,
                 if app.sprites.skip_after_row == 1 {
@@ -162,7 +259,16 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
                 } else {
                     "s"
                 },
-                app.sprites.skip_after_row as usize * app.sprites.cells_down,
+                match app.sprites.layout {
+                    Layout::Cells => "cells",
+                    Layout::Rows => "pixels",
+                },
+                app.sprites.skip_after_row as usize
+                    * app.sprites.cells_down
+                    * match app.sprites.layout {
+                        Layout::Cells => 1,
+                        Layout::Rows => 8,
+                    },
                 app.sprites.stride()
             ))
             .small()
@@ -299,7 +405,12 @@ fn draw_sprite(
             for row in 0..8 {
                 let byte = app.peek(app.sprites.byte_of(at, cell_y, cell_x, row));
                 for bit in 0..8 {
-                    let set = byte & (0x80 >> bit) != 0;
+                    let mask = if app.sprites.mirrored {
+                        0x01 << bit
+                    } else {
+                        0x80 >> bit
+                    };
+                    let set = byte & mask != 0;
                     if set == app.sprites.inverted {
                         continue;
                     }
@@ -314,4 +425,80 @@ fn draw_sprite(
             }
         }
     }
+}
+
+/// What the last Find turned up, with a way to show each.
+fn found(app: &mut App, ui: &mut egui::Ui) {
+    if app.gfx_picking {
+        ui.label(
+            RichText::new("Click an 8x8 block on the main window's screen; Esc to give up.")
+                .small()
+                .color(theme::AMBER),
+        );
+    }
+    let Some(picked) = app.gfx_found.clone() else {
+        return;
+    };
+    ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Found");
+        let (x, y) = picked.cell;
+        let bytes: Vec<String> = picked.pattern.iter().map(|b| format!("{b:02X}")).collect();
+        ui.label(
+            RichText::new(format!(
+                "the block at column {x}, row {y}: {}",
+                bytes.join(" ")
+            ))
+            .small()
+            .monospace()
+            .color(theme::DIM),
+        );
+        if ui
+            .small_button("×")
+            .on_hover_text("Put the finds away")
+            .clicked()
+        {
+            app.gfx_found = None;
+        }
+    });
+    match &picked.result {
+        Err(why) => {
+            ui.label(RichText::new(why).small().color(theme::AMBER));
+        }
+        Ok(search) if search.matches.is_empty() => {
+            ui.label(
+                RichText::new(
+                    "Nowhere in memory as it stands. It may be drawn shifted by a few pixels, \
+                     built up from something else, kept upside down, or in a bank not paged in.",
+                )
+                .small()
+                .color(theme::DIM),
+            );
+        }
+        Ok(search) => {
+            egui::ScrollArea::vertical()
+                .id_salt("found-graphics")
+                .max_height(150.0)
+                .show(ui, |ui| {
+                    for m in &search.matches {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("Show").clicked() {
+                                app.sprites.show(m);
+                            }
+                            ui.label(RichText::new(m.describe()).small().monospace());
+                        });
+                    }
+                });
+            if search.more {
+                ui.label(
+                    RichText::new(format!(
+                        "and more: only the first {} are listed",
+                        crate::gfxfind::MAX_FOUND
+                    ))
+                    .small()
+                    .color(theme::DIM),
+                );
+            }
+        }
+    }
+    ui.add_space(4.0);
 }
