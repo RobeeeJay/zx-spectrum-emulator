@@ -257,6 +257,19 @@ impl Joystick {
         }
     }
 
+    /// Whether pushing the stick this way does anything the machine can see —
+    /// which decides whether the key bound to it is taken away from the
+    /// machine's own keyboard. Nothing plugged in does nothing; the
+    /// programmable does nothing with a direction it has not been taught,
+    /// except while it is being taught, when every direction is needed.
+    pub fn does_something(&self, way: Way) -> bool {
+        match self.kind {
+            Kind::None => false,
+            Kind::DkTronicsProgrammable => self.programming || self.taught(way).is_some(),
+            _ => true,
+        }
+    }
+
     /// The key the DK'Tronics Programmable has been taught for a direction.
     pub fn taught(&self, way: Way) -> Option<(usize, u8)> {
         self.program[way.index()]

@@ -5049,15 +5049,17 @@ impl App {
         // acting on it.
         self.read_joystick(ctx);
         // Only a binding that can do something takes its key: Space is the
-        // stick's fire by default, and with no stick plugged in it has to be
-        // the machine's space again, or it is a key that does nothing at all.
-        let stick = self.spec.bus.joystick.kind != crate::joystick::Kind::None;
+        // stick's fire by default, and with no stick plugged in — or one that
+        // does nothing with fire, like a programmable interface nobody has
+        // taught — it has to be the machine's space again, or it is a key
+        // that does nothing at all.
+        let stick = &self.spec.bus.joystick;
         let hardware = &self.spec.bus.hardware;
         let bound: Vec<egui::Key> = self
             .joystick_map
             .iter()
             .filter(|b| match b.does {
-                inputwin::Does::Way(_) => stick,
+                inputwin::Does::Way(way) => stick.does_something(way),
                 inputwin::Does::Key(..) => true,
                 inputwin::Does::Mouse(button) => hardware.fitted(button.on()),
             })

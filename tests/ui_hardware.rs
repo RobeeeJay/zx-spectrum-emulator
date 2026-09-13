@@ -183,3 +183,51 @@ fn the_programmable_is_taught_from_the_desk_and_remembered() {
         .hardware
         .fitted(Peripheral::DkTronicsProgrammable));
 }
+
+/// Space is the stick's fire by default. On a programmable interface nobody
+/// has taught fire, pushing fire does nothing, so Space has to stay the
+/// machine's space; once fire is taught, Space fires it; and while the slider
+/// is at 2, Space is the stick's, or teaching fire would type a space as well
+/// and there would be two keys down to learn from.
+#[test]
+fn space_is_the_machines_until_the_programmable_is_taught_fire() {
+    use zx_rustrum::joystick::Way;
+    use zx_rustrum::z80::Bus;
+    let mut app = test_app();
+    app.fit(Peripheral::DkTronicsProgrammable, true);
+    let mut h = Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    let space = |h: &mut Harness<'_, App>| h.state_mut().spec.bus.io_read(0x7FFE) & 1 == 0;
+    let zero = |h: &mut Harness<'_, App>| h.state_mut().spec.bus.io_read(0xEFFE) & 1 == 0;
+
+    h.key_down(egui::Key::Space);
+    h.run_steps(2);
+    assert!(space(&mut h), "untaught, Space is the machine's space");
+    h.key_up(egui::Key::Space);
+    h.run_steps(1);
+
+    h.state_mut()
+        .spec
+        .bus
+        .joystick
+        .teach(Way::Fire, Some((4, 0)));
+    h.key_down(egui::Key::Space);
+    h.run_steps(2);
+    assert!(!space(&mut h), "taught, Space is taken for fire");
+    assert!(zero(&mut h), "and fire presses the 0 it was taught");
+    h.key_up(egui::Key::Space);
+    h.run_steps(1);
+
+    h.state_mut().spec.bus.joystick.teach(Way::Fire, None);
+    h.state_mut().spec.bus.joystick.programming = true;
+    h.key_down(egui::Key::Space);
+    h.key_down(egui::Key::Num0);
+    h.run_steps(2);
+    assert!(!space(&mut h), "while teaching, Space is the stick's");
+    assert_eq!(
+        h.state().spec.bus.joystick.taught(Way::Fire),
+        Some((4, 0)),
+        "so holding it and pressing 0 teaches fire 0"
+    );
+}
