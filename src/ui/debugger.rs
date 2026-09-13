@@ -120,6 +120,9 @@ pub struct DebuggerState {
     pub centre: bool,
     pub lines: usize,
     pub goto_text: String,
+    /// Disassemble only where code has been seen to run, and show every
+    /// other byte as data.
+    pub disassemble_run: bool,
     pub bp_text: String,
     pub mem_addr: u16,
     /// The byte picked out in the memory dump, and which of its two columns
@@ -145,6 +148,7 @@ impl Default for DebuggerState {
             centre: true,
             lines: 96,
             goto_text: String::new(),
+            disassemble_run: false,
             bp_text: String::new(),
             mem_addr: 0x4000,
             selected: None,
@@ -357,6 +361,17 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.separator();
         theme::toggle(ui, &mut app.dbg.follow_pc, "Follow PC");
+        if theme::toggle(ui, &mut app.dbg.disassemble_run, "Disassemble")
+            .on_hover_text(
+                "Disassemble only where code has been seen to run since the last reset or \
+                 snapshot; every other byte is shown as data (DEFB)",
+            )
+            .changed()
+        {
+            // Rows change length, so the listing is laid out again around
+            // what it was showing.
+            app.dbg.centre = true;
+        }
     });
 
     // Stopping on what a program does rather than on where it is: the things
@@ -397,14 +412,15 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
     if !typing {
         let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
         let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+        let ran = ran_map(app);
         let moved = {
             let peek = |a: u16| app.peek(a);
             let at = app.dbg.view_addr;
             if down {
-                let insn = disasm::disasm(&peek, at);
+                let insn = row(&peek, &ran, at);
                 Some(at.wrapping_add(insn.len.max(1) as u16))
             } else if up {
-                Some(back(&peek, at, 1))
+                Some(back(&peek, &ran, at, 1))
             } else {
                 None
             }
@@ -1103,6 +1119,7 @@ fn ay_registers(app: &mut App, ui: &mut egui::Ui) {
 
 fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     let pc = app.cpu().pc;
+    let ran = ran_map(app);
     if app.dbg.follow_pc {
         app.dbg.view_addr = pc;
     }
@@ -1146,7 +1163,7 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
     // it, which is half of what a disassembly is read for.
     if app.dbg.follow_pc || app.dbg.centre {
         let peek = |a: u16| app.peek(a);
-        app.dbg.top = back(&peek, app.dbg.view_addr, app.dbg.lines / 2);
+        app.dbg.top = back(&peek, &ran, app.dbg.view_addr, app.dbg.lines / 2);
         app.dbg.centre = false;
     }
 
@@ -1204,7 +1221,7 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
             let mut clicked: Option<u16> = None;
             let mut finished_editing = false;
             for _ in 0..app.dbg.lines {
-                let insn = disasm::disasm(&peek, addr);
+                let insn = row(&peek, &ran, addr);
                 let is_pc = addr == pc;
                 let has_bp = app.breakpoints().contains(&addr);
                 let marked = app.dbg.marked == Some(addr);
@@ -1366,15 +1383,16 @@ fn scroll_through_memory(app: &mut App, ui: &mut egui::Ui, top: f32) {
         return;
     }
     app.dbg.follow_pc = false;
+    let ran = ran_map(app);
     let peek = |a: u16| app.peek(a);
     let mut addr = app.dbg.top;
     if lines < 0 {
         for _ in 0..(-lines) {
-            let insn = disasm::disasm(&peek, addr);
+            let insn = row(&peek, &ran, addr);
             addr = addr.wrapping_add(insn.len.max(1) as u16);
         }
     } else {
-        addr = back(&peek, addr, lines as usize);
+        addr = back(&peek, &ran, addr, lines as usize);
     }
     app.dbg.top = addr;
     // The listing has been moved by hand, so the address on show is wherever
@@ -1383,15 +1401,54 @@ fn scroll_through_memory(app: &mut App, ui: &mut egui::Ui, top: f32) {
     app.dbg.view_addr = addr;
 }
 
-/// The address `count` instructions above `addr`.
+/// Where code has run, address by address as the machine is paged now, while
+/// the listing's Disassemble mode is on; `None` disassembles everything.
+fn ran_map(app: &App) -> Option<Vec<bool>> {
+    app.dbg.disassemble_run.then(|| {
+        let tracker = app.tracker();
+        (0..=0xFFFFu16)
+            .map(|a| tracker.executed[app.phys_index(a)])
+            .collect()
+    })
+}
+
+/// One row of the listing: the instruction at `addr`, or — in Disassemble
+/// mode, where nothing has run at it — the byte there as data. An opcode fetch
+/// is where an instruction starts, so an instruction that has run is shown
+/// whole, operands and all, and its operands are never rows of their own.
+fn row<F: Fn(u16) -> u8>(peek: &F, ran: &Option<Vec<bool>>, addr: u16) -> disasm::Insn {
+    match ran {
+        Some(ran) if !ran[addr as usize] => {
+            let b = peek(addr);
+            disasm::Insn {
+                text: format!("DEFB ${b:02X}"),
+                len: 1,
+                bytes: vec![b],
+            }
+        }
+        _ => disasm::disasm(peek, addr),
+    }
+}
+
+/// The address `count` rows above `addr`.
 ///
 /// Backwards through a variable-length instruction set means finding the
 /// instruction that ends where you are, one at a time; there is no arithmetic
-/// that does it.
-fn back<F: Fn(u16) -> u8>(peek: &F, addr: u16, count: usize) -> u16 {
+/// that does it. In Disassemble mode the row above is an instruction that has
+/// run and ends exactly here, if there is one, and otherwise the byte before.
+fn back<F: Fn(u16) -> u8>(peek: &F, ran: &Option<Vec<bool>>, addr: u16, count: usize) -> u16 {
     let mut addr = addr;
     for _ in 0..count {
-        addr = disasm::previous(peek, addr);
+        addr = match ran {
+            None => disasm::previous(peek, addr),
+            Some(ran) => (1..=4u16)
+                .map(|k| addr.wrapping_sub(k))
+                .find(|at| {
+                    ran[*at as usize]
+                        && disasm::disasm(peek, *at).len as u16 == addr.wrapping_sub(*at)
+                })
+                .unwrap_or(addr.wrapping_sub(1)),
+        };
     }
     addr
 }

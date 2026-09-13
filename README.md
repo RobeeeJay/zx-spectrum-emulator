@@ -143,6 +143,10 @@ jumps the debugger to it.
   Step over runs `CALL`, `RST` and the repeating block instructions to
   completion; step out runs until SP rises above its current value.
 * Breakpoints: click a disassembly line to toggle one, or type an address.
+* **Disassemble**, beside Follow PC, disassembles only where code has been seen
+  to run since the last reset or snapshot, and shows every other byte as data
+  (`DEFB`) — so tables, graphics and text stop reading as nonsense code.
+  **Memory**, beside Go to's PC, moves the listing to where the memory dump is.
 * Speed presets from 1% to 2000%, plus a logarithmic slider.
 * A hex/ASCII memory dump with shortcuts to follow HL or SP.
 

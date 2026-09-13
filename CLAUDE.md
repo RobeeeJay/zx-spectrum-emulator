@@ -294,6 +294,14 @@ hedges in the wording when the evidence is thin ("possibly a protection
 check"), and a rule that always has an answer would be worse than none, so code
 with no tell is left unnamed.
 
+**Code is what has run.** The tracker keeps, per physical location, whether an
+opcode has ever been fetched there since the last reset or snapshot, and the
+debugger's Disassemble mode shows instructions only where one has, and every
+other byte as `DEFB`. An opcode fetch is where an instruction starts, so one
+that has run is shown whole and its operands never become rows of their own;
+stepping back through the listing goes to an instruction that has run and ends
+exactly there, or else a byte back.
+
 **A conditional way out is not where a routine ends.** A taken `RET Z` ends the
 call it is in; the next call through may fall straight past it, so the routine
 carries on underneath. Only the exits that always end it — a plain `RET`, or a

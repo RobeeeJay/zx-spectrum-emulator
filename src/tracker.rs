@@ -54,6 +54,10 @@ pub struct Tracker {
     pub read_heat: Box<[u8; PHYS_LEN]>,
     pub write_heat: Box<[u8; PHYS_LEN]>,
     pub exec_heat: Box<[u8; PHYS_LEN]>,
+    /// Where an opcode has ever been fetched since the last reset: code that
+    /// has run, as against bytes that have only been read or written. Kept
+    /// rather than faded like the heat, for the debugger's Disassemble mode.
+    pub executed: Box<[bool; PHYS_LEN]>,
 
     /// Total accesses since reset, for the "coldest/hottest" statistics.
     pub read_count: Box<[u32; PHYS_LEN]>,
@@ -91,6 +95,7 @@ impl Tracker {
             read_heat: Box::new([0; PHYS_LEN]),
             write_heat: Box::new([0; PHYS_LEN]),
             exec_heat: Box::new([0; PHYS_LEN]),
+            executed: Box::new([false; PHYS_LEN]),
             read_count: Box::new([0; PHYS_LEN]),
             write_count: Box::new([0; PHYS_LEN]),
             fade_read: 12,
@@ -111,6 +116,7 @@ impl Tracker {
         self.read_heat.fill(0);
         self.write_heat.fill(0);
         self.exec_heat.fill(0);
+        self.executed.fill(false);
         self.read_count.fill(0);
         self.write_count.fill(0);
         self.win_writes = [0; PAGES];
@@ -129,6 +135,7 @@ impl Tracker {
     #[inline]
     pub fn on_exec(&mut self, phys: usize, _addr: u16) {
         self.exec_heat[phys] = 255;
+        self.executed[phys] = true;
         self.read_count[phys] = self.read_count[phys].saturating_add(1);
     }
 
