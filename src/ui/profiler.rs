@@ -285,8 +285,7 @@ fn bars(app: &mut App, ui: &mut egui::Ui, run_index: usize) {
         });
 
     if let Some(entry) = jump_to {
-        app.dbg.follow_pc = false;
-        app.dbg.view_addr = entry;
+        app.show_in_listing(entry);
         app.show_debugger = true;
         app.set_status(format!("Disassembling ${entry:04X}"), false);
     }

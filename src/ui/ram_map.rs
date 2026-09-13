@@ -425,8 +425,7 @@ fn hover_readout(app: &mut App, ui: &mut egui::Ui, response: &egui::Response) {
     line(ui, text);
     if response.clicked() {
         if let Some(addr) = hover.addr {
-            app.dbg.follow_pc = false;
-            app.dbg.view_addr = addr;
+            app.show_in_listing(addr);
             app.show_debugger = true;
         }
     }

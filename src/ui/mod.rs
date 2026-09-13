@@ -3342,8 +3342,7 @@ impl App {
                 self.status = format!("{} (PC ${at:04X})", event.describe());
                 // The listing is put on the instruction that did it rather
                 // than left following PC, which by then is the one after.
-                self.dbg.follow_pc = false;
-                self.dbg.view_addr = at;
+                self.show_in_listing(at);
                 self.show_debugger = true;
                 self.dbg.raise = true;
             }

@@ -1116,8 +1116,10 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
         );
         if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             if let Ok(a) = u16::from_str_radix(app.dbg.goto_text.trim_start_matches('$'), 16) {
-                app.dbg.view_addr = a;
-                app.dbg.follow_pc = false;
+                // Through show_in_listing, which moves the listing as well as
+                // the address: the listing draws from its own first row, and
+                // setting the address alone left that where it was.
+                app.show_in_listing(a);
             }
         }
         if ui.small_button("PC").clicked() {
