@@ -1,6 +1,6 @@
 //! The Microdrive and Hardware windows.
 
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use zx_rustrum::hardware::Peripheral;
 use zx_rustrum::machine::Spectrum;
