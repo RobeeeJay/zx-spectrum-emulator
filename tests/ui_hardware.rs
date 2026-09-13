@@ -221,10 +221,19 @@ fn space_is_the_machines_until_the_programmable_is_taught_fire() {
 
     h.state_mut().spec.bus.joystick.teach(Way::Fire, None);
     h.state_mut().spec.bus.joystick.programming = true;
+    // Space alone first: were it the machine's while teaching, holding it
+    // would put one key down with fire held, and fire would be taught Space
+    // itself — which pressing 0 afterwards would quietly paper over.
     h.key_down(egui::Key::Space);
-    h.key_down(egui::Key::Num0);
     h.run_steps(2);
     assert!(!space(&mut h), "while teaching, Space is the stick's");
+    assert_eq!(
+        h.state().spec.bus.joystick.taught(Way::Fire),
+        None,
+        "and holding it has not taught fire the Space key"
+    );
+    h.key_down(egui::Key::Num0);
+    h.run_steps(2);
     assert_eq!(
         h.state().spec.bus.joystick.taught(Way::Fire),
         Some((4, 0)),
