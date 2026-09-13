@@ -313,3 +313,123 @@ pub fn key_rects_with(area: egui::Rect, gap: f32, row_gap: f32) -> Vec<egui::Rec
         })
         .collect()
 }
+
+/// How a legend is reached from the keyboard: which shifts, and in what order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// On its own: the letter, or the keyword at the start of a statement.
+    Plain,
+    /// With CAPS SHIFT held: the jobs over the digits, and BREAK.
+    Caps,
+    /// With SYMBOL SHIFT held — the ZX81's SHIFT.
+    Symbol,
+    /// Extended mode — CAPS SHIFT and SYMBOL SHIFT together, then let go — and
+    /// then the key: the green word above it.
+    Extended,
+    /// Extended mode, then SYMBOL SHIFT with the key: the red word below it.
+    ExtendedSymbol,
+    /// The ZX81's function mode: SHIFT with NEWLINE, then the key.
+    Function,
+}
+
+/// A legend that matched, on which key, and how it is reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Found {
+    /// Where the key is in the layout.
+    pub key: usize,
+    pub legend: &'static str,
+    pub reach: Reach,
+}
+
+fn position(keys: &[Key; 40], main: &str) -> usize {
+    keys.iter()
+        .position(|k| k.main == main)
+        .expect("every layout has its shift keys")
+}
+
+impl Found {
+    /// The keys other than this one that have to go down to reach it.
+    pub fn shifts(&self, zx81: bool) -> Vec<usize> {
+        let keys = layout(zx81);
+        let (caps, symbol) = if zx81 {
+            (position(keys, "SHIFT"), position(keys, "SHIFT"))
+        } else {
+            (position(keys, "CAPS SHIFT"), position(keys, "SYMBOL SHIFT"))
+        };
+        match self.reach {
+            Reach::Plain => vec![],
+            Reach::Caps => vec![caps],
+            Reach::Symbol => vec![symbol],
+            Reach::Extended | Reach::ExtendedSymbol => vec![caps, symbol],
+            Reach::Function => vec![position(keys, "SHIFT"), position(keys, "NEWLINE")],
+        }
+    }
+
+    /// How to type it, in a line.
+    pub fn how(&self, zx81: bool) -> String {
+        let key = layout(zx81)[self.key].main;
+        let shift = if zx81 { "SHIFT" } else { "SYMBOL SHIFT" };
+        let how = match self.reach {
+            Reach::Plain if self.legend == key => format!("the {key} key"),
+            Reach::Plain => format!("{key}, at the start of a statement"),
+            Reach::Caps => format!("CAPS SHIFT with {key}"),
+            Reach::Symbol => format!("{shift} with {key}"),
+            Reach::Extended => format!("extended mode (CAPS SHIFT with SYMBOL SHIFT), then {key}"),
+            Reach::ExtendedSymbol => format!("extended mode, then SYMBOL SHIFT with {key}"),
+            Reach::Function => format!("function mode (SHIFT with NEWLINE), then {key}"),
+        };
+        format!("{}: {how}", self.legend)
+    }
+}
+
+/// Find a word on the keys, in any case: every legend that contains it.
+///
+/// Several can be looked for at once, split by commas. A phrase that is on no
+/// key is tried a word at a time instead, so "print cat" finds both while
+/// "DEF FN" finds the one legend with a space in it.
+pub fn search(zx81: bool, text: &str) -> Vec<Found> {
+    let mut found = Vec::new();
+    for term in text.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        let whole = matches(zx81, term);
+        if whole.is_empty() {
+            for word in term.split_whitespace() {
+                found.extend(matches(zx81, word));
+            }
+        } else {
+            found.extend(whole);
+        }
+    }
+    found.dedup();
+    found
+}
+
+fn matches(zx81: bool, term: &str) -> Vec<Found> {
+    let term = term.to_uppercase();
+    let mut found = Vec::new();
+    for (i, key) in layout(zx81).iter().enumerate() {
+        let digit_or_space =
+            key.main.len() == 1 && key.main.as_bytes()[0].is_ascii_digit() || key.main == "SPACE";
+        let over = match (zx81, key.main) {
+            (true, "SPACE") => Reach::Plain,
+            (true, _) => Reach::Function,
+            (false, _) if digit_or_space => Reach::Caps,
+            (false, _) => Reach::Extended,
+        };
+        for (legend, reach) in [
+            (key.main, Reach::Plain),
+            (key.word, Reach::Plain),
+            (key.sym, Reach::Symbol),
+            (key.over, over),
+            (key.under, Reach::ExtendedSymbol),
+        ] {
+            if !legend.is_empty() && legend.to_uppercase().contains(&term) {
+                found.push(Found {
+                    key: i,
+                    legend,
+                    reach,
+                });
+            }
+        }
+    }
+    found
+}

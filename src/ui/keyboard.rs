@@ -1,7 +1,9 @@
 //! A picture of the machine's keyboard: pressable, and lit by the real one.
 //!
 //! The layout and the legends are in `crate::keyboard`; what is here is the
-//! drawing of them and the pointer.
+//! drawing of them and the pointer, and the search that picks keys out by
+//! what is written on them — with the shifts that reach it, since a word under
+//! a key is no use to somebody who does not know it takes two.
 
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Sense, Stroke};
@@ -20,6 +22,17 @@ const ROW_GAP: f32 = 13.0;
 /// The face of a key, and the face of one that is down.
 const FACE: Color32 = theme::CONTROL;
 const LIT: Color32 = theme::AMBER;
+/// A key the search found, and a shift it needs.
+const FOUND: Color32 = theme::YELLOW;
+const NEEDED: Color32 = theme::CYAN;
+
+/// What the search says about a key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    None,
+    Found,
+    Needed,
+}
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     let now = std::time::Instant::now();
@@ -36,7 +49,47 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                     .small(),
             );
         }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.key_search)
+                    .hint_text("find: print, cat, beep…")
+                    .desired_width(170.0),
+            )
+            .on_hover_text(
+                "Picks out the keys with that word on them, and the shifts it takes. \
+                 Commas look for several at once.",
+            );
+        });
     });
+
+    let found = keyboard::search(zx81, &app.key_search);
+    let mut marks = [Mark::None; 40];
+    for f in &found {
+        for shift in f.shifts(zx81) {
+            if marks[shift] == Mark::None {
+                marks[shift] = Mark::Needed;
+            }
+        }
+    }
+    for f in &found {
+        marks[f.key] = Mark::Found;
+    }
+    if !app.key_search.trim().is_empty() {
+        // How to type each one, since the shifts lit on the picture say which
+        // but not in what order.
+        const SHOWN: usize = 4;
+        let mut lines: Vec<String> = found.iter().take(SHOWN).map(|f| f.how(zx81)).collect();
+        if found.is_empty() {
+            lines.push("nothing on the keys says that".to_string());
+        } else if found.len() > SHOWN {
+            lines.push(format!("and {} more", found.len() - SHOWN));
+        }
+        ui.label(
+            egui::RichText::new(lines.join("   ·   "))
+                .small()
+                .color(theme::DIM),
+        );
+    }
     ui.add_space(4.0);
 
     let area = ui.available_rect_before_wrap();
@@ -48,8 +101,17 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         let rect = rects[i];
         let id = ui.id().with(("key", i));
         let response = ui.interact(rect, id, Sense::click_and_drag());
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, key.main));
+        // Picked out by the search, as far as anything reading the window can
+        // tell: the key found, or a shift it needs.
+        let marked = marks[i] != Mark::None;
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, marked, key.main)
+        });
+        let legends: Vec<&str> = found
+            .iter()
+            .filter(|f| f.key == i)
+            .map(|f| f.legend)
+            .collect();
 
         // A shift stays down until the next key, so a shifted key can be
         // typed with one pointer; anything else is down while the pointer is.
@@ -72,7 +134,15 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             .iter()
             .all(|&(row, bit)| app.keys.is_lit(row, bit, now))
             || (shift && app.keys.latched(key.press[0].0, key.press[0].1));
-        draw_key(&painter, rect, key, lit, response.hovered());
+        draw_key(
+            &painter,
+            rect,
+            key,
+            lit,
+            response.hovered(),
+            marks[i],
+            &legends,
+        );
         // Under the key rather than on it, which is where the machine prints
         // it: the extended-mode word a shift gives — CAT, FORMAT, INVERSE.
         if !key.under.is_empty() {
@@ -81,7 +151,11 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 Align2::CENTER_TOP,
                 key.under,
                 FontId::proportional((rect.height() * 0.20).clamp(6.0, 9.0)),
-                theme::RED,
+                if legends.contains(&key.under) {
+                    FOUND
+                } else {
+                    theme::RED
+                },
             );
         }
     }
@@ -96,7 +170,15 @@ fn is_shift(at: (usize, u8)) -> bool {
     at == (0, 0) || at == (7, 1)
 }
 
-fn draw_key(painter: &egui::Painter, rect: egui::Rect, key: &Key, lit: bool, hovered: bool) {
+fn draw_key(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    key: &Key,
+    lit: bool,
+    hovered: bool,
+    mark: Mark,
+    legends: &[&str],
+) {
     let face = if lit {
         LIT
     } else if hovered {
@@ -111,6 +193,29 @@ fn draw_key(painter: &egui::Painter, rect: egui::Rect, key: &Key, lit: bool, hov
         Stroke::new(1.0, theme::EDGE),
         egui::StrokeKind::Inside,
     );
+    // The search's marks go round the key, so a key can be found and lit at
+    // once and still be read.
+    let ring = match mark {
+        Mark::None => None,
+        Mark::Found => Some(FOUND),
+        Mark::Needed => Some(NEEDED),
+    };
+    if let Some(colour) = ring {
+        painter.rect_stroke(
+            rect.expand(1.5),
+            5.0,
+            Stroke::new(2.5, colour),
+            egui::StrokeKind::Outside,
+        );
+    }
+    // The word that was found, in the ring's colour, wherever it is on the key.
+    let found_in = |legend: &str, colour: Color32| {
+        if !lit && legends.contains(&legend) {
+            FOUND
+        } else {
+            colour
+        }
+    };
 
     let (ink, dim) = if lit {
         (theme::ON_LIT, theme::ON_LIT)
@@ -131,7 +236,7 @@ fn draw_key(painter: &egui::Painter, rect: egui::Rect, key: &Key, lit: bool, hov
             Align2::CENTER_TOP,
             key.over,
             FontId::proportional(small),
-            if lit { theme::ON_LIT } else { theme::GREEN },
+            found_in(key.over, if lit { theme::ON_LIT } else { theme::GREEN }),
         );
     }
     let main_at = if key.main.len() > 2 {
@@ -146,7 +251,7 @@ fn draw_key(painter: &egui::Painter, rect: egui::Rect, key: &Key, lit: bool, hov
         Align2::CENTER_CENTER,
         key.main,
         FontId::proportional(main_size),
-        ink,
+        found_in(key.main, ink),
     );
     if !key.word.is_empty() {
         painter.text(
@@ -154,7 +259,7 @@ fn draw_key(painter: &egui::Painter, rect: egui::Rect, key: &Key, lit: bool, hov
             Align2::CENTER_BOTTOM,
             key.word,
             FontId::proportional(small),
-            dim,
+            found_in(key.word, dim),
         );
     }
     if !key.sym.is_empty() {
@@ -163,7 +268,7 @@ fn draw_key(painter: &egui::Painter, rect: egui::Rect, key: &Key, lit: bool, hov
             Align2::RIGHT_CENTER,
             key.sym,
             FontId::proportional(small),
-            if lit { theme::ON_LIT } else { theme::RED },
+            found_in(key.sym, if lit { theme::ON_LIT } else { theme::RED }),
         );
     }
 }

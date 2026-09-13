@@ -587,7 +587,13 @@ through the **Input** window, which maps either onto the stick, onto keys of
 the machine's own keyboard, or onto the buttons of whichever mouse is fitted.
 The Kempston and DK'Tronics joystick interfaces are also in the **Hardware**
 window, which lists everything by section — Mice, Multiface, Printers, Audio,
-Joysticks and Drives — and the two windows agree about which the stick is in. A **Kempston mouse** or an **AMX mouse** — one or the
+Joysticks and Drives — and the two windows agree about which the stick is in.
+
+The **Keyboard** window is the machine's keyboard, pressable and lit by the
+real one. A box at its top right finds words on the keys — `print`, `merge`,
+`cat`, `not`, `beep` — and rings the key each is on in yellow and the shifts it
+takes in cyan, with a line saying how to type it: "BEEP: extended mode, then
+SYMBOL SHIFT with Z". Commas look for several at once. A **Kempston mouse** or an **AMX mouse** — one or the
 other, since both answer at $DF — fitted in the Hardware window, takes the
 host's mouse when the screen is clicked: the pointer is
 hidden and held, and its movement and both buttons go to the machine, in the

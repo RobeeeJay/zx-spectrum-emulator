@@ -496,6 +496,8 @@ pub struct App {
     /// Whether the host's pointer belongs to the Kempston mouse: taken by a
     /// click on the screen, given back by Esc or the window losing focus.
     pub mouse_captured: bool,
+    /// What is being looked for in the Keyboard window.
+    pub key_search: String,
     /// The host's left, middle and right buttons, while the pointer is
     /// captured; what is bound to a mouse button is added to these.
     host_buttons: [bool; 3],
@@ -677,6 +679,7 @@ impl App {
             quick_slot: 1,
             mouse_rest: egui::Vec2::ZERO,
             mouse_captured: false,
+            key_search: String::new(),
             host_buttons: [false; 3],
             window_keys_next: HeldKeys::default(),
             window_keys: HeldKeys::default(),
@@ -5053,10 +5056,15 @@ impl App {
             .collect();
         let pads = self.pads.clone();
         // The other windows' keys count as the main window's: whichever of
-        // them was clicked last, the machine is what is being typed at.
+        // them was clicked last, the machine is what is being typed at. And
+        // the main window's own go to a text field in it rather than to the
+        // machine while one is being typed into, as the other windows' do.
         let window = self.window_keys.clone();
-        let down =
-            |key| ctx.input(|i: &egui::InputState| i.key_down(key)) || window.keys.contains(&key);
+        let typing = ctx.text_edit_focused();
+        let down = |key| {
+            (!typing && ctx.input(|i: &egui::InputState| i.key_down(key)))
+                || window.keys.contains(&key)
+        };
         for binding in &self.joystick_map {
             if let inputwin::Does::Key(row, bit) = binding.does {
                 if inputwin::holding(binding.from, &down, &pads) {
@@ -5106,16 +5114,16 @@ impl App {
                 (Key::N, 7, 3),
                 (Key::B, 7, 4),
             ];
-            let key_down = |key| i.key_down(key) || window.keys.contains(&key);
+            let key_down = |key| (!typing && i.key_down(key)) || window.keys.contains(&key);
             for &(key, row, bit) in MAP {
                 if key_down(key) && !bound.contains(&key) {
                     press(row, bit);
                 }
             }
-            if i.modifiers.shift || window.shift {
+            if (!typing && i.modifiers.shift) || window.shift {
                 press(0, 0); // CAPS SHIFT
             }
-            if i.modifiers.alt || i.modifiers.ctrl || window.symbol {
+            if (!typing && (i.modifiers.alt || i.modifiers.ctrl)) || window.symbol {
                 press(7, 1); // SYMBOL SHIFT
             }
             // Convenience keys that need CAPS SHIFT on real hardware.

@@ -391,3 +391,82 @@ fn the_rows_leave_room_for_the_word_under_each_key() {
         "and the keys are no further apart across the row than they were"
     );
 }
+
+fn picked_out(h: &Harness<'_, App>, label: &str) -> bool {
+    use egui_kittest::kittest::NodeT;
+    h.get_all_by_label(label)
+        // egui gives a button's selected state to accessibility as toggled.
+        .any(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True))
+}
+
+/// Looking for a word picks out the key it is on and the shifts it takes:
+/// BEEP is under Z, so it takes extended mode — both shifts — and then SYMBOL
+/// SHIFT. The window says so in words as well.
+#[test]
+fn the_search_picks_out_a_key_and_its_shifts() {
+    let mut h = harness(test_app());
+    h.state_mut().key_search = "beep".into();
+    h.run_steps(2);
+    for key in ["Z", "CAPS SHIFT", "SYMBOL SHIFT"] {
+        assert!(picked_out(&h, key), "{key} is picked out for BEEP");
+    }
+    for key in ["P", "S", "ENTER"] {
+        assert!(!picked_out(&h, key), "{key} has nothing to do with BEEP");
+    }
+    assert!(
+        h.query_all_by_value("BEEP: extended mode, then SYMBOL SHIFT with Z")
+            .next()
+            .is_some(),
+        "and how to type it is written out"
+    );
+
+    h.state_mut().key_search = "print".into();
+    h.run_steps(2);
+    assert!(
+        picked_out(&h, "P") && picked_out(&h, "C"),
+        "PRINT and LPRINT"
+    );
+    assert!(
+        picked_out(&h, "CAPS SHIFT"),
+        "LPRINT is above C, which is extended mode"
+    );
+}
+
+/// What is typed into the search box is for the box: it does not reach the
+/// machine's keyboard, or looking for BEEP would type it into the program.
+#[test]
+fn typing_into_the_search_does_not_type_on_the_machine() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness(test_app());
+    h.run_steps(2);
+    h.get_by_role(egui::accesskit::Role::TextInput).click();
+    h.run_steps(2);
+    for (key, text) in [(egui::Key::B, "b"), (egui::Key::E, "e")] {
+        h.event(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+        assert_eq!(
+            h.state().spec.bus.keys,
+            [0xFF; 8],
+            "{text} went into the box and not to the machine"
+        );
+        h.event(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().key_search, "be");
+    let _ = h
+        .get_by_role(egui::accesskit::Role::TextInput)
+        .accesskit_node();
+}

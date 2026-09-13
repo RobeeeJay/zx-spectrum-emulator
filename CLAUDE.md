@@ -356,7 +356,11 @@ keys are written out as words: egui's fonts have no arrow glyphs, and an empty
 box on a key says nothing. The +2A and +3 have typewriter keyboards whose cases
 carry keys the rubber ones did not; what is drawn for them is the matrix they
 share with the 48K, which is honest about what the machine reads and not a
-picture of their case.
+picture of their case. The window's search finds a word on
+the keys and rings the key and the shifts it takes; how each legend is
+reached is decided by where it sits on the key — face, red on the key, over,
+under — in `keyboard::search`, so it is tested without a window. The ZX81's
+word above a key is function mode, SHIFT with NEWLINE, not extended mode.
 
 **The +3 has a disk controller now, and no clock.** `src/fdc.rs` is a µPD765A
 as far as +3DOS can tell — the three phases, and the commands the ROM uses —
