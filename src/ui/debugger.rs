@@ -1125,6 +1125,13 @@ fn disassembly(app: &mut App, ui: &mut egui::Ui) {
         if ui.small_button("PC").clicked() {
             app.dbg.follow_pc = true;
         }
+        if ui
+            .small_button("Memory")
+            .on_hover_text("Disassemble from where the memory dump is")
+            .clicked()
+        {
+            app.show_in_listing(app.dbg.mem_addr);
+        }
     });
 
     // As many lines as the listing has room for, and no more. The rows are a
