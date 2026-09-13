@@ -646,7 +646,10 @@ the dim colour so the two are told apart at a glance.
 typed into the disassembly go to `<name>.zxrs.txt` next to the tape, or next to
 the ROM when the deck is empty — plain text, one line per address, so it can be
 read, edited and diffed without the emulator, and a badly edited line is
-skipped rather than throwing the file away.
+skipped rather than throwing the file away. A comment's line breaks
+are written as `\n` and a backslash as `\\`, so a note stays one line: written
+raw, a comment's second line was dropped on reading back, or taken for a note
+of its own if it began with something that reads as an address.
 
 **The cassette is rendered from the SVGs** in `designs/` by `src/svg.rs`, a
 deliberately small renderer covering only what the artwork uses: groups with
