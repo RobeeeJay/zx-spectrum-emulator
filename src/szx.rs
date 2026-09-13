@@ -291,6 +291,9 @@ fn joystick_id(kind: crate::joystick::Kind) -> u8 {
         // way round, since there is nowhere in the format to say so.
         Kind::DkTronicsKempston => 0,
         Kind::DkTronicsKeys => 2,
+        // Taught keys have nowhere to go in the format, so the programmable
+        // one goes as nothing plugged in.
+        Kind::DkTronicsProgrammable => 5,
         // 5 is "none" in the format's own numbering.
         Kind::None => 5,
     }

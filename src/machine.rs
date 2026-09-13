@@ -2367,7 +2367,11 @@ impl SpectrumBus {
     pub fn set_joystick(&mut self, kind: crate::joystick::Kind) {
         use crate::hardware::Peripheral;
         let wanted = kind.interface();
-        for interface in [Peripheral::KempstonJoystick, Peripheral::DkTronicsJoystick] {
+        for interface in [
+            Peripheral::KempstonJoystick,
+            Peripheral::DkTronicsJoystick,
+            Peripheral::DkTronicsProgrammable,
+        ] {
             self.hardware.fit(interface, wanted == Some(interface));
         }
         if kind != self.joystick.kind {

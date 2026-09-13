@@ -63,10 +63,11 @@ pub enum Peripheral {
     AmxMouse,
     KempstonJoystick,
     DkTronicsJoystick,
+    DkTronicsProgrammable,
 }
 
 impl Peripheral {
-    pub const ALL: [Peripheral; 14] = [
+    pub const ALL: [Peripheral; 15] = [
         Peripheral::Interface1,
         Peripheral::Uspeech,
         Peripheral::Fuller,
@@ -81,6 +82,7 @@ impl Peripheral {
         Peripheral::AmxMouse,
         Peripheral::KempstonJoystick,
         Peripheral::DkTronicsJoystick,
+        Peripheral::DkTronicsProgrammable,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -99,6 +101,7 @@ impl Peripheral {
             Peripheral::AmxMouse => "AMX mouse",
             Peripheral::KempstonJoystick => "Kempston Joystick Interface",
             Peripheral::DkTronicsJoystick => "DK'Tronics Joystick Interface",
+            Peripheral::DkTronicsProgrammable => "DK'Tronics Programmable Joystick Interface",
         }
     }
 
@@ -119,6 +122,7 @@ impl Peripheral {
             Peripheral::AmxMouse => "amx_mouse",
             Peripheral::KempstonJoystick => "kempston_joystick",
             Peripheral::DkTronicsJoystick => "dktronics_joystick",
+            Peripheral::DkTronicsProgrammable => "dktronics_programmable",
         }
     }
 
@@ -138,7 +142,9 @@ impl Peripheral {
             | Peripheral::Fuller
             | Peripheral::SpecDrum
             | Peripheral::MusicMachine => Section::Audio,
-            Peripheral::KempstonJoystick | Peripheral::DkTronicsJoystick => Section::Joysticks,
+            Peripheral::KempstonJoystick
+            | Peripheral::DkTronicsJoystick
+            | Peripheral::DkTronicsProgrammable => Section::Joysticks,
             Peripheral::Interface1 => Section::Drives,
         }
     }
@@ -185,6 +191,10 @@ impl Peripheral {
                 "Two sockets: one on the Kempston port, one wired to keys 6 to 0 as \
                  Interface 2's first. The stick is in one of them, chosen in the Input window"
             }
+            Peripheral::DkTronicsProgrammable => {
+                "One socket, wired to whichever five keys it has been taught — by hand, with \
+                 its slider at 2. The Input window has the slider and what it has learnt"
+            }
         }
     }
 
@@ -203,7 +213,8 @@ impl Peripheral {
             | Peripheral::Alphacom32
             | Peripheral::AmxMouse
             | Peripheral::KempstonJoystick
-            | Peripheral::DkTronicsJoystick => Emulated::Yes,
+            | Peripheral::DkTronicsJoystick
+            | Peripheral::DkTronicsProgrammable => Emulated::Yes,
             // Two ROMs: Currah's, which is the interface, and the speech
             // chip's own, which is where the allophones live.
             Peripheral::Uspeech => Emulated::NeedsRom(

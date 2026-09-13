@@ -198,3 +198,73 @@ fn dktronics_port_2_is_kempstons_port() {
     );
     assert_eq!(stick.matrix(), [0xFF; 8], "and no keys");
 }
+
+/// The DK'Tronics Programmable presses whichever keys it has been taught, and
+/// nothing until it has been: its manual has the memory cleared before it is
+/// programmed.
+#[test]
+fn the_programmable_presses_what_it_was_taught() {
+    let mut stick = Joystick::new();
+    stick.kind = Kind::DkTronicsProgrammable;
+    stick.set(Way::Up, true);
+    assert_eq!(stick.matrix(), [0xFF; 8], "untaught, it presses nothing");
+
+    // Jet Set Willy's line from its key chart: right 6, left 7, fire 0.
+    stick.teach(Way::Right, Some((4, 4)));
+    stick.teach(Way::Left, Some((4, 3)));
+    stick.teach(Way::Fire, Some((4, 0)));
+    stick.set(Way::Up, false);
+    stick.set(Way::Right, true);
+    assert_eq!(stick.matrix()[4], !(1u8 << 4), "right is 6");
+    stick.set(Way::Fire, true);
+    assert_eq!(
+        stick.matrix()[4],
+        !((1u8 << 4) | 1),
+        "right and fire together press both"
+    );
+    assert_eq!(stick.io_read(0x001F), None, "and it has no port");
+}
+
+/// With its slider at 2 it is taught by holding a direction and pressing the
+/// key, as the manual says to do it by hand — and presses nothing meanwhile.
+#[test]
+fn the_programmable_is_taught_with_its_slider_at_2() {
+    let mut stick = Joystick::new();
+    stick.kind = Kind::DkTronicsProgrammable;
+    stick.programming = true;
+    let mut keyboard = [0xFFu8; 8];
+    keyboard[4] &= !(1 << 2); // 8
+    stick.set(Way::Up, true);
+    stick.learn(&keyboard);
+    assert_eq!(stick.taught(Way::Up), Some((4, 2)), "up is 8");
+    assert_eq!(
+        stick.matrix(),
+        [0xFF; 8],
+        "and nothing is pressed while teaching"
+    );
+
+    // Two keys at once, or two directions, teach nothing.
+    keyboard[4] &= !(1 << 1); // and 9
+    stick.set(Way::Up, false);
+    stick.set(Way::Down, true);
+    stick.learn(&keyboard);
+    assert_eq!(stick.taught(Way::Down), None, "two keys: which one?");
+
+    // Back to 1, it plays.
+    stick.programming = false;
+    stick.set(Way::Down, false);
+    stick.set(Way::Up, true);
+    assert_eq!(stick.matrix()[4], !(1u8 << 2), "up presses 8");
+
+    // What it has learnt goes to the preferences as text and comes back.
+    let text = zx_rustrum::joystick::program_to_text(&stick);
+    assert_eq!(text, "up:4.2");
+    let mut again = Joystick::new();
+    zx_rustrum::joystick::program_from_text(&mut again, &format!("{text},nonsense,fire:9.9"));
+    assert_eq!(again.taught(Way::Up), Some((4, 2)));
+    assert_eq!(
+        again.taught(Way::Fire),
+        None,
+        "a key that is not on the matrix is dropped"
+    );
+}

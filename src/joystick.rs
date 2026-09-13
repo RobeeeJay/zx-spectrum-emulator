@@ -20,6 +20,13 @@
 //!   9 and down on 8. Spectrum Computing records the same swap as a known
 //!   error. The manual does not say how IN 31 is decoded, so it is decoded as
 //!   Kempston's.
+//! * The **DK'Tronics Programmable** has one socket, wired to whichever five
+//!   keys it has been taught. Its slider has two positions: at 2 it is being
+//!   taught — hold the stick one way, press the key, let go of both — and at 1
+//!   it plays. Its tape also programs the diagonals; taught by hand it does
+//!   not. Here holding two directions presses both keys, which is what the
+//!   tape's programming gives; how the box stores its diagonals is not known,
+//!   so taught-by-hand's lack of them is not copied.
 //!
 //! Which of those a game wants is not something the game says, which is why an
 //! emulator has to offer all of them and let somebody choose.
@@ -74,10 +81,11 @@ pub enum Kind {
     Fuller,
     DkTronicsKeys,
     DkTronicsKempston,
+    DkTronicsProgrammable,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::None,
         Kind::Kempston,
         Kind::Sinclair1,
@@ -86,6 +94,7 @@ impl Kind {
         Kind::Fuller,
         Kind::DkTronicsKeys,
         Kind::DkTronicsKempston,
+        Kind::DkTronicsProgrammable,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -98,6 +107,7 @@ impl Kind {
             Kind::Fuller => "Fuller",
             Kind::DkTronicsKeys => "DK'Tronics port 1",
             Kind::DkTronicsKempston => "DK'Tronics port 2",
+            Kind::DkTronicsProgrammable => "DK'Tronics programmable",
         }
     }
 
@@ -112,6 +122,7 @@ impl Kind {
             Kind::Fuller => "fuller",
             Kind::DkTronicsKeys => "dktronics1",
             Kind::DkTronicsKempston => "dktronics2",
+            Kind::DkTronicsProgrammable => "dkprog",
         }
     }
 
@@ -138,6 +149,10 @@ impl Kind {
                  down — the other way round from Interface 2 — and 0 to fire."
             }
             Kind::DkTronicsKempston => "DK'Tronics' other socket: IN 31, as Kempston.",
+            Kind::DkTronicsProgrammable => {
+                "Wired to whichever five keys it has been taught. Slider at 2, hold a \
+                 direction and press the key it should be; slider back to 1 to play."
+            }
         }
     }
 
@@ -149,6 +164,7 @@ impl Kind {
             Kind::DkTronicsKeys | Kind::DkTronicsKempston => {
                 Some(crate::hardware::Peripheral::DkTronicsJoystick)
             }
+            Kind::DkTronicsProgrammable => Some(crate::hardware::Peripheral::DkTronicsProgrammable),
             _ => None,
         }
     }
@@ -180,6 +196,11 @@ pub struct Joystick {
     pub kind: Kind,
     /// Which of the five are over, in `Way`'s own order.
     pressed: [bool; 5],
+    /// What the DK'Tronics Programmable has been taught: a key of the matrix
+    /// for each of the five, in `Way`'s order. Nothing until it is taught.
+    program: [Option<(usize, u8)>; 5],
+    /// Its slider: at 2 it is being taught, and presses nothing.
+    pub programming: bool,
 }
 
 impl Joystick {
@@ -236,6 +257,35 @@ impl Joystick {
         }
     }
 
+    /// The key the DK'Tronics Programmable has been taught for a direction.
+    pub fn taught(&self, way: Way) -> Option<(usize, u8)> {
+        self.program[way.index()]
+    }
+
+    pub fn teach(&mut self, way: Way, key: Option<(usize, u8)>) {
+        self.program[way.index()] = key;
+    }
+
+    /// With the slider at 2, a direction held while one key is down is taught
+    /// that key: the way the manual says to program it by hand. Two
+    /// directions, two keys, or none teach nothing.
+    pub fn learn(&mut self, keyboard: &[u8; 8]) {
+        if self.kind != Kind::DkTronicsProgrammable || !self.programming {
+            return;
+        }
+        let held: Vec<Way> = Way::ALL.into_iter().filter(|w| self.is_down(*w)).collect();
+        let down: Vec<(usize, u8)> = (0..8)
+            .flat_map(|row| {
+                (0..5u8)
+                    .filter(move |bit| keyboard[row] & (1 << bit) == 0)
+                    .map(move |bit| (row, bit))
+            })
+            .collect();
+        if let ([way], [key]) = (held.as_slice(), down.as_slice()) {
+            self.program[way.index()] = Some(*key);
+        }
+    }
+
     /// The keyboard lines it is holding down, for the interfaces that are
     /// wired to keys rather than to a port.
     ///
@@ -252,6 +302,50 @@ impl Joystick {
                 }
             }
         }
+        if self.kind == Kind::DkTronicsProgrammable && !self.programming {
+            for way in Way::ALL {
+                if let (true, Some((row, bit))) = (self.is_down(way), self.taught(way)) {
+                    keys[row] &= !(1 << bit);
+                }
+            }
+        }
         keys
+    }
+}
+
+/// What the DK'Tronics Programmable has been taught, as the preferences keep
+/// it: `up:4.2,fire:4.0`, a direction and its key's row and bit.
+pub fn program_to_text(stick: &Joystick) -> String {
+    Way::ALL
+        .iter()
+        .filter_map(|way| {
+            stick
+                .taught(*way)
+                .map(|(row, bit)| format!("{}:{row}.{bit}", way.name()))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// And back. A piece that means nothing is dropped rather than throwing the
+/// rest away.
+pub fn program_from_text(stick: &mut Joystick, text: &str) {
+    for way in Way::ALL {
+        stick.teach(way, None);
+    }
+    for piece in text.split(',') {
+        let Some((name, key)) = piece.trim().split_once(':') else {
+            continue;
+        };
+        let Some(way) = Way::ALL.into_iter().find(|w| w.name() == name) else {
+            continue;
+        };
+        if let Some((row, bit)) = key.split_once('.') {
+            if let (Ok(row), Ok(bit)) = (row.parse::<usize>(), bit.parse::<u8>()) {
+                if row < 8 && bit < 5 {
+                    stick.teach(way, Some((row, bit)));
+                }
+            }
+        }
     }
 }

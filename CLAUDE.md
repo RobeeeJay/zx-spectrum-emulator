@@ -515,8 +515,9 @@ typing a space on a machine with no stick at all.
 
 **The Hardware window is in sections, and a stick has one interface.** Mice,
 Multiface, Printers, Audio, Joysticks and Drives, in that order; the MCP
-`hardware` list uses the same. The Kempston and DK'Tronics joystick interfaces
-are entries there as well as choices in the Input window, and both windows go
+`hardware` list uses the same. The Kempston, DK'Tronics and DK'Tronics
+Programmable joystick interfaces are entries there as well as choices in the
+Input window, and both windows go
 through `SpectrumBus::set_joystick`: there is one stick, so fitting one
 interface takes the other off, and choosing a key-wired interface in the Input
 window takes both off. A preferences file from before this says only the

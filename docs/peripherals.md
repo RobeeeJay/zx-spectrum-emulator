@@ -314,6 +314,20 @@ records the same swap as a known error. The manual does not say how IN 31 is
 decoded, so it is decoded as Kempston's. Fitting it puts the stick in the
 Kempston socket, which is what most games ask for.
 
+**DK'Tronics Programmable**: one socket, wired to whichever five keys it has
+been taught, and a slider with two positions. Its manual has it taught either
+with the tape that came with it or by hand: slider to 2, hold the stick one
+way, press the key, let go of both, and so on for the other directions and
+fire; slider back to 1 to play. Taught by hand it does "NOT program the
+diagonals", which the tape does. Here the slider and the teaching are in the
+Input window and work as the manual says, while a game is running if need be;
+holding two directions presses both keys, which is what the tape gives. How
+the box keeps its diagonals is not known, so taught-by-hand's lack of them is
+not copied. Untaught it presses nothing — the manual clears its memory before
+teaching — and what it has learnt is kept in the preferences, which the box
+itself probably did not survive a power cut to do. An SZX snapshot has nowhere
+for taught keys and saves it as no joystick.
+
 ## The ZX Printer and the Alphacom 32
 
 `src/printer.rs` is Fuse's `printer.c` — itself Ian Collier's from xz80 —

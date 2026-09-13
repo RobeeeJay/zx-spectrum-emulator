@@ -54,7 +54,12 @@ impl App {
             Peripheral::DkTronicsJoystick if yes => {
                 self.spec.bus.set_joystick(Kind::DkTronicsKempston)
             }
-            Peripheral::KempstonJoystick | Peripheral::DkTronicsJoystick => {
+            Peripheral::DkTronicsProgrammable if yes => {
+                self.spec.bus.set_joystick(Kind::DkTronicsProgrammable)
+            }
+            Peripheral::KempstonJoystick
+            | Peripheral::DkTronicsJoystick
+            | Peripheral::DkTronicsProgrammable => {
                 if self.spec.bus.joystick.kind.interface() == Some(what) {
                     self.spec.bus.set_joystick(Kind::None);
                 }

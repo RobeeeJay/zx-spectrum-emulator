@@ -335,3 +335,21 @@ fn the_hardware_list_is_in_sections() {
         zx_rustrum::joystick::Kind::DkTronicsKempston
     );
 }
+
+/// Fitting the programmable over MCP plugs the stick into it, and says it has
+/// been taught nothing yet.
+#[test]
+fn fitting_the_programmable_says_it_is_untaught() {
+    let mut session = Session::new();
+    let out = call(
+        &mut session,
+        "fit",
+        [("what", Json::str("dktronics_programmable"))],
+    )
+    .expect("fitted");
+    assert!(out.contains("taught nothing"), "{out}");
+    assert_eq!(
+        session.spec.bus.joystick.kind,
+        zx_rustrum::joystick::Kind::DkTronicsProgrammable
+    );
+}

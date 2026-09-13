@@ -124,3 +124,62 @@ fn an_old_preferences_file_fits_the_interface_its_stick_needs() {
     assert_eq!(app.spec.bus.joystick.kind, Kind::Kempston);
     assert!(app.spec.bus.hardware.fitted(Peripheral::KempstonJoystick));
 }
+
+/// Teaching the programmable through the app: with its slider at 2, holding
+/// the arrow bound to up and pressing 8 on the desk teaches it 8, and with the
+/// slider back at 1 the same arrow presses 8 on the machine. What it learnt is
+/// remembered between launches.
+#[test]
+fn the_programmable_is_taught_from_the_desk_and_remembered() {
+    let mut app = test_app();
+    app.fit(Peripheral::DkTronicsProgrammable, true);
+    assert_eq!(app.spec.bus.joystick.kind, Kind::DkTronicsProgrammable);
+    app.spec.bus.joystick.programming = true;
+    let mut h = Harness::builder()
+        .with_size([1500.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.key_down(egui::Key::ArrowUp);
+    h.key_down(egui::Key::Num8);
+    h.run_steps(2);
+    h.key_up(egui::Key::Num8);
+    h.key_up(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(
+        h.state()
+            .spec
+            .bus
+            .joystick
+            .taught(zx_rustrum::joystick::Way::Up),
+        Some((4, 2)),
+        "up was taught 8"
+    );
+
+    h.state_mut().spec.bus.joystick.programming = false;
+    h.key_down(egui::Key::ArrowUp);
+    h.run_steps(2);
+    use zx_rustrum::z80::Bus;
+    let row = h.state_mut().spec.bus.io_read(0xEFFE);
+    assert_eq!(
+        row & (1 << 2),
+        0,
+        "the arrow presses 8 on the machine: {row:02X}"
+    );
+    h.key_up(egui::Key::ArrowUp);
+    h.run_steps(1);
+
+    h.state_mut().save_window_state();
+    let saved = h.state().prefs.to_text();
+    assert!(saved.contains("joystick_program = \"up:4.2\""), "{saved}");
+    let mut next = test_app();
+    next.prefs = zx_rustrum::prefs::Prefs::parse(&saved);
+    next.apply_prefs();
+    assert_eq!(
+        next.spec.bus.joystick.taught(zx_rustrum::joystick::Way::Up),
+        Some((4, 2))
+    );
+    assert!(next
+        .spec
+        .bus
+        .hardware
+        .fitted(Peripheral::DkTronicsProgrammable));
+}

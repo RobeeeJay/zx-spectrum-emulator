@@ -180,7 +180,19 @@ pub fn fit(session: &mut Session, args: &Json) -> Result<String, String> {
                 .set_joystick(crate::joystick::Kind::DkTronicsKempston);
             out.push_str(" The stick is in its Kempston socket, port No. 2.");
         }
-        Peripheral::KempstonJoystick | Peripheral::DkTronicsJoystick => {
+        Peripheral::DkTronicsProgrammable if on => {
+            session
+                .spec
+                .bus
+                .set_joystick(crate::joystick::Kind::DkTronicsProgrammable);
+            out.push_str(
+                " It has been taught nothing yet: a key for each direction is taught in the \
+                 Input window, with its slider at 2.",
+            );
+        }
+        Peripheral::KempstonJoystick
+        | Peripheral::DkTronicsJoystick
+        | Peripheral::DkTronicsProgrammable => {
             if session.spec.bus.joystick.kind.interface() == Some(what) {
                 session.spec.bus.set_joystick(crate::joystick::Kind::None);
             }

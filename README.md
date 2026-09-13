@@ -585,8 +585,9 @@ Four joystick interfaces — Kempston, the two Sinclair sticks and the Cursor
 one, plus the Fuller — are worked from the keys of the desk or from a gamepad
 through the **Input** window, which maps either onto the stick, onto keys of
 the machine's own keyboard, or onto the buttons of whichever mouse is fitted.
-The Kempston and DK'Tronics joystick interfaces are also in the **Hardware**
-window, which lists everything by section — Mice, Multiface, Printers, Audio,
+The Kempston, DK'Tronics and DK'Tronics Programmable joystick interfaces are
+also in the **Hardware** window — the programmable one is taught its keys in
+the Input window with its slider at 2, as its manual says — which lists everything by section — Mice, Multiface, Printers, Audio,
 Joysticks and Drives — and the two windows agree about which the stick is in.
 
 The **Keyboard** window is the machine's keyboard, pressable and lit by the

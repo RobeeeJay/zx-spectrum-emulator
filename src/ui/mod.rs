@@ -498,6 +498,9 @@ pub struct App {
     pub mouse_captured: bool,
     /// What is being looked for in the Keyboard window.
     pub key_search: String,
+    /// The direction of the DK'Tronics Programmable being given a key in the
+    /// Input window.
+    pub dkprog_picking: Option<crate::joystick::Way>,
     /// The host's left, middle and right buttons, while the pointer is
     /// captured; what is bound to a mouse button is added to these.
     host_buttons: [bool; 3],
@@ -680,6 +683,7 @@ impl App {
             mouse_rest: egui::Vec2::ZERO,
             mouse_captured: false,
             key_search: String::new(),
+            dkprog_picking: None,
             host_buttons: [false; 3],
             window_keys_next: HeldKeys::default(),
             window_keys: HeldKeys::default(),
@@ -2212,6 +2216,9 @@ impl App {
                 self.spec.bus.set_joystick(kind);
             }
         }
+        if let Some(program) = self.prefs.joystick_program.clone() {
+            crate::joystick::program_from_text(&mut self.spec.bus.joystick, &program);
+        }
         if let Some(map) = self.prefs.joystick_map.clone() {
             // An empty mapping is somebody having taken every line out, which
             // is theirs to do; a file with no mapping at all gets the arrows.
@@ -2254,6 +2261,11 @@ impl App {
         self.prefs.microdrives = Some(self.spec.bus.hardware.if1_drives);
         self.prefs.joystick = Some(self.spec.bus.joystick.kind.key().to_string());
         self.prefs.joystick_map = Some(inputwin::to_text(&self.joystick_map));
+        // Kept between launches as the bindings are. The box itself probably
+        // forgot when the power went; somebody who has taught it keys for a
+        // game should not have to teach it again.
+        self.prefs.joystick_program =
+            Some(crate::joystick::program_to_text(&self.spec.bus.joystick));
     }
 
     /// Write the window layout and display settings out. Called on close.
@@ -5162,6 +5174,9 @@ impl App {
                 }
             }
         }
+        // The DK'Tronics Programmable, with its slider at 2, is taught the key
+        // pressed while a direction is held.
+        self.spec.bus.joystick.learn(&matrix);
         match &mut self.zx81 {
             // The ZX81's matrix is wired the same way, minus the bottom row's
             // shift keys.

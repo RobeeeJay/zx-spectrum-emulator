@@ -434,6 +434,9 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             .small()
             .color(theme::DIM),
     );
+    if app.spec.bus.joystick.kind == Kind::DkTronicsProgrammable {
+        programmable(app, ui);
+    }
     ui.add_space(6.0);
 
     // What the stick is doing now, so a mapping can be checked without a game.
@@ -599,5 +602,84 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         if theme::selectable(ui, false, "Put the arrow keys back").clicked() {
             app.joystick_map = defaults();
         }
+    }
+}
+
+/// The name on a key of the matrix, for saying what the programmable has been
+/// taught.
+fn key_named(key: Option<(usize, u8)>) -> &'static str {
+    match key {
+        None => "—",
+        Some(at) => crate::keyboard::SPECTRUM
+            .iter()
+            .find(|k| k.press == [at])
+            .map_or("?", |k| k.main),
+    }
+}
+
+/// The DK'Tronics Programmable: its slider, and what it has been taught.
+fn programmable(app: &mut App, ui: &mut egui::Ui) {
+    ui.add_space(4.0);
+    let programming = app.spec.bus.joystick.programming;
+    ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Slider");
+        if theme::selectable(ui, !programming, "1 play").clicked() {
+            app.spec.bus.joystick.programming = false;
+        }
+        if theme::selectable(ui, programming, "2 program")
+            .on_hover_text(
+                "Hold the stick one way and press the key it should be, then let go of both. \
+                 Back to 1 to play.",
+            )
+            .clicked()
+        {
+            app.spec.bus.joystick.programming = true;
+        }
+    });
+    if programming {
+        ui.label(
+            egui::RichText::new(
+                "Teaching: hold a direction and press the key it should press. The stick \
+                 presses nothing until the slider is back at 1.",
+            )
+            .small()
+            .color(theme::AMBER),
+        );
+    }
+    ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Taught");
+        for way in Way::ALL {
+            let label = format!(
+                "{} {}",
+                way.name(),
+                key_named(app.spec.bus.joystick.taught(way))
+            );
+            let picking = app.dkprog_picking == Some(way);
+            if theme::selectable(ui, picking, &label)
+                .on_hover_text("Choose the key for this direction from a list instead")
+                .clicked()
+            {
+                app.dkprog_picking = if picking { None } else { Some(way) };
+            }
+        }
+        if theme::selectable(ui, false, "Forget all").clicked() {
+            for way in Way::ALL {
+                app.spec.bus.joystick.teach(way, None);
+            }
+        }
+    });
+    if let Some(way) = app.dkprog_picking {
+        ui.horizontal_wrapped(|ui| {
+            theme::group_label(ui, way.name());
+            for key in crate::keyboard::SPECTRUM
+                .iter()
+                .filter(|k| k.press.len() == 1)
+            {
+                if theme::selectable(ui, false, key.main).clicked() {
+                    app.spec.bus.joystick.teach(way, Some(key.press[0]));
+                    app.dkprog_picking = None;
+                }
+            }
+        });
     }
 }
