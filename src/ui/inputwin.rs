@@ -1,5 +1,6 @@
-//! The Joystick window: which interface the stick is plugged into, and what on
-//! the desk works it.
+//! The Input window: which interface the stick is plugged into, and what on
+//! the desk works it — the stick's switches, keys of the machine's own
+//! keyboard, and the buttons of the two mice.
 //!
 //! The machine has no joystick port, so an interface is a choice rather than a
 //! fact — see `crate::joystick` for the four of them. What is here is that
@@ -26,6 +27,60 @@ pub enum Does {
     Way(Way),
     /// A key of the machine's own keyboard, by where it is in the matrix.
     Key(usize, u8),
+    /// A button on one of the mice.
+    Mouse(MouseButton),
+}
+
+/// The buttons of the two mice: a binding can hold one down as the host's
+/// mouse button would, which is how a pad plays a game written for a mouse.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MouseButton {
+    KempstonLeft,
+    KempstonRight,
+    AmxLeft,
+    AmxMiddle,
+    AmxRight,
+}
+
+impl MouseButton {
+    pub const ALL: [MouseButton; 5] = [
+        MouseButton::KempstonLeft,
+        MouseButton::KempstonRight,
+        MouseButton::AmxLeft,
+        MouseButton::AmxMiddle,
+        MouseButton::AmxRight,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            MouseButton::KempstonLeft => "Kempston left",
+            MouseButton::KempstonRight => "Kempston right",
+            MouseButton::AmxLeft => "AMX left",
+            MouseButton::AmxMiddle => "AMX middle",
+            MouseButton::AmxRight => "AMX right",
+        }
+    }
+
+    /// How it is written in the preferences.
+    fn key(self) -> &'static str {
+        match self {
+            MouseButton::KempstonLeft => "kmouse.left",
+            MouseButton::KempstonRight => "kmouse.right",
+            MouseButton::AmxLeft => "amx.left",
+            MouseButton::AmxMiddle => "amx.middle",
+            MouseButton::AmxRight => "amx.right",
+        }
+    }
+
+    /// The interface the button is on.
+    pub fn on(self) -> crate::hardware::Peripheral {
+        match self {
+            MouseButton::KempstonLeft | MouseButton::KempstonRight => {
+                crate::hardware::Peripheral::KempstonMouse
+            }
+            _ => crate::hardware::Peripheral::AmxMouse,
+        }
+    }
 }
 
 /// A control on a gamepad: a button, or a stick pushed one way.
@@ -218,6 +273,7 @@ pub fn describes(does: Does) -> String {
             .find(|k| k.press == [(row, bit)])
             .map(|k| format!("the {} key", k.main))
             .unwrap_or_else(|| format!("key at row {row} bit {bit}")),
+        Does::Mouse(button) => format!("the {} mouse button", button.name()),
     }
 }
 
@@ -229,6 +285,7 @@ pub fn to_text(bindings: &[Binding]) -> String {
             let does = match b.does {
                 Does::Way(way) => way.name().to_string(),
                 Does::Key(row, bit) => format!("key{row}.{bit}"),
+                Does::Mouse(button) => button.key().to_string(),
             };
             let from = match b.from {
                 From::Key(key) => key_name(key).to_string(),
@@ -262,6 +319,12 @@ pub fn from_text(text: &str) -> Vec<Binding> {
             "up" => Does::Way(Way::Up),
             "down" => Does::Way(Way::Down),
             "fire" => Does::Way(Way::Fire),
+            other if MouseButton::ALL.iter().any(|b| b.key() == other) => Does::Mouse(
+                *MouseButton::ALL
+                    .iter()
+                    .find(|b| b.key() == other)
+                    .expect("checked"),
+            ),
             other => match other.strip_prefix("key").and_then(|r| r.split_once('.')) {
                 Some((row, bit)) => match (row.parse::<usize>(), bit.parse::<u8>()) {
                     (Ok(row), Ok(bit)) if row < 8 && bit < 5 => Does::Key(row, bit),
@@ -393,14 +456,41 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             );
         }
     });
+    // And the mouse buttons, for whichever mouse is fitted.
+    let kempston = app.spec.bus.mouse.buttons;
+    let amx = app.spec.bus.amx.as_ref().map(|a| a.buttons);
+    let fitted: Vec<MouseButton> = MouseButton::ALL
+        .into_iter()
+        .filter(|b| app.spec.bus.hardware.fitted(b.on()))
+        .collect();
+    if !fitted.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            theme::group_label(ui, "Mouse");
+            for button in fitted {
+                let down = match button {
+                    MouseButton::KempstonLeft => kempston & 0x02 == 0,
+                    MouseButton::KempstonRight => kempston & 0x01 == 0,
+                    MouseButton::AmxLeft => amx.is_some_and(|b| b & 0x80 == 0),
+                    MouseButton::AmxMiddle => amx.is_some_and(|b| b & 0x40 == 0),
+                    MouseButton::AmxRight => amx.is_some_and(|b| b & 0x20 == 0),
+                };
+                ui.label(egui::RichText::new(button.name()).small().color(if down {
+                    theme::AMBER
+                } else {
+                    theme::DIM
+                }));
+            }
+        });
+    }
     ui.add_space(6.0);
 
     theme::group_label(ui, "Keys and pads");
     let pads = app.pads.count;
     ui.label(
         egui::RichText::new(format!(
-            "A key here works the stick instead of the machine's own keyboard. Press Set, \
-             then the key or the pad control you want. {}",
+            "A key here works the stick, a key of the machine or a mouse button instead of \
+             the machine's own keyboard. Press Set, then the key or the pad control you \
+             want. {}",
             match pads {
                 0 => "No gamepad is plugged in.".to_string(),
                 1 => "One gamepad is plugged in.".to_string(),
@@ -464,6 +554,25 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 does: Does::Key(7, 0),
             });
             app.joystick_binding = Some(app.joystick_map.len() - 1);
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        theme::group_label(ui, "Add mouse");
+        for button in MouseButton::ALL {
+            let fitted = app.spec.bus.hardware.fitted(button.on());
+            let response = theme::selectable(ui, false, button.name()).on_hover_text(if fitted {
+                "Hold this mouse button down with a key or a pad control"
+            } else {
+                "Its mouse is not fitted, so the binding waits until it is: fit it in the \
+                 Hardware window"
+            });
+            if response.clicked() {
+                app.joystick_map.push(Binding {
+                    from: From::Key(egui::Key::Num0),
+                    does: Does::Mouse(button),
+                });
+                app.joystick_binding = Some(app.joystick_map.len() - 1);
+            }
         }
     });
     if let Some(i) = app.joystick_binding {

@@ -27,10 +27,11 @@ pub enum Peripheral {
     KempstonMouse,
     ZxPrinter,
     Alphacom32,
+    AmxMouse,
 }
 
 impl Peripheral {
-    pub const ALL: [Peripheral; 11] = [
+    pub const ALL: [Peripheral; 12] = [
         Peripheral::Interface1,
         Peripheral::Uspeech,
         Peripheral::Fuller,
@@ -42,6 +43,7 @@ impl Peripheral {
         Peripheral::KempstonMouse,
         Peripheral::ZxPrinter,
         Peripheral::Alphacom32,
+        Peripheral::AmxMouse,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -57,6 +59,7 @@ impl Peripheral {
             Peripheral::KempstonMouse => "Kempston mouse",
             Peripheral::ZxPrinter => "ZX Printer",
             Peripheral::Alphacom32 => "Alphacom 32",
+            Peripheral::AmxMouse => "AMX mouse",
         }
     }
 
@@ -74,6 +77,7 @@ impl Peripheral {
             Peripheral::KempstonMouse => "kempston_mouse",
             Peripheral::ZxPrinter => "zx_printer",
             Peripheral::Alphacom32 => "alphacom32",
+            Peripheral::AmxMouse => "amx_mouse",
         }
     }
 
@@ -111,6 +115,10 @@ impl Peripheral {
             Peripheral::Alphacom32 => {
                 "A thermal printer on the same port, driven the same way, on white paper"
             }
+            Peripheral::AmxMouse => {
+                "Advanced Memory Systems' mouse: a Z80 PIO that interrupts the machine for \
+                 every step it moves, and three buttons"
+            }
         }
     }
 
@@ -126,7 +134,8 @@ impl Peripheral {
             | Peripheral::SpecDrum
             | Peripheral::KempstonMouse
             | Peripheral::ZxPrinter
-            | Peripheral::Alphacom32 => Emulated::Yes,
+            | Peripheral::Alphacom32
+            | Peripheral::AmxMouse => Emulated::Yes,
             // Two ROMs: Currah's, which is the interface, and the speech
             // chip's own, which is where the allophones live.
             Peripheral::Uspeech => Emulated::NeedsRom(

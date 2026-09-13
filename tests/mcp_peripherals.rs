@@ -286,3 +286,26 @@ fn the_mouse_tool_moves_a_fitted_mouse_and_refuses_otherwise() {
         "and says where: {out}"
     );
 }
+
+/// With the AMX mouse fitted, the mouse tool queues steps for its PIO, and
+/// says they wait until the program turns its interrupts on.
+#[test]
+fn the_mouse_tool_queues_steps_for_an_amx_mouse() {
+    let mut session = Session::new();
+    call(&mut session, "fit", [("what", Json::str("amx_mouse"))]).expect("fitted");
+    let out = call(
+        &mut session,
+        "mouse",
+        [
+            ("dx", Json::num(3)),
+            ("dy", Json::num(-2)),
+            ("left", Json::Bool(true)),
+            ("frames", Json::num(1)),
+        ],
+    )
+    .expect("queued");
+    let amx = session.spec.bus.amx.clone().expect("an AMX");
+    assert_eq!((amx.pending_x, amx.pending_y), (3, -2), "{out}");
+    assert_eq!(amx.buttons, 0x7F, "left held, bit 7: {out}");
+    assert!(out.contains("AMX") && out.contains("(3, -2)"), "{out}");
+}

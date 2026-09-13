@@ -49,6 +49,12 @@ pub trait Bus {
     /// nothing watches — but the Spectrum's ULA does, and an address pointing
     /// into the screen's own RAM is what makes it snow.
     fn refresh(&mut self, _addr: u16) {}
+    /// The byte on the data bus when an IM 2 interrupt is acknowledged, which
+    /// is the low half of the vector. Nothing drives the bus then on a
+    /// Spectrum, so it floats at $FF; a Z80 PIO puts its own vector there.
+    fn int_vector(&mut self) -> u8 {
+        0xFF
+    }
     /// Peek without timing or access tracking; used by the debugger.
     fn peek(&self, addr: u16) -> u8;
 }
@@ -372,8 +378,9 @@ impl Z80 {
             _ => {
                 bus.contend(self.ir(), 7);
                 self.push16(bus, self.pc);
-                // Vector byte is whatever is floating on the bus: 0xFF here.
-                let vector = ((self.i as u16) << 8) | 0x00ff;
+                // The vector's low byte is whatever is on the bus: floating at
+                // $FF, unless something is driving it.
+                let vector = ((self.i as u16) << 8) | bus.int_vector() as u16;
                 let target = self.read16(bus, vector);
                 self.pc = target;
                 self.wz = target;

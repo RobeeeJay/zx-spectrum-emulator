@@ -239,3 +239,43 @@ fn without_a_mouse_a_click_captures_nothing() {
     click(&mut h, CENTRE);
     assert!(!h.state().mouse_captured);
 }
+
+/// The AMX mouse is captured the same way, and what the host's mouse does is
+/// queued as steps for its PIO to deliver — right and down positive — with the
+/// left button on bit 7 of $DF.
+#[test]
+fn the_amx_mouse_is_captured_and_fed_steps() {
+    let mut app = test_app();
+    app.fit(Peripheral::AmxMouse, true);
+    app.running = true;
+    let mut h = Harness::builder()
+        .with_size([1500.0, 1200.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.input_mut().focused = true;
+    h.run_steps(3);
+    let scale = h.state().scale;
+    click(&mut h, CENTRE);
+    assert!(h.state().mouse_captured, "captured");
+
+    h.event(egui::Event::MouseMoved(egui::vec2(
+        12.0 * scale,
+        7.0 * scale,
+    )));
+    h.run_steps(1);
+    let amx = h.state().spec.bus.amx.clone().unwrap();
+    // Nothing on this machine turns the PIO's interrupts on, so the steps wait.
+    assert_eq!((amx.pending_x, amx.pending_y), (12, 7), "queued as steps");
+
+    h.event(egui::Event::PointerButton {
+        pos: CENTRE,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    assert_eq!(
+        h.state().spec.bus.amx.as_ref().unwrap().buttons,
+        0x7F,
+        "left held, bit 7"
+    );
+}

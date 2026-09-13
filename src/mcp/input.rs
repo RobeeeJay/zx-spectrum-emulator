@@ -270,13 +270,18 @@ pub fn key_named(name: &str, _model: Model) -> Result<(usize, u8), String> {
         })
 }
 
-/// Move the Kempston mouse and set its buttons, then run a few frames so the
-/// program reading it has had a chance to.
+/// Move whichever mouse is fitted and set its buttons, then run a few frames
+/// so the program reading it has had a chance to.
 pub fn mouse(session: &mut Session, args: &Json) -> Result<String, String> {
     use crate::hardware::Peripheral;
-    if !session.spec.bus.hardware.fitted(Peripheral::KempstonMouse) {
+    let hardware = &session.spec.bus.hardware;
+    let (kempston, amx) = (
+        hardware.fitted(Peripheral::KempstonMouse),
+        hardware.fitted(Peripheral::AmxMouse),
+    );
+    if !kempston && !amx {
         return Err(
-            "no Kempston mouse is fitted: fit it first (fit with what: kempston_mouse)".into(),
+            "no mouse is fitted: fit one first (fit with what: kempston_mouse or amx_mouse)".into(),
         );
     }
     let signed = |key: &str| -> Result<i32, String> {
@@ -289,8 +294,41 @@ pub fn mouse(session: &mut Session, args: &Json) -> Result<String, String> {
         }
     };
     let (dx, dy) = (signed("dx")?, signed("dy")?);
-    let (left, right) = (flag(args, "left", false), flag(args, "right", false));
+    let (left, middle, right) = (
+        flag(args, "left", false),
+        flag(args, "middle", false),
+        flag(args, "right", false),
+    );
     let frames = count(args, "frames", 5)?.min(600);
+    let held = match (left, middle, right) {
+        (false, false, false) => "none held".to_string(),
+        _ => {
+            [(left, "left"), (middle, "middle"), (right, "right")]
+                .iter()
+                .filter(|(on, _)| *on)
+                .map(|(_, name)| *name)
+                .collect::<Vec<_>>()
+                .join(" and ")
+                + " held"
+        }
+    };
+
+    if amx {
+        if let Some(mouse) = session.spec.bus.amx.as_mut() {
+            mouse.queue(dx, dy);
+            mouse.set_buttons(left, middle, right);
+        }
+        for _ in 0..frames {
+            session.spec.run(FRAME_T);
+        }
+        let mouse = session.spec.bus.amx.clone().unwrap_or_default();
+        return Ok(format!(
+            "AMX mouse: queued ({dx}, {dy}), buttons {held}; ran {frames} frames. Steps are \
+             delivered as PIO interrupts once the program has turned them on; ({}, {}) are \
+             still waiting. Buttons ${:02X} at $DF — active low, left bit 7, middle 6, right 5.",
+            mouse.pending_x, mouse.pending_y, mouse.buttons
+        ));
+    }
 
     let mouse = &mut session.spec.bus.mouse;
     mouse.move_by(dx, dy);
@@ -300,17 +338,9 @@ pub fn mouse(session: &mut Session, args: &Json) -> Result<String, String> {
     }
     let mouse = session.spec.bus.mouse;
     Ok(format!(
-        "Moved by ({dx}, {dy}), buttons {}; ran {frames} frames. The counters read X {} \
-         and Y {} (Y counts up the screen), buttons ${:02X} at $FADF — active low, left \
-         is bit 1 and right bit 0.",
-        match (left, right) {
-            (false, false) => "up".to_string(),
-            (true, false) => "left held".to_string(),
-            (false, true) => "right held".to_string(),
-            (true, true) => "both held".to_string(),
-        },
-        mouse.x,
-        mouse.y,
-        mouse.buttons
+        "Kempston mouse: moved by ({dx}, {dy}), buttons {held}; ran {frames} frames. The \
+         counters read X {} and Y {} (Y counts up the screen), buttons ${:02X} at $FADF — \
+         active low, left is bit 1 and right bit 0.",
+        mouse.x, mouse.y, mouse.buttons
     ))
 }

@@ -583,9 +583,10 @@ the Fuller Audio Box and the SpecDrum are emulated as well —
 
 Four joystick interfaces — Kempston, the two Sinclair sticks and the Cursor
 one, plus the Fuller — are worked from the keys of the desk or from a gamepad
-through the **Joystick** window, which maps either onto the stick or onto keys
-of the machine's own keyboard. A **Kempston mouse**, fitted in the Hardware
-window, takes the host's mouse when the screen is clicked: the pointer is
+through the **Input** window, which maps either onto the stick, onto keys of
+the machine's own keyboard, or onto the buttons of whichever mouse is fitted. A **Kempston mouse** or an **AMX mouse** — one or the
+other, since both answer at $DF — fitted in the Hardware window, takes the
+host's mouse when the screen is clicked: the pointer is
 hidden and held, and its movement and both buttons go to the machine, in the
 machine's pixels. **Esc** gives it back, and so does switching away from the
 main window. A **ZX Printer** or an **Alphacom

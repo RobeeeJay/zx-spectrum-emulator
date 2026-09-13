@@ -156,6 +156,18 @@ pub fn fit(session: &mut Session, args: &Json) -> Result<String, String> {
         }
         // Both printers are the same device to the machine, on the same port,
         // so fitting one takes the other off.
+        // The two mice both answer at $DF, so there is room for one.
+        Peripheral::KempstonMouse | Peripheral::AmxMouse if on => {
+            let other = if what == Peripheral::KempstonMouse {
+                Peripheral::AmxMouse
+            } else {
+                Peripheral::KempstonMouse
+            };
+            session.spec.bus.hardware.fit(other, false);
+            session.spec.bus.amx =
+                (what == Peripheral::AmxMouse).then(crate::mouse::AmxMouse::default);
+        }
+        Peripheral::AmxMouse => session.spec.bus.amx = None,
         Peripheral::ZxPrinter | Peripheral::Alphacom32 if on => {
             let (other, paper) = if what == Peripheral::ZxPrinter {
                 (Peripheral::Alphacom32, crate::printer::Paper::Metallised)

@@ -260,6 +260,40 @@ Esc gives the pointer back, and so does the main window losing focus or the
 mouse being taken off. With the mouse fitted, a click on the screen captures
 rather than being the debugger's "which byte is this?".
 
+## The AMX mouse
+
+Advanced Memory Systems' mouse is a Z80 PIO rather than a pair of counters
+(`src/mouse.rs`). It sits on A7 low: A6 chooses data or control and A5 the
+PIO's port A (across) or B (up and down), which makes $1F and $3F the two
+directions and $5F and $7F where a program sets the PIO up — its interrupt
+vector, its mode, and whether it interrupts at all. The buttons are at $DF,
+active low: left bit 7, middle bit 6, right bit 5.
+
+Every step the mouse moves is an interrupt. The PIO pulls /INT and holds it
+until the CPU takes it, puts its own vector on the bus when it does — the
+machine's IM 2 table decides where that goes — and the handler reads bit 0 of
+$1F (0 right, 1 left) or $3F (0 up, 1 down) and moves its pointer a step.
+`Bus::int_vector` is how the bus supplies that byte; the ULA's own interrupt
+still gets the floating $FF. A PIO comes up with its interrupts off, and a
+reset turns them off again, so nothing reaches the machine until a program has
+set it up. Host movement is queued as steps, in the machine's pixels, and
+delivered no closer together than 1,000 T-states, the two ports taking turns so
+a diagonal is a diagonal. That spacing is a choice, not a measurement, and at
+most 255 steps wait in each direction.
+
+Where this comes from: the ports and the button bits are the Sinclair Wiki's
+and agree with dsp-emulator, which runs a full PIO; which way the direction
+bits run is dsp-emulator's and zx84's, which agree. zx84 puts the left button
+on bit 6, against the other two. No AMX software is in `tapes/`, so the real
+driver has not been run: `tests/amx.rs` has a driver of the same shape in
+machine code, programming the PIO through $5F and $7F and counting steps in its
+handlers.
+
+Only odd ports are answered. The four documented ones are odd, and an even
+port with A7 low is the ULA's too. The AMX answers ahead of a Kempston
+joystick, which would share $1F; and it and the Kempston mouse both answer at
+$DF, so fitting one takes the other off.
+
 ## The ZX Printer and the Alphacom 32
 
 `src/printer.rs` is Fuse's `printer.c` — itself Ian Collier's from xz80 —

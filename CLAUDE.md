@@ -473,6 +473,19 @@ counts in the machine's pixels, with the remainder carried to the next frame. It
 decoded and takes in the Kempston joystick's $1F, as in Fuse; the joystick is
 asked first.
 
+**The AMX mouse interrupts once a step, through its own vector.** It is a Z80
+PIO: every step the mouse moves raises /INT, the PIO puts its vector on the bus
+when the CPU takes it, and the handler reads which way the step went in bit 0
+of $1F or $3F. `Bus::int_vector` is how the bus says what the vector's low
+byte is — $FF, floating, for the ULA's interrupt — and the PIO holds its
+request until it is taken rather than for the ULA's thirty-odd T-states. It
+comes up with its interrupts off, so nothing happens until a program sets it
+up. No AMX software is here to run, so the details stand on the Sinclair Wiki,
+dsp-emulator and zx84 agreeing — where zx84 disagrees about the left button,
+the other two win — and `tests/amx.rs` checks it with a small driver of the
+same shape in machine code. Steps go no closer together than 1,000 T-states,
+which is a choice rather than a measurement.
+
 **The printer is where the stylus has got to, not a stream of lines.** The ROM
 watches the ZX Printer's encoder and switches the stylus dot by dot, so
 `src/printer.rs` works out the stylus's position from how long the motor has

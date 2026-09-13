@@ -1,11 +1,12 @@
-//! The Joystick window: the interface, the mapping, and what the mapping does
-//! to the machine's own keyboard.
+//! The Input window: the interface, the mapping, and what the mapping does to
+//! the stick, the machine's own keyboard and the buttons of the two mice.
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
+use zx_rustrum::hardware::Peripheral;
 use zx_rustrum::joystick::{Kind, Way};
 use zx_rustrum::machine::Spectrum;
-use zx_rustrum::ui::joystickwin::{self, Binding, Does, From, Pad, Pads};
+use zx_rustrum::ui::inputwin::{self, Binding, Does, From, MouseButton, Pad, Pads};
 use zx_rustrum::ui::{App, Roms};
 
 fn test_app() -> App {
@@ -34,7 +35,7 @@ fn harness_for<'a>(app: App) -> Harness<'a, App> {
 #[test]
 fn the_window_offers_every_interface() {
     let mut app = test_app();
-    app.show_joystick = true;
+    app.show_input = true;
     let mut h = harness_for(app);
     h.run_steps(3);
 
@@ -130,15 +131,15 @@ fn the_mapping_is_remembered_as_text() {
             does: Does::Key(6, 0),
         },
     ];
-    let text = joystickwin::to_text(&map);
+    let text = inputwin::to_text(&map);
     assert!(text.contains("up"), "{text}");
     assert!(text.contains("key6.0"), "{text}");
-    assert_eq!(joystickwin::from_text(&text), map, "and back again");
+    assert_eq!(inputwin::from_text(&text), map, "and back again");
 
     // A line that means nothing is dropped rather than throwing the rest away,
     // the same way a badly edited note is. egui calls the arrow keys "Up" and
     // the rest, which is what goes in the file.
-    let salvaged = joystickwin::from_text("Up:up,nonsense,Tab:key9.9");
+    let salvaged = inputwin::from_text("Up:up,nonsense,Tab:key9.9");
     assert_eq!(salvaged.len(), 1, "{salvaged:?}");
 }
 
@@ -160,15 +161,15 @@ fn a_pad_control_is_written_down_and_read_back() {
             does: Does::Key(6, 0),
         },
     ];
-    let text = joystickwin::to_text(&map);
+    let text = inputwin::to_text(&map);
     assert!(text.contains("pad.A:fire"), "{text}");
     assert!(text.contains("pad.LeftX-:left"), "{text}");
     assert!(text.contains("pad.Start:key6.0"), "{text}");
-    assert_eq!(joystickwin::from_text(&text), map, "and back again");
+    assert_eq!(inputwin::from_text(&text), map, "and back again");
 
     // A control this does not know is dropped rather than taking the rest of
     // the mapping with it.
-    assert_eq!(joystickwin::from_text("pad.Nonsuch:fire").len(), 0);
+    assert_eq!(inputwin::from_text("pad.Nonsuch:fire").len(), 0);
 }
 
 /// Whether a binding is being worked is decided against a snapshot of the
@@ -187,18 +188,18 @@ fn a_pad_binding_is_on_when_the_control_is_over() {
     };
     let nothing = |_key| false;
 
-    assert!(joystickwin::holding(
+    assert!(inputwin::holding(
         From::Pad(Pad::Button(gilrs::Button::South)),
         &nothing,
         &pads
     ));
-    assert!(!joystickwin::holding(
+    assert!(!inputwin::holding(
         From::Pad(Pad::Button(gilrs::Button::East)),
         &nothing,
         &pads
     ));
     assert!(
-        joystickwin::holding(
+        inputwin::holding(
             From::Pad(Pad::Axis(gilrs::Axis::LeftStickX, false)),
             &nothing,
             &pads
@@ -206,7 +207,7 @@ fn a_pad_binding_is_on_when_the_control_is_over() {
         "the stick is well over to the left"
     );
     assert!(
-        !joystickwin::holding(
+        !inputwin::holding(
             From::Pad(Pad::Axis(gilrs::Axis::LeftStickX, true)),
             &nothing,
             &pads
@@ -214,7 +215,7 @@ fn a_pad_binding_is_on_when_the_control_is_over() {
         "and that is not the same as being over to the right"
     );
     assert!(
-        !joystickwin::holding(
+        !inputwin::holding(
             From::Pad(Pad::Axis(gilrs::Axis::LeftStickY, true)),
             &nothing,
             &pads
@@ -226,16 +227,8 @@ fn a_pad_binding_is_on_when_the_control_is_over() {
     // And a key binding is decided by the keys, with the pads saying nothing
     // about it either way.
     let z_down = |key| key == egui::Key::Z;
-    assert!(joystickwin::holding(
-        From::Key(egui::Key::Z),
-        &z_down,
-        &pads
-    ));
-    assert!(!joystickwin::holding(
-        From::Key(egui::Key::X),
-        &z_down,
-        &pads
-    ));
+    assert!(inputwin::holding(From::Key(egui::Key::Z), &z_down, &pads));
+    assert!(!inputwin::holding(From::Key(egui::Key::X), &z_down, &pads));
 }
 
 /// What is plugged in and what works it are remembered between launches.
@@ -258,4 +251,84 @@ fn the_interface_and_its_keys_are_remembered() {
     assert_eq!(next.spec.bus.joystick.kind, Kind::Sinclair2);
     assert_eq!(next.joystick_map.len(), 1);
     assert_eq!(next.joystick_map[0].from, From::Key(egui::Key::Z));
+}
+
+/// The window is called Input now, since it works more than a joystick, and
+/// the toolbar says so.
+#[test]
+fn the_toolbar_opens_an_input_window() {
+    let mut h = harness_for(test_app());
+    h.run_steps(2);
+    assert!(h.query_by_label("Input").is_some(), "an Input toggle");
+    assert!(
+        h.query_by_label("Joystick").is_none(),
+        "and no Joystick one"
+    );
+}
+
+/// A key bound to a mouse button holds it down, on either mouse, and is taken
+/// away from the machine's own keyboard like any other bound key.
+#[test]
+fn a_key_can_hold_a_mouse_button() {
+    let mut app = test_app();
+    app.fit(Peripheral::KempstonMouse, true);
+    app.joystick_map = vec![Binding {
+        from: From::Key(egui::Key::Z),
+        does: Does::Mouse(MouseButton::KempstonRight),
+    }];
+    let mut h = harness_for(app);
+    h.key_down(egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().spec.bus.mouse.buttons & 0x01,
+        0,
+        "the Kempston's right button, bit 0, is down: {:02X}",
+        h.state().spec.bus.mouse.buttons
+    );
+    assert_eq!(
+        h.state().spec.bus.keys[0] & (1 << 1),
+        1 << 1,
+        "and Z is not typed as well"
+    );
+    h.key_up(egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().spec.bus.mouse.buttons, 0xFF, "and let go");
+
+    let mut app = test_app();
+    app.fit(Peripheral::AmxMouse, true);
+    app.joystick_map = vec![
+        Binding {
+            from: From::Key(egui::Key::Tab),
+            does: Does::Mouse(MouseButton::AmxLeft),
+        },
+        Binding {
+            from: From::Key(egui::Key::Q),
+            does: Does::Mouse(MouseButton::AmxMiddle),
+        },
+    ];
+    let mut h = harness_for(app);
+    h.key_down(egui::Key::Tab);
+    h.key_down(egui::Key::Q);
+    h.run_steps(2);
+    let buttons = h.state().spec.bus.amx.as_ref().unwrap().buttons;
+    assert_eq!(
+        buttons, 0x3F,
+        "the AMX's left and middle, bits 7 and 6: {buttons:02X}"
+    );
+}
+
+/// The mouse buttons are written down and read back with the rest.
+#[test]
+fn a_mouse_binding_is_remembered_as_text() {
+    let map: Vec<Binding> = MouseButton::ALL
+        .iter()
+        .map(|button| Binding {
+            from: From::Pad(Pad::Button(gilrs::Button::South)),
+            does: Does::Mouse(*button),
+        })
+        .collect();
+    let text = inputwin::to_text(&map);
+    assert!(text.contains("pad.A:kmouse.left"), "{text}");
+    assert!(text.contains("pad.A:amx.middle"), "{text}");
+    assert_eq!(inputwin::from_text(&text), map, "and back again");
 }

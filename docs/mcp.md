@@ -65,8 +65,10 @@ set to, for one that cannot. `graphics` reads memory as characters and sprites,
 eight bytes each, which is how graphics are found: point it at a candidate
 address and see whether letters, a sprite or rubbish comes out.
 
-**Typing at it.** `press_keys`, `type_text`, and `mouse` for a fitted Kempston
-mouse — moves in the machine's pixels, buttons, then a few frames.
+**Typing at it.** `press_keys`, `type_text`, and `mouse` for whichever mouse is
+fitted — moves in the machine's pixels, buttons, then a few frames. For an AMX
+mouse the movement is queued as steps that its PIO delivers as interrupts,
+once the program has turned them on.
 
 **The printer.** `printout` gives what a fitted ZX Printer or Alphacom 32 has
 printed: the paper as a PNG, a pixel a dot, and any text on it read back

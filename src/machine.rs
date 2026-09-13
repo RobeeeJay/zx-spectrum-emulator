@@ -191,6 +191,10 @@ pub struct SpectrumBus {
     /// The ZX Printer or the Alphacom 32, whichever is fitted: to the machine
     /// they are the same thing on the same port.
     pub printer: Option<crate::printer::ZxPrinter>,
+    /// The AMX mouse, when fitted: its PIO interrupts for every step.
+    pub amx: Option<crate::mouse::AmxMouse>,
+    /// The vector a PIO is putting on the bus while its interrupt is taken.
+    pio_vector: Option<u8>,
     /// The +3's disk controller. Present on every model, since a bus that
     /// changes shape with the machine is a bus that has to be rebuilt to swap
     /// one; the ports are only decoded on a machine that has the hardware.
@@ -366,6 +370,8 @@ impl SpectrumBus {
             recorder: None,
             mouse: crate::mouse::KempstonMouse::default(),
             printer: None,
+            amx: None,
+            pio_vector: None,
             fdc: crate::fdc::Fdc::new(),
             paging_locked: false,
             late_timing: false,
@@ -1395,6 +1401,10 @@ pub fn screen_attr_addr(line: u16, cell: u16) -> u16 {
 }
 
 impl Bus for SpectrumBus {
+    fn int_vector(&mut self) -> u8 {
+        self.pio_vector.unwrap_or(0xFF)
+    }
+
     fn refresh(&mut self, addr: u16) {
         SpectrumBus::refresh(self, addr);
     }
@@ -1584,6 +1594,9 @@ impl Bus for SpectrumBus {
             // Centred on nothing, so silence is silence: the converter
             // idles at half scale.
             self.audio.dac = (value as f32 - 128.0) / 128.0 * 0.4;
+        }
+        if let Some(amx) = &mut self.amx {
+            amx.io_write(port, value);
         }
         // The printer: the stylus and the motor, on $FB.
         if crate::printer::ZxPrinter::decodes(port) && self.printer.is_some() {
@@ -1950,6 +1963,7 @@ impl Spectrum {
         let recorder = self.bus.recorder.take();
         let mouse = self.bus.mouse;
         let printer = self.bus.printer.take();
+        let amx = self.bus.amx.take();
 
         self.bus = SpectrumBus::new(model);
         self.bus.hardware = hardware;
@@ -1960,6 +1974,7 @@ impl Spectrum {
         self.bus.recorder = recorder;
         self.bus.mouse = mouse;
         self.bus.printer = printer;
+        self.bus.amx = amx;
         self.bus.set_late_timing(late);
         self.bus.audio = audio;
         self.bus.audio.set_cpu_hz(model.cpu_hz());
@@ -2003,6 +2018,9 @@ impl Spectrum {
         self.bus.joystick.release();
         if let Some(printer) = &mut self.bus.printer {
             printer.halt();
+        }
+        if let Some(amx) = &mut self.bus.amx {
+            amx.reset();
         }
         if let Some(chip) = self.bus.audio.speech.as_mut() {
             chip.reset();
@@ -2074,6 +2092,26 @@ impl Spectrum {
                     let now = self.bus.total_t();
                     self.profiler.on_call(self.cpu.pc, self.cpu.sp, now);
                 }
+            }
+        }
+        // The AMX mouse's PIO holds /INT down until the CPU takes it, rather
+        // than for the ULA's thirty-odd T-states, and puts its own vector on
+        // the bus when it is acknowledged.
+        if self.bus.amx.is_some() && !self.bus.irq_pending {
+            let now = self.bus.total_t();
+            let wants = self
+                .bus
+                .amx
+                .as_ref()
+                .and_then(|amx| amx.wants_interrupt(now));
+            if let Some((channel, vector)) = wants {
+                self.bus.pio_vector = Some(vector);
+                if self.cpu.interrupt(&mut self.bus) {
+                    if let Some(amx) = self.bus.amx.as_mut() {
+                        amx.acknowledged(channel, now);
+                    }
+                }
+                self.bus.pio_vector = None;
             }
         }
     }
@@ -2341,6 +2379,11 @@ impl SpectrumBus {
         // A joystick on a port answers before anything else looks: an
         // unattached read gives the floating bus, and a stick would never be
         // seen through it.
+        // The AMX mouse's PIO answers ahead of a joystick: a Kempston stick at
+        // $1F would share its port, and whoever fitted the mouse is using it.
+        if let Some(byte) = self.amx.as_ref().and_then(|amx| amx.io_read(port)) {
+            return byte;
+        }
         if let Some(byte) = self.joystick.io_read(port) {
             return byte;
         }

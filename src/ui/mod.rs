@@ -9,7 +9,7 @@ pub mod disk;
 pub mod diskface;
 pub mod diskwin;
 pub mod hardware;
-pub mod joystickwin;
+pub mod inputwin;
 pub mod keyboard;
 pub mod microdrive;
 pub mod microdrivewin;
@@ -483,7 +483,7 @@ pub struct App {
     pub show_disk: bool,
     /// What is plugged into the back of the machine.
     pub show_hardware: bool,
-    pub show_joystick: bool,
+    pub show_input: bool,
     pub show_printer: bool,
     printer_view: printerwin::View,
     /// Ten quicksaves, kept in memory for as long as the emulator is open, and
@@ -496,14 +496,17 @@ pub struct App {
     /// Whether the host's pointer belongs to the Kempston mouse: taken by a
     /// click on the screen, given back by Esc or the window losing focus.
     pub mouse_captured: bool,
+    /// The host's left, middle and right buttons, while the pointer is
+    /// captured; what is bound to a mouse button is added to these.
+    host_buttons: [bool; 3],
     /// What on the desk works the stick, and which line is waiting for a key.
-    pub joystick_map: Vec<joystickwin::Binding>,
+    pub joystick_map: Vec<inputwin::Binding>,
     pub joystick_binding: Option<usize>,
     /// The gamepads, and what they were doing when they were last looked at.
     /// `None` when the crate could not open them at all, which is a machine
     /// with no gamepad support rather than an error worth stopping for.
     pub gilrs: Option<gilrs::Gilrs>,
-    pub pads: joystickwin::Pads,
+    pub pads: inputwin::Pads,
     /// The microdrives, drawn.
     pub show_microdrive: bool,
     /// Which drive Load, Blank and Eject act on.
@@ -663,17 +666,18 @@ impl App {
             show_keyboard: false,
             show_disk: false,
             show_hardware: false,
-            show_joystick: false,
+            show_input: false,
             show_printer: false,
             printer_view: printerwin::View::default(),
             quick: Default::default(),
             quick_slot: 1,
             mouse_rest: egui::Vec2::ZERO,
             mouse_captured: false,
-            joystick_map: joystickwin::defaults(),
+            host_buttons: [false; 3],
+            joystick_map: inputwin::defaults(),
             joystick_binding: None,
             gilrs: gilrs::Gilrs::new().ok(),
-            pads: joystickwin::Pads::default(),
+            pads: inputwin::Pads::default(),
             show_microdrive: false,
             selected_drive: 0,
             pending_cartridge: None,
@@ -944,7 +948,7 @@ impl App {
                 theme::toggle(ui, &mut self.show_disk, "Disk");
             }
             theme::toggle(ui, &mut self.show_hardware, "Hardware");
-            theme::toggle(ui, &mut self.show_joystick, "Joystick");
+            theme::toggle(ui, &mut self.show_input, "Input");
             if self
                 .spec
                 .bus
@@ -1126,29 +1130,35 @@ impl App {
     /// away a frame at a time.
     fn feed_mouse(&mut self, ui: &egui::Ui, response: &egui::Response) {
         if !self.mouse_captured {
+            self.host_buttons = [false; 3];
             if response.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
             if response.clicked() {
                 self.capture_mouse(ui.ctx());
             }
+            self.apply_mouse_buttons(ui.ctx());
             return;
         }
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-        let (motion, delta, left, right) = ui.input(|i| {
+        let (motion, delta, buttons) = ui.input(|i| {
             (
                 i.pointer.motion(),
                 i.pointer.delta(),
-                i.pointer.primary_down(),
-                i.pointer.secondary_down(),
+                [
+                    i.pointer.primary_down(),
+                    i.pointer.middle_down(),
+                    i.pointer.secondary_down(),
+                ],
             )
         });
-        let mouse = &mut self.spec.bus.mouse;
         if !self.running {
-            mouse.set_buttons(false, false);
+            self.host_buttons = [false; 3];
             self.mouse_rest = egui::Vec2::ZERO;
+            self.apply_mouse_buttons(ui.ctx());
             return;
         }
+        self.host_buttons = buttons;
         // A locked pointer does not move, so only the raw motion says the
         // mouse did; where there is none, the pointer's own movement does.
         // The raw motion's units are the platform's — points on macOS — and
@@ -1157,11 +1167,15 @@ impl App {
         let moved = self.mouse_rest + points / self.scale.max(0.01);
         let whole = egui::vec2(moved.x.trunc(), moved.y.trunc());
         self.mouse_rest = moved - whole;
-        mouse.move_by(whole.x as i32, whole.y as i32);
-        mouse.set_buttons(left, right);
+        let (dx, dy) = (whole.x as i32, whole.y as i32);
+        self.spec.bus.mouse.move_by(dx, dy);
+        if let Some(amx) = self.spec.bus.amx.as_mut() {
+            amx.queue(dx, dy);
+        }
+        self.apply_mouse_buttons(ui.ctx());
     }
 
-    /// Hand the host's pointer to the Kempston mouse: hidden, and held in the
+    /// Hand the host's pointer to the mouse: hidden, and held in the
     /// window so it cannot wander off onto the desktop. macOS can only lock
     /// the pointer in place and Windows and X11 can only confine it, so each
     /// is asked for what it has.
@@ -1179,15 +1193,23 @@ impl App {
             egui::ViewportCommand::CursorVisible(false),
         );
         self.set_status(
-            "The mouse is the Kempston mouse's now: Esc gives it back".into(),
+            "The mouse is the machine's now: Esc gives it back".into(),
             false,
         );
+    }
+
+    /// Whether either mouse is plugged in.
+    fn mouse_fitted(&self) -> bool {
+        use crate::hardware::Peripheral;
+        let hardware = &self.spec.bus.hardware;
+        self.zx81.is_none()
+            && (hardware.fitted(Peripheral::KempstonMouse) || hardware.fitted(Peripheral::AmxMouse))
     }
 
     fn release_mouse(&mut self, ctx: &egui::Context) {
         self.mouse_captured = false;
         self.mouse_rest = egui::Vec2::ZERO;
-        self.spec.bus.mouse.set_buttons(false, false);
+        self.host_buttons = [false; 3];
         ctx.send_viewport_cmd_to(
             ViewportId::ROOT,
             egui::ViewportCommand::CursorGrab(egui::viewport::CursorGrab::None),
@@ -1207,12 +1229,7 @@ impl App {
         if !self.mouse_captured {
             return;
         }
-        let fitted = self.zx81.is_none()
-            && self
-                .spec
-                .bus
-                .hardware
-                .fitted(crate::hardware::Peripheral::KempstonMouse);
+        let fitted = self.mouse_fitted();
         let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         let focused = ctx.input(|i| i.focused);
         if escape || !focused || !fitted {
@@ -2158,7 +2175,7 @@ impl App {
         if let Some(map) = self.prefs.joystick_map.clone() {
             // An empty mapping is somebody having taken every line out, which
             // is theirs to do; a file with no mapping at all gets the arrows.
-            self.joystick_map = joystickwin::from_text(&map);
+            self.joystick_map = inputwin::from_text(&map);
         }
         if let Some(drives) = self.prefs.microdrives {
             self.spec.bus.hardware.if1_drives = drives.clamp(1, crate::if1::MAX_DRIVES);
@@ -2196,7 +2213,7 @@ impl App {
         );
         self.prefs.microdrives = Some(self.spec.bus.hardware.if1_drives);
         self.prefs.joystick = Some(self.spec.bus.joystick.kind.key().to_string());
-        self.prefs.joystick_map = Some(joystickwin::to_text(&self.joystick_map));
+        self.prefs.joystick_map = Some(inputwin::to_text(&self.joystick_map));
     }
 
     /// Write the window layout and display settings out. Called on close.
@@ -2356,7 +2373,7 @@ impl App {
             self.show_keyboard = is_open("keyboard");
             self.show_disk = is_open("disk");
             self.show_hardware = is_open("hardware");
-            self.show_joystick = is_open("joystick");
+            self.show_input = is_open("joystick");
             self.show_printer = is_open("printer");
             self.show_microdrive = is_open("microdrive");
         }
@@ -2376,7 +2393,7 @@ impl App {
             ("keyboard", self.show_keyboard),
             ("disk", self.show_disk),
             ("hardware", self.show_hardware),
-            ("joystick", self.show_joystick),
+            ("joystick", self.show_input),
             ("printer", self.show_printer),
             ("microdrive", self.show_microdrive),
         ]
@@ -4400,12 +4417,7 @@ impl App {
                 //
                 // Not with a Kempston mouse fitted: then a click over the
                 // picture is the mouse's button, and the machine has it.
-                let mouse = self.zx81.is_none()
-                    && self
-                        .spec
-                        .bus
-                        .hardware
-                        .fitted(crate::hardware::Peripheral::KempstonMouse);
+                let mouse = self.mouse_fitted();
                 if mouse {
                     self.feed_mouse(ui, &response);
                 }
@@ -4466,7 +4478,7 @@ impl App {
             ("keyboard", self.show_keyboard),
             ("disk", self.show_disk),
             ("hardware", self.show_hardware),
-            ("joystick", self.show_joystick),
+            ("joystick", self.show_input),
             ("printer", self.show_printer),
             ("microdrive", self.show_microdrive),
         ] {
@@ -4751,13 +4763,13 @@ impl App {
             self.show_keyboard = open;
         }
 
-        if self.show_joystick {
+        if self.show_input {
             let mut open = true;
             ctx.show_viewport_immediate(
                 ViewportId::from_hash_of("joystick"),
                 self.restore_window(
                     "joystick",
-                    ViewportBuilder::default().with_title("Joystick"),
+                    ViewportBuilder::default().with_title("Input"),
                     [420.0, 200.0],
                     [460.0, 520.0],
                 ),
@@ -4769,10 +4781,10 @@ impl App {
                     if self.place_window("joystick", &ctx, [420.0, 200.0], [460.0, 520.0]) {
                         self.remember_window("joystick", &ctx);
                     }
-                    egui::CentralPanel::default().show(ui, |ui| joystickwin::ui(self, ui));
+                    egui::CentralPanel::default().show(ui, |ui| inputwin::ui(self, ui));
                 },
             );
-            self.show_joystick = open;
+            self.show_input = open;
         }
 
         if self.show_printer && self.spec.bus.printer.is_some() && self.zx81.is_none() {
@@ -4845,12 +4857,12 @@ impl App {
                 })
             });
             let from = match key {
-                Some(key) => Some(joystickwin::From::Key(key)),
+                Some(key) => Some(inputwin::From::Key(key)),
                 None => self
                     .gilrs
                     .as_mut()
-                    .and_then(joystickwin::pad_pressed)
-                    .map(joystickwin::From::Pad),
+                    .and_then(inputwin::pad_pressed)
+                    .map(inputwin::From::Pad),
             };
             if let Some(from) = from {
                 if let Some(binding) = self.joystick_map.get_mut(i) {
@@ -4863,9 +4875,12 @@ impl App {
 
         // What the pads are doing, kept for the window to show as well.
         self.pads = match self.gilrs.as_mut() {
-            Some(gilrs) => joystickwin::read_pads(gilrs),
-            None => joystickwin::Pads::default(),
+            Some(gilrs) => inputwin::read_pads(gilrs),
+            None => inputwin::Pads::default(),
         };
+
+        // The mouse buttons are worked whether or not a stick is plugged in.
+        self.apply_mouse_buttons(ctx);
 
         if self.spec.bus.joystick.kind == crate::joystick::Kind::None {
             self.spec.bus.joystick.release();
@@ -4874,10 +4889,37 @@ impl App {
         let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key));
         for way in crate::joystick::Way::ALL {
             let over = self.joystick_map.iter().any(|binding| {
-                binding.does == joystickwin::Does::Way(way)
-                    && joystickwin::holding(binding.from, &down, &self.pads)
+                binding.does == inputwin::Does::Way(way)
+                    && inputwin::holding(binding.from, &down, &self.pads)
             });
             self.spec.bus.joystick.set(way, over);
+        }
+    }
+
+    /// The buttons of both mice: the host's own, while the pointer is
+    /// captured, and anything in the Input window bound to one.
+    fn apply_mouse_buttons(&mut self, ctx: &egui::Context) {
+        use inputwin::MouseButton as B;
+        let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key));
+        let bound = |button: B| {
+            self.joystick_map.iter().any(|binding| {
+                binding.does == inputwin::Does::Mouse(button)
+                    && inputwin::holding(binding.from, &down, &self.pads)
+            })
+        };
+        let [left, middle, right] = self.host_buttons;
+        let kempston = (
+            left || bound(B::KempstonLeft),
+            right || bound(B::KempstonRight),
+        );
+        let amx = (
+            left || bound(B::AmxLeft),
+            middle || bound(B::AmxMiddle),
+            right || bound(B::AmxRight),
+        );
+        self.spec.bus.mouse.set_buttons(kempston.0, kempston.1);
+        if let Some(mouse) = self.spec.bus.amx.as_mut() {
+            mouse.set_buttons(amx.0, amx.1, amx.2);
         }
     }
 
@@ -4928,15 +4970,15 @@ impl App {
             .joystick_map
             .iter()
             .filter_map(|b| match b.from {
-                joystickwin::From::Key(key) => Some(key),
-                joystickwin::From::Pad(_) => None,
+                inputwin::From::Key(key) => Some(key),
+                inputwin::From::Pad(_) => None,
             })
             .collect();
         let pads = self.pads.clone();
         for binding in &self.joystick_map {
-            if let joystickwin::Does::Key(row, bit) = binding.does {
+            if let inputwin::Does::Key(row, bit) = binding.does {
                 let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key));
-                if joystickwin::holding(binding.from, &down, &pads) {
+                if inputwin::holding(binding.from, &down, &pads) {
                     press(row, bit);
                 }
             }

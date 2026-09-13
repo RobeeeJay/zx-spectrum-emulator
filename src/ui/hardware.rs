@@ -46,6 +46,18 @@ impl App {
             // The sound add-ons that are emulated bring their own chip.
             // Both printers are the same device to the machine, on the same
             // port, so fitting one takes the other off.
+            // The two mice both answer at $DF, so there is room for one.
+            Peripheral::KempstonMouse | Peripheral::AmxMouse if yes => {
+                let other = if what == Peripheral::KempstonMouse {
+                    Peripheral::AmxMouse
+                } else {
+                    Peripheral::KempstonMouse
+                };
+                self.spec.bus.hardware.fit(other, false);
+                self.spec.bus.amx =
+                    (what == Peripheral::AmxMouse).then(crate::mouse::AmxMouse::default);
+            }
+            Peripheral::AmxMouse => self.spec.bus.amx = None,
             Peripheral::ZxPrinter | Peripheral::Alphacom32 if yes => {
                 let (other, paper) = if what == Peripheral::ZxPrinter {
                     (Peripheral::Alphacom32, Paper::Metallised)
