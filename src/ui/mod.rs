@@ -499,6 +499,10 @@ pub struct App {
     /// The host's left, middle and right buttons, while the pointer is
     /// captured; what is bound to a mouse button is added to these.
     host_buttons: [bool; 3],
+    /// What the other windows are holding down, gathered while they draw
+    /// and read by the next frame's keyboard.
+    pub window_keys_next: HeldKeys,
+    window_keys: HeldKeys,
     /// What on the desk works the stick, and which line is waiting for a key.
     pub joystick_map: Vec<inputwin::Binding>,
     pub joystick_binding: Option<usize>,
@@ -674,6 +678,8 @@ impl App {
             mouse_rest: egui::Vec2::ZERO,
             mouse_captured: false,
             host_buttons: [false; 3],
+            window_keys_next: HeldKeys::default(),
+            window_keys: HeldKeys::default(),
             joystick_map: inputwin::defaults(),
             joystick_binding: None,
             gilrs: gilrs::Gilrs::new().ok(),
@@ -1196,6 +1202,34 @@ impl App {
             "The mouse is the machine's now: Esc gives it back".into(),
             false,
         );
+    }
+
+    /// Gather what a window other than the main one has held down, for the
+    /// machine's keyboard. Not while one of its text fields is being typed
+    /// into — a label typed in the debugger is not meant for the Spectrum —
+    /// and not from the main window, whose keys are read directly.
+    fn collect_window_keys(&mut self, ctx: &egui::Context) {
+        if ctx.viewport_id() == ViewportId::ROOT || ctx.text_edit_focused() {
+            return;
+        }
+        let (keys, modifiers, pressed) = ctx.input(|i| {
+            let pressed: Vec<egui::Key> = i
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::Key {
+                        key, pressed: true, ..
+                    } => Some(*key),
+                    _ => None,
+                })
+                .collect();
+            (i.keys_down.clone(), i.modifiers, pressed)
+        });
+        let held = &mut self.window_keys_next;
+        held.keys.extend(keys);
+        held.shift |= modifiers.shift;
+        held.symbol |= modifiers.alt || modifiers.ctrl;
+        held.pressed.extend(pressed);
     }
 
     /// Whether either mouse is plugged in.
@@ -4245,6 +4279,19 @@ impl App {
     }
 }
 
+/// What the keyboard is doing in the windows other than the main one, which
+/// goes to the machine as well: a window clicked last keeps the keyboard in
+/// the window system's eyes, and the machine must not go deaf because of it.
+#[derive(Clone, Default, Debug)]
+pub struct HeldKeys {
+    pub keys: std::collections::HashSet<egui::Key>,
+    pub shift: bool,
+    /// Alt or Ctrl, which are SYMBOL SHIFT.
+    pub symbol: bool,
+    /// Keys that went down this frame, for a binding waiting for one.
+    pub pressed: Vec<egui::Key>,
+}
+
 impl eframe::App for App {
     /// Run the machine and put the debug windows up.
     ///
@@ -4288,6 +4335,7 @@ impl App {
     /// The machine, the windows around it, and the repaint that keeps both
     /// going. Runs every frame, visible or not.
     pub fn frame_logic(&mut self, ctx: &egui::Context) {
+        self.window_keys = std::mem::take(&mut self.window_keys_next);
         self.watch_mouse_capture(ctx);
         if !self.styled {
             theme::apply(ctx);
@@ -4498,6 +4546,7 @@ impl App {
                     [cassette::WINDOW_W, 700.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4528,6 +4577,7 @@ impl App {
                     [debugger::WINDOW_W, 780.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4562,6 +4612,7 @@ impl App {
                     [900.0, 620.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4590,6 +4641,7 @@ impl App {
                     [720.0, 900.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4618,6 +4670,7 @@ impl App {
                     [520.0, 700.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4642,6 +4695,7 @@ impl App {
                     [720.0, 640.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4670,6 +4724,7 @@ impl App {
                     [cassette::WINDOW_W, 720.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4695,6 +4750,7 @@ impl App {
                     [520.0, 720.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4719,6 +4775,7 @@ impl App {
                     [cassette::WINDOW_W, 640.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4750,6 +4807,7 @@ impl App {
                     [760.0, 300.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4774,6 +4832,7 @@ impl App {
                     [460.0, 520.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4800,6 +4859,7 @@ impl App {
                     default,
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4824,6 +4884,7 @@ impl App {
                     [680.0, 700.0],
                 ),
                 |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
                     if ui.ctx().input(|i| i.viewport().close_requested()) {
                         open = false;
                     }
@@ -4856,6 +4917,7 @@ impl App {
                     _ => None,
                 })
             });
+            let key = key.or_else(|| self.window_keys.pressed.first().copied());
             let from = match key {
                 Some(key) => Some(inputwin::From::Key(key)),
                 None => self
@@ -4886,7 +4948,8 @@ impl App {
             self.spec.bus.joystick.release();
             return;
         }
-        let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key));
+        let window = self.window_keys.keys.clone();
+        let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key)) || window.contains(&key);
         for way in crate::joystick::Way::ALL {
             let over = self.joystick_map.iter().any(|binding| {
                 binding.does == inputwin::Does::Way(way)
@@ -4900,7 +4963,8 @@ impl App {
     /// captured, and anything in the Input window bound to one.
     fn apply_mouse_buttons(&mut self, ctx: &egui::Context) {
         use inputwin::MouseButton as B;
-        let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key));
+        let window = &self.window_keys.keys;
+        let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key)) || window.contains(&key);
         let bound = |button: B| {
             self.joystick_map.iter().any(|binding| {
                 binding.does == inputwin::Does::Mouse(button)
@@ -4966,18 +5030,32 @@ impl App {
         // A line waiting for a key takes the next one pressed rather than
         // acting on it.
         self.read_joystick(ctx);
+        // Only a binding that can do something takes its key: Space is the
+        // stick's fire by default, and with no stick plugged in it has to be
+        // the machine's space again, or it is a key that does nothing at all.
+        let stick = self.spec.bus.joystick.kind != crate::joystick::Kind::None;
+        let hardware = &self.spec.bus.hardware;
         let bound: Vec<egui::Key> = self
             .joystick_map
             .iter()
+            .filter(|b| match b.does {
+                inputwin::Does::Way(_) => stick,
+                inputwin::Does::Key(..) => true,
+                inputwin::Does::Mouse(button) => hardware.fitted(button.on()),
+            })
             .filter_map(|b| match b.from {
                 inputwin::From::Key(key) => Some(key),
                 inputwin::From::Pad(_) => None,
             })
             .collect();
         let pads = self.pads.clone();
+        // The other windows' keys count as the main window's: whichever of
+        // them was clicked last, the machine is what is being typed at.
+        let window = self.window_keys.clone();
+        let down =
+            |key| ctx.input(|i: &egui::InputState| i.key_down(key)) || window.keys.contains(&key);
         for binding in &self.joystick_map {
             if let inputwin::Does::Key(row, bit) = binding.does {
-                let down = |key| ctx.input(|i: &egui::InputState| i.key_down(key));
                 if inputwin::holding(binding.from, &down, &pads) {
                     press(row, bit);
                 }
@@ -5025,35 +5103,36 @@ impl App {
                 (Key::N, 7, 3),
                 (Key::B, 7, 4),
             ];
+            let key_down = |key| i.key_down(key) || window.keys.contains(&key);
             for &(key, row, bit) in MAP {
-                if i.key_down(key) && !bound.contains(&key) {
+                if key_down(key) && !bound.contains(&key) {
                     press(row, bit);
                 }
             }
-            if i.modifiers.shift {
+            if i.modifiers.shift || window.shift {
                 press(0, 0); // CAPS SHIFT
             }
-            if i.modifiers.alt || i.modifiers.ctrl {
+            if i.modifiers.alt || i.modifiers.ctrl || window.symbol {
                 press(7, 1); // SYMBOL SHIFT
             }
             // Convenience keys that need CAPS SHIFT on real hardware.
-            if i.key_down(Key::Backspace) && !bound.contains(&Key::Backspace) {
+            if key_down(Key::Backspace) && !bound.contains(&Key::Backspace) {
                 press(0, 0);
                 press(4, 0);
             }
-            if i.key_down(Key::ArrowLeft) && !bound.contains(&Key::ArrowLeft) {
+            if key_down(Key::ArrowLeft) && !bound.contains(&Key::ArrowLeft) {
                 press(0, 0);
                 press(3, 4);
             }
-            if i.key_down(Key::ArrowDown) && !bound.contains(&Key::ArrowDown) {
+            if key_down(Key::ArrowDown) && !bound.contains(&Key::ArrowDown) {
                 press(0, 0);
                 press(4, 4);
             }
-            if i.key_down(Key::ArrowUp) && !bound.contains(&Key::ArrowUp) {
+            if key_down(Key::ArrowUp) && !bound.contains(&Key::ArrowUp) {
                 press(0, 0);
                 press(4, 3);
             }
-            if i.key_down(Key::ArrowRight) && !bound.contains(&Key::ArrowRight) {
+            if key_down(Key::ArrowRight) && !bound.contains(&Key::ArrowRight) {
                 press(0, 0);
                 press(4, 2);
             }

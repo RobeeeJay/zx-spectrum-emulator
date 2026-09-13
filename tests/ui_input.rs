@@ -332,3 +332,69 @@ fn a_mouse_binding_is_remembered_as_text() {
     assert!(text.contains("pad.A:amx.middle"), "{text}");
     assert_eq!(inputwin::from_text(&text), map, "and back again");
 }
+
+/// Space is the stick's fire by default, but only while a stick is plugged in
+/// to be fired. With none — which is how a machine starts — it has to be the
+/// Spectrum's own space, or it is a key that does nothing at all.
+#[test]
+fn space_types_a_space_with_no_stick_plugged_in() {
+    let mut app = test_app();
+    app.spec.bus.joystick.kind = Kind::None;
+    let mut h = harness_for(app);
+    h.key_down(egui::Key::Space);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().spec.bus.keys[7] & 1,
+        0,
+        "SPACE, row 7 bit 0, is down: {:02X}",
+        h.state().spec.bus.keys[7]
+    );
+    h.key_up(egui::Key::Space);
+    h.run_steps(2);
+
+    // Plug a stick in and the same key fires it instead.
+    h.state_mut().spec.bus.joystick.kind = Kind::Kempston;
+    h.key_down(egui::Key::Space);
+    h.run_steps(2);
+    assert!(h.state().spec.bus.joystick.is_down(Way::Fire), "fire");
+    assert_eq!(h.state().spec.bus.keys[7] & 1, 1, "and no space typed");
+}
+
+/// A key bound to a mouse button whose mouse is not fitted keeps typing: the
+/// binding waits for its mouse rather than swallowing the key.
+#[test]
+fn a_mouse_binding_without_its_mouse_leaves_the_key_alone() {
+    let mut app = test_app();
+    app.joystick_map = vec![Binding {
+        from: From::Key(egui::Key::Z),
+        does: Does::Mouse(MouseButton::AmxLeft),
+    }];
+    let mut h = harness_for(app);
+    h.key_down(egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().spec.bus.keys[0] & (1 << 1), 0, "Z is typed");
+}
+
+/// A key held down in one of the other windows reaches the machine as well:
+/// whichever window was clicked last, the machine is what is being typed at.
+/// The windows gather what they hold while they draw, and the next frame's
+/// keyboard reads it.
+#[test]
+fn a_key_held_in_another_window_reaches_the_machine() {
+    let mut h = harness_for(test_app());
+    h.run_steps(1);
+    let mut held = zx_rustrum::ui::HeldKeys::default();
+    held.keys.insert(egui::Key::A);
+    held.shift = true;
+    h.state_mut().window_keys_next = held;
+    h.run_steps(1);
+    let keys = h.state().spec.bus.keys;
+    assert_eq!(keys[1] & 1, 0, "A, row 1 bit 0, is down: {keys:02X?}");
+    assert_eq!(keys[0] & 1, 0, "and CAPS SHIFT with it");
+    h.run_steps(1);
+    assert_eq!(
+        h.state().spec.bus.keys[1] & 1,
+        1,
+        "let go once the window stops holding it"
+    );
+}

@@ -503,7 +503,22 @@ about them — and the Fuller at $7F with its bits the other way up. No ROM read
 a joystick, so none of this can be measured off one: the masks and the key
 mappings are Fuse's `joystick.c` and are written out in the tests so a change
 has to be deliberate. A key bound to the stick is taken away from the machine's
-own keyboard, or holding an arrow steers and types at once. A gamepad cannot be
+own keyboard, or holding an arrow steers and types at once — but only while
+the binding can do something: a direction while a stick interface is plugged
+in, a mouse button while its mouse is fitted. Taking every bound key away
+whatever was plugged in is how Space, the stick's fire by default, stopped
+typing a space on a machine with no stick at all.
+
+**Every window's keyboard is the machine's.** Each emulator window is a window
+of its own to the window system, with its own keyboard, and the one clicked
+last has it. What each window other than the main one is holding down is
+gathered while it draws and read by the next frame's keyboard, so the machine
+does not go deaf because the debugger was clicked — except while one of that
+window's text fields is being typed into, since a label typed in the debugger
+is not meant for the Spectrum. `egui_wants_keyboard_input` would have been the
+wrong test: it is true for any focused widget, a clicked button included.
+The quicksave keys stay the main window's, since the debugger's F5, F7 and F8
+step. A gamepad cannot be
 read through anything `eframe` brings with it, which is why `gilrs` was added
 for it — the one crate in the tree that is there for a peripheral rather than
 for the build. A binding is a source and an action so that a key and a pad
