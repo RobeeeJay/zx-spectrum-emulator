@@ -493,6 +493,9 @@ pub struct App {
     /// Pointer movement smaller than one of the machine's pixels, carried to
     /// the next frame for the Kempston mouse.
     mouse_rest: egui::Vec2,
+    /// Whether the host's pointer belongs to the Kempston mouse: taken by a
+    /// click on the screen, given back by Esc or the window losing focus.
+    pub mouse_captured: bool,
     /// What on the desk works the stick, and which line is waiting for a key.
     pub joystick_map: Vec<joystickwin::Binding>,
     pub joystick_binding: Option<usize>,
@@ -666,6 +669,7 @@ impl App {
             quick: Default::default(),
             quick_slot: 1,
             mouse_rest: egui::Vec2::ZERO,
+            mouse_captured: false,
             joystick_map: joystickwin::defaults(),
             joystick_binding: None,
             gilrs: gilrs::Gilrs::new().ok(),
@@ -1113,33 +1117,115 @@ impl App {
         }
     }
 
-    /// The host's mouse, while it is over the picture, is the Kempston
-    /// mouse: movement in the machine's pixels, and the two buttons.
+    /// The host's mouse, once captured, is the Kempston mouse: movement in
+    /// the machine's pixels, and the two buttons. Until then a click on the
+    /// screen is what captures it, and the mouse sees nothing.
     ///
-    /// Movement is kept as a remainder in points, so a slow drag across a
+    /// Movement is kept as a remainder in points, so a slow drag on a
     /// scaled-up picture still moves the counters rather than being rounded
     /// away a frame at a time.
-    fn feed_mouse(&mut self, ui: &egui::Ui, response: &egui::Response, picture: egui::Rect) {
-        let over = response.hover_pos().is_some_and(|p| picture.contains(p));
-        let (delta, left, right) = ui.input(|i| {
+    fn feed_mouse(&mut self, ui: &egui::Ui, response: &egui::Response) {
+        if !self.mouse_captured {
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+            if response.clicked() {
+                self.capture_mouse(ui.ctx());
+            }
+            return;
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        let (motion, delta, left, right) = ui.input(|i| {
             (
+                i.pointer.motion(),
                 i.pointer.delta(),
                 i.pointer.primary_down(),
                 i.pointer.secondary_down(),
             )
         });
         let mouse = &mut self.spec.bus.mouse;
-        if !over || !self.running {
+        if !self.running {
             mouse.set_buttons(false, false);
             self.mouse_rest = egui::Vec2::ZERO;
             return;
         }
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        let moved = self.mouse_rest + delta / self.scale.max(0.01);
+        // A locked pointer does not move, so only the raw motion says the
+        // mouse did; where there is none, the pointer's own movement does.
+        // The raw motion's units are the platform's — points on macOS — and
+        // are taken as points.
+        let points = motion.unwrap_or(delta);
+        let moved = self.mouse_rest + points / self.scale.max(0.01);
         let whole = egui::vec2(moved.x.trunc(), moved.y.trunc());
         self.mouse_rest = moved - whole;
         mouse.move_by(whole.x as i32, whole.y as i32);
         mouse.set_buttons(left, right);
+    }
+
+    /// Hand the host's pointer to the Kempston mouse: hidden, and held in the
+    /// window so it cannot wander off onto the desktop. macOS can only lock
+    /// the pointer in place and Windows and X11 can only confine it, so each
+    /// is asked for what it has.
+    fn capture_mouse(&mut self, ctx: &egui::Context) {
+        let grab = if cfg!(target_os = "macos") {
+            egui::viewport::CursorGrab::Locked
+        } else {
+            egui::viewport::CursorGrab::Confined
+        };
+        self.mouse_captured = true;
+        self.mouse_rest = egui::Vec2::ZERO;
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, egui::ViewportCommand::CursorGrab(grab));
+        ctx.send_viewport_cmd_to(
+            ViewportId::ROOT,
+            egui::ViewportCommand::CursorVisible(false),
+        );
+        self.set_status(
+            "The mouse is the Kempston mouse's now: Esc gives it back".into(),
+            false,
+        );
+    }
+
+    fn release_mouse(&mut self, ctx: &egui::Context) {
+        self.mouse_captured = false;
+        self.mouse_rest = egui::Vec2::ZERO;
+        self.spec.bus.mouse.set_buttons(false, false);
+        ctx.send_viewport_cmd_to(
+            ViewportId::ROOT,
+            egui::ViewportCommand::CursorGrab(egui::viewport::CursorGrab::None),
+        );
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, egui::ViewportCommand::CursorVisible(true));
+    }
+
+    /// Give the pointer back on Esc, when the main window loses focus, or when
+    /// the mouse is taken off.
+    ///
+    /// Run from `logic` rather than `ui`: eframe skips `ui` while the window is
+    /// not visible, which on macOS includes switching away from it — the
+    /// commonest way focus is lost — and the pointer would stay hidden and
+    /// held with nothing left to let it go. The Esc is taken, so nothing else
+    /// sees it.
+    fn watch_mouse_capture(&mut self, ctx: &egui::Context) {
+        if !self.mouse_captured {
+            return;
+        }
+        let fitted = self.zx81.is_none()
+            && self
+                .spec
+                .bus
+                .hardware
+                .fitted(crate::hardware::Peripheral::KempstonMouse);
+        let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        let focused = ctx.input(|i| i.focused);
+        if escape || !focused || !fitted {
+            self.release_mouse(ctx);
+            if escape {
+                self.set_status("The mouse is yours again".into(), false);
+            } else if !focused {
+                self.set_status(
+                    "The mouse is yours again: the window lost focus".into(),
+                    false,
+                );
+            }
+        }
     }
 
     /// Put a blank tape in the deck and start recording onto it.
@@ -4185,6 +4271,7 @@ impl App {
     /// The machine, the windows around it, and the repaint that keeps both
     /// going. Runs every frame, visible or not.
     pub fn frame_logic(&mut self, ctx: &egui::Context) {
+        self.watch_mouse_capture(ctx);
         if !self.styled {
             theme::apply(ctx);
             self.styled = true;
@@ -4320,7 +4407,7 @@ impl App {
                         .hardware
                         .fitted(crate::hardware::Peripheral::KempstonMouse);
                 if mouse {
-                    self.feed_mouse(ui, &response, picture);
+                    self.feed_mouse(ui, &response);
                 }
                 if response.clicked() && !mouse {
                     if let Some(at) = response.interact_pointer_pos() {

@@ -103,45 +103,100 @@ fn test_app() -> App {
     app
 }
 
-/// The host's mouse over the picture is the Kempston mouse: moving it moves
-/// the counters by the machine's pixels, not the host's, and its button is
-/// the mouse's button rather than a click into the debugger.
-#[test]
-fn the_host_mouse_over_the_screen_moves_the_counters() {
+fn harness_with(fitted: bool) -> Harness<'static, App> {
     let mut app = test_app();
-    app.spec.bus.hardware.fit(Peripheral::KempstonMouse, true);
+    if fitted {
+        app.spec.bus.hardware.fit(Peripheral::KempstonMouse, true);
+    }
     app.running = true;
     let mut h = Harness::builder()
         .with_size([1500.0, 1200.0])
         .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.input_mut().focused = true;
     h.run_steps(3);
+    h
+}
 
+const CENTRE: egui::Pos2 = egui::pos2(750.0, 600.0);
+
+fn click(h: &mut Harness<'_, App>, at: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(1);
+}
+
+fn escape(h: &mut Harness<'_, App>) {
+    for pressed in [true, false] {
+        h.event(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+}
+
+/// The mouse is not the machine's until the screen is clicked: a pointer
+/// passing over the picture on its way to the toolbar must not move the
+/// machine's pointer. After the click it is, and it moves by the raw motion
+/// the host reports — a locked pointer does not move, so that is all there is
+/// — in the machine's pixels.
+#[test]
+fn a_click_on_the_screen_hands_the_mouse_over() {
+    let mut h = harness_with(true);
     let scale = h.state().scale;
-    let centre = egui::pos2(750.0, 600.0);
-    h.event(egui::Event::PointerMoved(centre));
-    h.run_steps(2);
     let start = h.state().spec.bus.mouse;
-
-    // Forty machine pixels right and twenty down, in host points.
-    h.event(egui::Event::PointerMoved(
-        centre + egui::vec2(40.0 * scale, 20.0 * scale),
-    ));
+    h.event(egui::Event::PointerMoved(CENTRE));
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(CENTRE + egui::vec2(60.0, 30.0)));
     h.run_steps(2);
-    let moved = h.state().spec.bus.mouse;
     assert_eq!(
-        moved.x.wrapping_sub(start.x),
-        40,
-        "X by forty machine pixels at scale {scale}: {start:?} to {moved:?}"
+        h.state().spec.bus.mouse,
+        start,
+        "passing over moves nothing"
     );
+    assert!(!h.state().mouse_captured);
+
+    click(&mut h, CENTRE);
+    assert!(h.state().mouse_captured, "the click captured the mouse");
+    let before = h.state().spec.bus.mouse;
     assert_eq!(
-        start.y.wrapping_sub(moved.y),
-        20,
-        "Y down by twenty, which counts it down: {start:?} to {moved:?}"
+        before.buttons, 0xFF,
+        "and the capturing click is not a press"
     );
 
-    let at = centre + egui::vec2(40.0 * scale, 20.0 * scale);
+    h.event(egui::Event::MouseMoved(egui::vec2(
+        40.0 * scale,
+        20.0 * scale,
+    )));
+    h.run_steps(2);
+    let after = h.state().spec.bus.mouse;
+    assert_eq!(
+        after.x.wrapping_sub(before.x),
+        40,
+        "X by forty machine pixels at scale {scale}: {before:?} to {after:?}"
+    );
+    assert_eq!(
+        before.y.wrapping_sub(after.y),
+        20,
+        "Y down by twenty, which counts it down: {before:?} to {after:?}"
+    );
+
+    // Anywhere in the window now, since the pointer is the mouse's.
+    let away = egui::pos2(40.0, 40.0);
     h.event(egui::Event::PointerButton {
-        pos: at,
+        pos: away,
         button: egui::PointerButton::Primary,
         pressed: true,
         modifiers: egui::Modifiers::NONE,
@@ -149,11 +204,38 @@ fn the_host_mouse_over_the_screen_moves_the_counters() {
     h.run_steps(1);
     assert_eq!(h.state().spec.bus.mouse.buttons, 0xFD, "left held");
     h.event(egui::Event::PointerButton {
-        pos: at,
+        pos: away,
         button: egui::PointerButton::Primary,
         pressed: false,
         modifiers: egui::Modifiers::NONE,
     });
     h.run_steps(1);
     assert_eq!(h.state().spec.bus.mouse.buttons, 0xFF, "and let go");
+}
+
+/// Esc gives the pointer back, and so does the main window losing focus —
+/// switching to another application must not leave the pointer hidden and
+/// held.
+#[test]
+fn escape_or_losing_focus_gives_the_mouse_back() {
+    let mut h = harness_with(true);
+    click(&mut h, CENTRE);
+    assert!(h.state().mouse_captured);
+    escape(&mut h);
+    assert!(!h.state().mouse_captured, "Esc released it");
+
+    click(&mut h, CENTRE);
+    assert!(h.state().mouse_captured, "captured again");
+    h.input_mut().focused = false;
+    h.run_steps(2);
+    assert!(!h.state().mouse_captured, "losing focus released it");
+}
+
+/// With no mouse fitted, a click on the screen is what it was before: it
+/// captures nothing.
+#[test]
+fn without_a_mouse_a_click_captures_nothing() {
+    let mut h = harness_with(false);
+    click(&mut h, CENTRE);
+    assert!(!h.state().mouse_captured);
 }

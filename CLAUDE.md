@@ -461,11 +461,15 @@ on its own oscillator, so it lives with the mixer and is clocked in the
 machine's T-states. Checked against a recording of real hardware: the steady
 sounds correlate at 0.94-0.98 with their formants inside a hundred hertz.
 
-**The Kempston mouse is the host's mouse only over the picture.** Movement is
-divided by the display's scale so it counts in the machine's pixels, and the
-remainder is carried to the next frame, or a slow drag on a scaled-up picture
-rounds away to nothing. With it fitted a click on the picture is its button,
-not the debugger's "which byte is this?". Its buttons' port is only partly
+**The Kempston mouse takes the pointer when the screen is clicked.** Until
+then the pointer is the desk's and the mouse sees nothing; after it, the
+pointer is hidden and held — locked on macOS, confined elsewhere, since each
+platform offers only one — and movement comes from the raw motion the host
+reports, because a locked pointer does not move. Esc, the main window losing
+focus, or taking the mouse off gives it back, and that is checked in `logic`:
+on macOS eframe skips `ui` once the window is switched away from, which is
+exactly when focus goes. Movement is divided by the display's scale so it
+counts in the machine's pixels, with the remainder carried to the next frame. Its buttons' port is only partly
 decoded and takes in the Kempston joystick's $1F, as in Fuse; the joystick is
 asked first.
 

@@ -585,9 +585,10 @@ Four joystick interfaces — Kempston, the two Sinclair sticks and the Cursor
 one, plus the Fuller — are worked from the keys of the desk or from a gamepad
 through the **Joystick** window, which maps either onto the stick or onto keys
 of the machine's own keyboard. A **Kempston mouse**, fitted in the Hardware
-window, is the host's mouse while it is over the picture — movement in the
-machine's pixels, and both buttons; with it fitted, a click on the picture goes
-to the mouse rather than to the debugger. A **ZX Printer** or an **Alphacom
+window, takes the host's mouse when the screen is clicked: the pointer is
+hidden and held, and its movement and both buttons go to the machine, in the
+machine's pixels. **Esc** gives it back, and so does switching away from the
+main window. A **ZX Printer** or an **Alphacom
 32** — one or the other, since they share a port — adds a **Printer** window
 the width of the tape window: the paper comes out of the bottom as each line
 is printed and grows upwards, **Save PNG…** writes it out a pixel a dot, **Tear

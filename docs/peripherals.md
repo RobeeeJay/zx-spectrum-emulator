@@ -245,12 +245,20 @@ The partial decode means the Kempston joystick's $1F falls inside the
 buttons' port. It does in Fuse too; the joystick is asked first on the bus, so
 a stick fitted alongside still answers there.
 
-The host's mouse is the Kempston mouse only while it is over the picture and
-the machine is running, and its movement is divided by the display's scale so
-it moves in the machine's pixels. What is left over after the division is
-carried to the next frame, or a slow drag across a scaled-up picture would be
-rounded away to nothing. With the mouse fitted, a click on the picture is the
-mouse's button and not the debugger's "which byte is this?".
+The host's mouse becomes the Kempston mouse when the screen is clicked. The
+pointer is hidden and held in the window — locked in place on macOS, confined
+to the window on Windows and X11, as each only offers the one — and from then
+on its movement and both buttons are the machine's, wherever in the window
+they happen. A locked pointer does not move, so movement is taken from the raw
+motion the host reports, divided by the display's scale so it moves in the
+machine's pixels; what is left over after the division is carried to the next
+frame, or a slow drag would be rounded away to nothing. The units of that raw
+motion are the platform's (points, on macOS) and have not been measured
+against a real mouse here.
+
+Esc gives the pointer back, and so does the main window losing focus or the
+mouse being taken off. With the mouse fitted, a click on the screen captures
+rather than being the debugger's "which byte is this?".
 
 ## The ZX Printer and the Alphacom 32
 
