@@ -13,9 +13,12 @@
 //! sees an address.
 //!
 //! `env` is one machine being played, reset to a saved start and stepped an
-//! action at a time, and a pool of them stepped in parallel.
+//! action at a time, and a pool of them stepped in parallel. `model` is the
+//! network, built with `burn`, and `ppo` trains it.
 
 pub mod env;
 pub mod inputs;
 pub mod judge;
+pub mod model;
+pub mod ppo;
 pub mod sight;

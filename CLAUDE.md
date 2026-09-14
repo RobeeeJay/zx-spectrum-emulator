@@ -46,6 +46,13 @@ already there. It is the only dependency in the tree that is not either
 `eframe`'s or a file format's, and it came in by being asked for rather than
 by being convenient.
 
+A second has been allowed since: **`burn`**, on 14 September 2026, by the
+user's decision, for training a network to play games inside the emulator
+(`src/training/`). Only its `std`, `autodiff`, `ndarray` and `wgpu` features
+are taken. Its GPU backend reaches `wgpu` through `cubecl-wgpu`, which asks for
+the same `wgpu` 29 `eframe` already uses, so there is still one `wgpu` in the
+tree; the `ndarray` backend is what the tests train on, since CI has no GPU.
+
 **Prose:** plain, no salesmanship, British spelling. Say what happened,
 including what did not work.
 

@@ -24,6 +24,24 @@ cpal = "0.18"
 flate2 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 gilrs = "0.11.2"
+# Training a network to play games (src/training/). Allowed in by the user's
+# decision on 14 September 2026 — see CLAUDE.md. The GPU backend uses the same
+# wgpu 29 as eframe; ndarray is the CPU backend the tests train on.
+burn = { version = "0.21", default-features = false, features = [
+    "std",
+    "autodiff",
+    "ndarray",
+    "wgpu",
+] }
+# burn takes its CPU backend with that crate's own defaults turned off, which
+# leaves it on one core with no SIMD; named here so its threads and SIMD are
+# on. The same crate and version burn already uses — part of the burn
+# decision, not a crate of its own.
+burn-ndarray = { version = "0.21", default-features = false, features = [
+    "std",
+    "simd",
+    "multi-threads",
+] }
 
 [profile.dev]
 opt-level = 1
