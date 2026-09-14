@@ -94,6 +94,9 @@ set of decisions rather than a manual:
   against what, and what is still open.
 - [`docs/tape-loading.md`](docs/tape-loading.md) — the tape formats and their
   traps, the ROM loader's contract, and the three loading speeds.
+- [`docs/training.md`](docs/training.md) — teaching a network to play: what it
+  sees, the judge, the set-up file, what the settings do and what was
+  measured.
 - [`docs/missing.md`](docs/missing.md) — what other emulators have that this
   does not, checked against the source rather than remembered. A description of
   the gap and not a plan: nothing in it is promised.
@@ -550,6 +553,20 @@ out of memory as the Arcade Learning Environment does for Atari games; what it
 reads goes no further than the reward. A test puts the same picture in front
 of two machines with different memory and registers and requires the network
 to see no difference.
+
+**Training runs on the graphics card unless told otherwise, because it was
+measured.** At the default size an update took 4.7s through wgpu and 45s on
+the processor, where the emulation is a small part of either. burn takes its
+processor backend with that crate's defaults off, which leaves it on one core
+without SIMD — the first run took over ten minutes an update — so
+`burn-ndarray` is named in `Cargo.toml` to turn its threads on. A network is
+kept as a directory with the set-up it was trained with, since it cannot be
+rebuilt without knowing the picture and the actions it was made for. While a
+kept network plays the machine on the screen the keyboard and stick on the
+desk are not read at all, the same bargain as a recording: two hands on one
+set of controls is neither playing nor watching. The discount is the setting
+that decided whether the tests' tiny game was learnt in 25 updates or 140 —
+[`docs/training.md`](docs/training.md) has why.
 
 **A joystick is a choice, not a fact.** The machine has no joystick port, so
 every interface solved it differently: Kempston on a port, Sinclair and Cursor

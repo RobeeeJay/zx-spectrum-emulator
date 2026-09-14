@@ -765,6 +765,18 @@ and **New disk…** makes a blank one formatted as the machine's own FORMAT
 formats it. [`docs/disks.md`](docs/disks.md) says what is emulated and what is
 not.
 
+## Training a network to play
+
+The **Training** window teaches a neural network to play whatever the machine
+is running, with nothing to install: say what it may press — a joystick
+interface, or particular keys — how much of the picture it sees, and where the
+game keeps its score and its lives, and press Start. It learns by PPO on the
+graphics card, sees the screen and nothing else, and is rewarded by a judge
+that reads the score out of memory; **Find a number** finds where the score is
+kept. The network is kept beside the tape, and **Let it play** hands it the
+machine's controls. [`docs/training.md`](docs/training.md) says what each
+setting does and what was measured.
+
 ## Driving it from a program
 
 `cargo run --release --bin mcp` runs the emulator as an
