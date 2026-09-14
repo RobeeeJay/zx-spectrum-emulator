@@ -23,7 +23,7 @@ use super::sight::Sight;
 use crate::machine::Spectrum;
 
 /// How training goes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PpoConfig {
     /// Games played at once.
     pub games: usize,

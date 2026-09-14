@@ -14,11 +14,13 @@
 //!
 //! `env` is one machine being played, reset to a saved start and stepped an
 //! action at a time, and a pool of them stepped in parallel. `model` is the
-//! network, built with `burn`, and `ppo` trains it.
+//! network, built with `burn`, and `ppo` trains it. `setup` is all of that
+//! as a file, kept beside the tape and beside every saved network.
 
 pub mod env;
 pub mod inputs;
 pub mod judge;
 pub mod model;
 pub mod ppo;
+pub mod setup;
 pub mod sight;

@@ -16,7 +16,7 @@ use super::sight::{look, Sight};
 use crate::machine::{Spectrum, FRAME_T};
 
 /// Everything that decides how a game is played.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub inputs: InputSet,
     pub sight: Sight,
