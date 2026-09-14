@@ -290,3 +290,38 @@ fn the_kept_start_is_where_the_last_run_started() {
     assert!(err.contains("switch machine"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Time it runs two updates of the set-up as it stands and says how long the
+/// second took. A set-up changed since is not the one that was timed, and the
+/// figure goes rather than describing a different network.
+#[test]
+fn time_it_measures_an_update_of_this_set_up() {
+    let mut app = test_app();
+    small_run(&mut app);
+    app.show_training = true;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    h.get_by_label("Time it").click();
+    let began = Instant::now();
+    while h
+        .query_by_label_contains("An update of this set-up takes")
+        .is_none()
+    {
+        assert!(
+            began.elapsed() < Duration::from_secs(120),
+            "no time was given"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        h.run_steps(1);
+    }
+    let (seconds, _, _) = h.state().training.timed.clone().unwrap();
+    assert!(seconds > 0.0, "a time was measured: {seconds}");
+
+    h.state_mut().training.setup.ppo.games += 1;
+    h.run_steps(2);
+    assert!(
+        h.query_by_label_contains("An update of this set-up takes")
+            .is_none(),
+        "and it goes when the set-up is no longer the one timed"
+    );
+}

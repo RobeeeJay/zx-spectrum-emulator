@@ -78,6 +78,8 @@ pub struct Progress {
     pub policy_loss: f32,
     pub value_loss: f32,
     pub entropy: f32,
+    /// How long the update took, playing and learning.
+    pub seconds: f32,
 }
 
 /// A random number generator of the trainer's own, for sampling and shuffling.
@@ -218,6 +220,7 @@ impl<B: AutodiffBackend> Trainer<B> {
 
     /// Play, and learn from it, once.
     pub fn update(&mut self) -> &Progress {
+        let began = std::time::Instant::now();
         let (games, steps) = (self.pool.len(), self.config.steps.max(1));
         let a = self.actions;
         let mut observations: Vec<Vec<u8>> = Vec::with_capacity(games * steps);
@@ -343,6 +346,7 @@ impl<B: AutodiffBackend> Trainer<B> {
         p.updates += 1;
         p.steps += total as u64;
         p.step_reward = rewards.iter().sum::<f32>() / total as f32;
+        p.seconds = began.elapsed().as_secs_f32();
         p.policy_loss = pl / batches;
         p.value_loss = vl / batches;
         p.entropy = en / batches;

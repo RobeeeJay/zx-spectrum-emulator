@@ -75,6 +75,9 @@ pub struct Start {
     pub resume: Option<PathBuf>,
     /// Where to keep the network: every few updates and when stopped.
     pub keep_in: Option<PathBuf>,
+    /// Stop by itself after this many updates, which is how Time it
+    /// measures one.
+    pub updates: Option<usize>,
 }
 
 const PREVIEW_EVERY: Duration = Duration::from_millis(40);
@@ -222,6 +225,7 @@ fn run<B: AutodiffBackend>(
         setup,
         resume,
         keep_in,
+        updates: limit,
         ..
     } = start;
     let mut trainer = Trainer::<B>::new(&machine, setup.env.clone(), setup.ppo.clone(), device)?;
@@ -270,6 +274,9 @@ fn run<B: AutodiffBackend>(
         lock(shared).history.push(progress.clone());
         if keep_now.swap(false, Ordering::Relaxed) || progress.updates % KEEP_EVERY == 0 {
             keep_it(&trainer)?;
+        }
+        if limit.is_some_and(|n| progress.updates >= n) {
+            break;
         }
     }
     if trainer.progress().updates > 0 {

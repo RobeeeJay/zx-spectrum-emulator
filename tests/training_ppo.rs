@@ -294,6 +294,7 @@ fn worker_start(
         processor: Processor::Cpu,
         resume: None,
         keep_in,
+        updates: None,
     }
 }
 
@@ -493,4 +494,30 @@ fn going_on_carries_the_optimisers_state() {
         "and the one with the optimiser's state went its own way"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A worker told to stop after two updates does so by itself, and each update
+/// says how long it took — which is how Time it measures one.
+#[test]
+fn a_worker_stops_itself_after_the_updates_it_was_given() {
+    let mut start = worker_start(env_config(), ppo_config(), None);
+    start.updates = Some(2);
+    let worker = Worker::start(start);
+    let began = Instant::now();
+    while worker.is_running() {
+        assert!(
+            began.elapsed() < Duration::from_secs(60),
+            "still running after {:?}, with {} updates done",
+            began.elapsed(),
+            worker.shared().history.len()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let shared = worker.shared();
+    assert_eq!(shared.history.len(), 2, "two updates, no more");
+    assert!(
+        shared.history.iter().all(|p| p.seconds > 0.0),
+        "each timed: {:?}",
+        shared.history.iter().map(|p| p.seconds).collect::<Vec<_>>()
+    );
 }

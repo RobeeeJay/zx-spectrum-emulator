@@ -58,6 +58,10 @@ pub struct Training {
     /// Go on from the network kept beside the tape rather than a fresh one.
     pub resume: bool,
     pub worker: Option<Worker>,
+    /// Two updates being run to see how long one takes, and what for.
+    timing: Option<(Worker, Setup, Processor)>,
+    /// How long an update took, the set-up and the processor it was of.
+    pub timed: Option<(f32, Setup, Processor)>,
     /// A kept network with the machine's controls.
     pub player: Option<Player>,
     /// Looking for where the game keeps a number, and the number to look for.
@@ -88,6 +92,8 @@ impl Default for Training {
             from: From::Now,
             resume: false,
             worker: None,
+            timing: None,
+            timed: None,
             player: None,
             search: None,
             search_is: 0,
@@ -114,6 +120,28 @@ fn number(text: &str) -> Result<Option<Number>, String> {
 impl Training {
     pub fn is_running(&self) -> bool {
         self.worker.as_ref().is_some_and(Worker::is_running)
+    }
+
+    pub fn is_timing(&self) -> bool {
+        self.timing.is_some()
+    }
+
+    /// Once the timing run is over, take the second update's time: the
+    /// first includes setting the network up and, on the graphics card,
+    /// compiling its programs.
+    fn finish_timing(&mut self) {
+        if self.timing.as_ref().is_none_or(|(w, _, _)| w.is_running()) {
+            return;
+        }
+        let (worker, setup, processor) = self.timing.take().expect("just seen");
+        let shared = worker.shared();
+        match (shared.history.get(1), &shared.error) {
+            (Some(p), _) => self.timed = Some((p.seconds, setup, processor)),
+            (None, Some(e)) => self.message = Some((e.clone(), true)),
+            (None, None) => {
+                self.message = Some(("Timing stopped before its two updates".into(), true))
+            }
+        }
     }
 
     /// Take a set-up over, showing its controls as the choices that make
@@ -229,8 +257,9 @@ fn follow_source(app: &mut App) {
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     follow_source(app);
+    app.training.finish_timing();
     let running = app.training.is_running();
-    if running {
+    if running || app.training.is_timing() {
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
     let problems = if running {
@@ -606,8 +635,9 @@ fn buttons(app: &mut App, ui: &mut egui::Ui, running: bool, problems: &[String])
                 }
             }
         } else {
+            let timing = app.training.is_timing();
             let start = ui
-                .add_enabled(problems.is_empty(), egui::Button::new("▶ Start"))
+                .add_enabled(problems.is_empty() && !timing, egui::Button::new("▶ Start"))
                 .on_hover_text("Start learning, with every game starting from the machine chosen");
             if start.clicked() {
                 begin(app, keep_in.clone());
@@ -617,6 +647,17 @@ fn buttons(app: &mut App, ui: &mut egui::Ui, running: bool, problems: &[String])
                 egui::Checkbox::new(&mut app.training.resume, "Go on from the kept network"),
             )
             .on_hover_text("Rather than a fresh network: it has to have been made for the same picture and actions");
+            let label = if timing { "Timing…" } else { "Time it" };
+            if ui
+                .add_enabled(problems.is_empty() && !timing, egui::Button::new(label))
+                .on_hover_text(
+                    "Run two updates of this set-up and say how long the second took, \
+                     so the wait is known before starting",
+                )
+                .clicked()
+            {
+                time_it(app, keep_in.clone());
+            }
         }
         theme::divider(ui);
         if ui
@@ -635,6 +676,21 @@ fn buttons(app: &mut App, ui: &mut egui::Ui, running: bool, problems: &[String])
     });
     for p in problems {
         ui.label(egui::RichText::new(p).small().color(theme::RED));
+    }
+    // Only while the set-up is still the one that was timed: a figure for
+    // another size of network says nothing about this one.
+    let t = &app.training;
+    if let Some((seconds, setup, processor)) = &t.timed {
+        if *setup == t.setup && *processor == t.processor {
+            note(
+                ui,
+                format!(
+                    "An update of this set-up takes {seconds:.1} s on the {}, measured: the \
+                     second of two, after one to warm up",
+                    processor.name().to_lowercase()
+                ),
+            );
+        }
     }
     match &keep_in {
         Some(dir) => note(ui, format!("The network is kept in {}", dir.display())),
@@ -663,16 +719,44 @@ pub fn kept_start(spec: &Spectrum, keep_in: Option<&Path>) -> Result<(Spectrum, 
     Ok((machine, note))
 }
 
-/// Start a run.
-fn begin(app: &mut App, keep_in: Option<PathBuf>) {
-    let machine = match app.training.from {
+/// The machine every game of a run starts as, and anything to say about it.
+fn start_machine(app: &App, keep_in: Option<&Path>) -> Result<(Spectrum, String), String> {
+    match app.training.from {
         From::Now => Ok((app.spec.clone(), String::new())),
         From::Slot(n) => app.quick[n]
             .as_ref()
             .map(|m| ((**m).clone(), String::new()))
             .ok_or_else(|| "That quick slot is empty".to_string()),
-        From::Kept => kept_start(&app.spec, keep_in.as_deref()),
+        From::Kept => kept_start(&app.spec, keep_in),
+    }
+}
+
+/// Run two updates of the set-up as it stands, to see how long one takes.
+fn time_it(app: &mut App, keep_in: Option<PathBuf>) {
+    let mut machine = match start_machine(app, keep_in.as_deref()) {
+        Ok((m, _)) => m,
+        Err(e) => {
+            app.training.message = Some((e, true));
+            return;
+        }
     };
+    machine.bus.audio.detach();
+    let t = &mut app.training;
+    t.timed = None;
+    let worker = Worker::start(Start {
+        machine,
+        setup: t.setup.clone(),
+        processor: t.processor,
+        resume: None,
+        keep_in: None,
+        updates: Some(2),
+    });
+    t.timing = Some((worker, t.setup.clone(), t.processor));
+}
+
+/// Start a run.
+fn begin(app: &mut App, keep_in: Option<PathBuf>) {
+    let machine = start_machine(app, keep_in.as_deref());
     let (mut machine, note) = match machine {
         Ok(m) => m,
         Err(e) => {
@@ -698,6 +782,7 @@ fn begin(app: &mut App, keep_in: Option<PathBuf>) {
         processor: t.processor,
         resume,
         keep_in,
+        updates: None,
     }));
     t.started = Some(Instant::now());
     t.preview = None;
@@ -743,7 +828,7 @@ fn progress(t: &Training, ui: &mut egui::Ui) {
         Some(p) => {
             let seconds = t.started.map_or(0.0, |s| s.elapsed().as_secs_f64());
             ui.label(format!(
-                "{} updates, {} steps, {} games finished, {:.0} steps a second",
+                "{} updates, {} steps, {} games finished, {:.0} steps a second, {:.1} s an update",
                 p.updates,
                 p.steps,
                 p.games_finished,
@@ -751,7 +836,8 @@ fn progress(t: &Training, ui: &mut egui::Ui) {
                     p.steps as f64 / seconds
                 } else {
                     0.0
-                }
+                },
+                p.seconds
             ));
             ui.label(format!(
                 "Reward a step {:.3}, a whole game {}; undecidedness {:.2}",
