@@ -302,6 +302,17 @@ that has run is shown whole and its operands never become rows of their own;
 stepping back through the listing goes to an instruction that has run and ends
 exactly there, or else a byte back.
 
+**An exported program assembles back into the same bytes, or it is not an
+export.** `src/asmexport.rs` writes RAM as source: code where it has run, data
+elsewhere, labels made into names an assembler takes, the ROM left out and
+named by CRC32. A Z80 instruction can have more than one encoding and an
+assembler picks the usual one, so only documented instructions with the one
+encoding are written as mnemonics — duplicates, stray prefixes and
+undocumented ones are DEFB with the instruction in a comment. The only honest
+test is an assembler, and none is in the build: `tests/asm_export.rs` uses
+sjasmplus when ZXRS_Z80ASM names one or it is on the path, and skips that part
+otherwise, as the ROM tests do.
+
 **A conditional way out is not where a routine ends.** A taken `RET Z` ends the
 call it is in; the next call through may fall straight past it, so the routine
 carries on underneath. Only the exits that always end it — a plain `RET`, or a

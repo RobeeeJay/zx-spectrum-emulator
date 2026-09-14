@@ -2,6 +2,7 @@
 //! debugging views.
 
 pub mod appicon;
+pub mod asmexport;
 pub mod audio;
 pub mod audio_out;
 pub mod autodoc;

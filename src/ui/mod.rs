@@ -2755,6 +2755,42 @@ impl App {
         self.dbg.raise = true;
     }
 
+    /// Save the program in RAM as assembly source (`crate::asmexport`), named
+    /// after what is loaded.
+    pub fn export_asm(&mut self) {
+        let program = self
+            .notes
+            .file()
+            .and_then(|p| p.file_name())
+            .map(|n| {
+                n.to_string_lossy()
+                    .trim_end_matches(".zxrs.txt")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "program".into());
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Assembly source", &["asm", "z80", "s"])
+            .set_file_name(format!("{program}.asm"))
+            .save_file()
+        else {
+            self.set_status("Nothing exported".into(), false);
+            return;
+        };
+        let out = crate::asmexport::from_machine(&self.spec, &self.notes, None, &program);
+        match std::fs::write(&path, &out.text) {
+            Ok(()) => self.set_status(
+                format!(
+                    "Wrote {}: {} instructions, {} bytes as data",
+                    path.display(),
+                    out.instructions,
+                    out.data_bytes
+                ),
+                false,
+            ),
+            Err(e) => self.set_status(format!("Could not write {}: {e}", path.display()), true),
+        }
+    }
+
     /// Open the debugger's memory dump at an address and bring the debugger to
     /// the front: whatever asked wants to read the bytes, and a debugger left
     /// behind another window is not somewhere they can be read.

@@ -192,8 +192,10 @@ impl Session {
             | "autodoc" | "blocks" | "profile" | "frame_timing" | "sound_state" | "paging"
             | "memory_activity" | "tape_blocks" | "loader" | "save_state" | "restore_state"
             | "step_forward" | "step_back" | "press_keys" | "type_text" | "mouse" | "printout"
-            | "load_symbols" | "symbols" | "identify" | "export_listing" | "load_tape"
-            | "load_snapshot" | "load_recording" | "play_recording" => Err(zx81::not_here(name)),
+            | "load_symbols" | "symbols" | "identify" | "export_listing" | "export_asm"
+            | "load_tape" | "load_snapshot" | "load_recording" | "play_recording" => {
+                Err(zx81::not_here(name))
+            }
             other => Err(format!("no tool called {other:?}; try tools/list")),
         }
     }
@@ -273,6 +275,7 @@ impl Session {
             "comments" => crate::mcp::analysis::comments(self, args),
             "save_comments" => crate::mcp::analysis::save_comments(self, args),
             "export_listing" => crate::mcp::analysis::export_listing(self, args),
+            "export_asm" => crate::mcp::analysis::export_asm(self, args),
             other => Err(format!("no tool called {other:?}; try tools/list")),
         }
     }

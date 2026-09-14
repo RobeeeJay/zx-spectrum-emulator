@@ -147,6 +147,14 @@ jumps the debugger to it.
   to run since the last reset or snapshot, and shows every other byte as data
   (`DEFB`) — so tables, graphics and text stop reading as nonsense code.
   **Memory**, beside Go to's PC, moves the listing to where the memory dump is.
+* **Export…**, beside Disassemble, saves the program in RAM ($4000-$FFFF) as
+  assembly source that assembles back into the same bytes: instructions where
+  code has run, `DEFB` elsewhere, with every label and comment from the notes.
+  The ROMs it ran against are named in the header by CRC32 and left out; calls
+  into them keep their addresses, with the ROM's names as `EQU`s where known.
+  Undocumented instructions, and ones with more than one encoding, are written
+  as `DEFB` with the instruction beside them, so any assembler rebuilds the
+  same bytes. Checked with sjasmplus against a real program, byte for byte.
 * Speed presets from 1% to 2000%, plus a logarithmic slider.
 * A hex/ASCII memory dump with shortcuts to follow HL or SP.
 

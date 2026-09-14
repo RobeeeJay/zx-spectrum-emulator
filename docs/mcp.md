@@ -129,7 +129,11 @@ mean channel by channel — tone, noise, volume, period turned into a pitch.
 back.
 
 **Writing it down.** `set_comment`, `comments`, `save_comments`,
-`export_listing`.
+`export_listing`, `export_asm`.
+
+`export_asm` writes the program in RAM as assembly source that assembles back into
+the same bytes: code where it has run, DEFB elsewhere, every label and comment,
+and the ROMs it ran against named by CRC32 in its header.
 
 `export_listing` writes the whole annotated disassembly to a file — the thing
 being built. What ran while watching is disassembled; what did not is left as

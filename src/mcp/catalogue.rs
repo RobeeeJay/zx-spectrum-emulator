@@ -901,6 +901,15 @@ pub fn tools() -> Json {
             ],
         ),
         schema_tool(
+            "export_asm",
+            "Write the program in RAM ($4000-$FFFF) as assembly source that assembles back \
+             into the same bytes: instructions where code has been seen to run, DEFB \
+             elsewhere, with every label and comment from the notes. The ROMs it was built \
+             against are named in its header by CRC32 and left out.",
+            [("path", prop("string", "where to write the .asm file"))],
+            &["path"],
+        ),
+        schema_tool(
             "export_listing",
             "Write the whole annotated disassembly to a file: every label and comment \
              against the code, and the parts that were never executed left as bytes rather \
