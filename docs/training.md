@@ -42,9 +42,12 @@ game is over.
   which the game is over, and the steps after which a game is stopped however
   it is going. A reward for every step survived is there for games with
   nothing else to go on.
-- **Where every game starts.** The machine as it is when Start is pressed, or
-  a quicksave. Put the game where play begins — past the title screen, one
-  life in — before pressing Start.
+- **Where every game starts.** The machine as it is when Start is pressed, a
+  quicksave, or **the kept start** — the machine the kept network's games
+  started from, kept beside it. Put the game where play begins — past the
+  title screen, one life in — before pressing Start. The kept start is put
+  into a copy of the machine on the screen, since a snapshot holds no ROM,
+  so it has to be the same model; one of another is refused with the reason.
 
 ### Finding the score
 
@@ -88,6 +91,13 @@ at half size, four frames:
 | Graphics card (wgpu, Metal) | 4.7 s |
 | Processor (ndarray, all cores) | 45 s |
 
+**Time it** measures the set-up as it stands rather than leaving it to
+these figures: it runs two updates on the graphics card or the processor,
+whichever is chosen, and says how long the second took — the first includes building the network and, on the
+graphics card, compiling its programs. The figure is shown only while the
+set-up and the processor are the ones it was measured with. While a run goes
+on, the window says how long each update is taking.
+
 The emulation itself is not what takes the time: one core runs about 6,400
 frames a second, and an update of that size is 8,192 frames spread across all
 of them. A machine without a graphics card wgpu can use says so in the window
@@ -95,13 +105,18 @@ and the processor can be chosen instead.
 
 ## Keeping a network
 
-The network is kept beside the tape, in `<name>.zxrs-net/`: `network.bin`,
-and the `setup.txt` it was trained with, since it cannot be rebuilt without the
-picture and the actions it was made for. It is kept every ten updates and when
-stopped. **Go on from the kept network** starts the next run from it rather
-than afresh. Only the network is kept, not the optimiser's running averages,
-so the first few updates of a run that goes on are a little rougher than they
-would have been.
+The network is kept beside the tape, in `<name>.zxrs-net/`: `network.bin`;
+the `setup.txt` it was trained with, since it cannot be rebuilt without the
+picture and the actions it was made for; `start.szx`, the machine every game
+started from; and `optimiser.bin`, Adam's running averages of each
+parameter's gradients. It is kept every ten updates and when stopped. **Go on
+from the kept network** starts the next run from it rather than afresh, with
+the averages put back so the run carries on rather than taking its first
+steps as if nothing had been learnt. burn keeps the averages against each
+parameter's id, and a network loaded from a file takes its ids from the file,
+which is what lets the two meet up again; a test checks the averages change
+what the next update does, not only that they were written. A network kept
+before the averages were is still gone on from, with them worked out again.
 
 The set-up is written beside the tape as `<name>.zxrs-train.txt` whenever a
 run starts, and read back when the tape is loaded again. It is one
@@ -127,6 +142,6 @@ training, so it can play a kept network while another run goes on.
 
 - The ZX81 cannot be trained on: it cannot be copied, and every game starts
   from a copy.
-- The machine every game starts from is not kept with the network. Going on
-  from a kept network means starting from the same place again.
 - Only one of the games is shown while it trains.
+- The kept start is an `.szx`, and what that format cannot hold is not kept;
+  loading it says what was left out.
