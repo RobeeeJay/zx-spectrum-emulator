@@ -15,7 +15,8 @@
 //! `env` is one machine being played, reset to a saved start and stepped an
 //! action at a time, and a pool of them stepped in parallel. `model` is the
 //! network, built with `burn`, and `ppo` trains it. `setup` is all of that
-//! as a file, kept beside the tape and beside every saved network.
+//! as a file, kept beside the tape and beside every saved network. `worker`
+//! runs training on a thread of its own and keeps what the window shows.
 
 pub mod env;
 pub mod inputs;
@@ -24,3 +25,4 @@ pub mod model;
 pub mod ppo;
 pub mod setup;
 pub mod sight;
+pub mod worker;

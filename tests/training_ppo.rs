@@ -33,7 +33,11 @@ use zx_rustrum::training::env::Config;
 use zx_rustrum::training::inputs::InputSet;
 use zx_rustrum::training::judge::{Judge, Number};
 use zx_rustrum::training::ppo::{PpoConfig, Trainer};
+use zx_rustrum::training::setup::Setup;
 use zx_rustrum::training::sight::{Area, Sight};
+use zx_rustrum::training::worker::{Processor, Shared, Worker, NETWORK, SETUP};
+
+use std::time::{Duration, Instant};
 
 type B = burn::backend::Autodiff<burn::backend::NdArray>;
 
@@ -177,4 +181,125 @@ fn a_picture_too_small_is_refused() {
     let result = Trainer::<B>::new(&tiny_game(), env, ppo_config(), Default::default());
     let err = result.err().expect("refused");
     assert!(err.contains("too small"), "{err}");
+}
+
+fn worker_start(
+    env: Config,
+    ppo: PpoConfig,
+    keep_in: Option<std::path::PathBuf>,
+) -> zx_rustrum::training::worker::Start {
+    zx_rustrum::training::worker::Start {
+        machine: tiny_game(),
+        setup: Setup { env, ppo },
+        processor: Processor::Cpu,
+        resume: None,
+        keep_in,
+    }
+}
+
+/// Wait for something the worker writes down, or fail saying what never came.
+fn wait_for(worker: &Worker, what: &str, done: impl Fn(&Shared) -> bool) {
+    let start = Instant::now();
+    while !done(&worker.shared()) {
+        if let Some(e) = &worker.shared().error {
+            panic!("waiting for {what}, the worker stopped: {e}");
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(300),
+            "{what} never came"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Training on a thread of its own writes down every update and a picture of
+/// a game as it goes, and when stopped keeps the network beside the set-up
+/// it was trained with — which is what it takes to load it again.
+#[test]
+fn a_worker_trains_shows_a_game_and_keeps_the_network() {
+    let dir = std::env::temp_dir().join(format!("zxrs-worker-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut worker = Worker::start(worker_start(env_config(), ppo_config(), Some(dir.clone())));
+    wait_for(&worker, "two updates and a picture", |s| {
+        s.history.len() >= 2 && s.preview.is_some()
+    });
+    worker.stop();
+    assert!(!worker.is_running());
+
+    let shared = worker.shared();
+    let preview = shared.preview.as_ref().unwrap();
+    assert_eq!(
+        preview.picture.len(),
+        preview.width * preview.height * 4,
+        "an RGBA picture"
+    );
+    assert_eq!(preview.probabilities.len(), 6, "one for each action");
+    let sum: f32 = preview.probabilities.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-4, "probabilities sum to {sum}");
+    assert!(
+        shared
+            .history
+            .windows(2)
+            .all(|w| w[1].updates == w[0].updates + 1),
+        "every update written down, in order"
+    );
+    assert_eq!(shared.saved.as_deref(), Some(dir.as_path()));
+
+    let text = std::fs::read_to_string(dir.join(SETUP)).expect("the set-up is kept");
+    let setup = Setup::from_text(&text).unwrap();
+    assert_eq!(
+        setup,
+        Setup {
+            env: env_config(),
+            ppo: ppo_config()
+        }
+    );
+    let mut again =
+        Trainer::<B>::new(&tiny_game(), setup.env, setup.ppo, Default::default()).unwrap();
+    again
+        .load(&dir.join(NETWORK))
+        .expect("the kept network loads");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Stop is answered within a step, not at the end of an update — at the
+/// default size an update on the processor takes most of a minute — and an
+/// update cut short is neither counted nor kept.
+#[test]
+fn stopping_cuts_an_update_short() {
+    let ppo = PpoConfig {
+        steps: 1_000_000,
+        ..ppo_config()
+    };
+    let dir = std::env::temp_dir().join(format!("zxrs-stop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut worker = Worker::start(worker_start(env_config(), ppo, Some(dir.clone())));
+    wait_for(&worker, "the first picture", |s| s.preview.is_some());
+    // Stopped from another thread, so a stop that is never answered fails
+    // the test rather than hanging it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        worker.stop();
+        let _ = tx.send(worker);
+    });
+    let worker = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stopped within two seconds");
+    assert!(worker.shared().history.is_empty(), "nothing counted");
+    assert!(!dir.exists(), "and nothing kept");
+}
+
+/// A set-up the network cannot be built for is said in the window, and the
+/// worker stops, rather than the emulator falling over.
+#[test]
+fn a_worker_that_cannot_start_says_why() {
+    let mut env = env_config();
+    env.sight.shrink = 8;
+    let worker = Worker::start(worker_start(env, ppo_config(), None));
+    let start = Instant::now();
+    while worker.is_running() && start.elapsed() < Duration::from_secs(30) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let error = worker.shared().error.clone().expect("an error");
+    assert!(error.contains("too small"), "{error}");
 }

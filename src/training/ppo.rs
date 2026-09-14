@@ -9,6 +9,8 @@
 //! update — the clipping that gives PPO its name.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use burn::module::AutodiffModule;
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
@@ -106,7 +108,13 @@ pub struct Trainer<B: AutodiffBackend> {
     rng: Rng,
     recent: VecDeque<f32>,
     progress: Progress,
+    watch: Option<Watch>,
+    stop: Option<Arc<AtomicBool>>,
 }
+
+/// Shown game 0's machine after every step, with the action taken and the
+/// probabilities it was chosen from.
+pub type Watch = Box<dyn FnMut(&Spectrum, usize, &[f32]) + Send>;
 
 impl<B: AutodiffBackend> Trainer<B> {
     pub fn new(
@@ -130,6 +138,8 @@ impl<B: AutodiffBackend> Trainer<B> {
             device,
             recent: VecDeque::new(),
             progress: Progress::default(),
+            watch: None,
+            stop: None,
         })
     }
 
@@ -139,6 +149,24 @@ impl<B: AutodiffBackend> Trainer<B> {
 
     pub fn pool(&self) -> &Pool {
         &self.pool
+    }
+
+    /// Something to be shown each step of game 0, for a window to draw.
+    pub fn watch(&mut self, watch: Watch) {
+        self.watch = Some(watch);
+    }
+
+    /// A flag that cuts an update short when it is set. At the default size
+    /// an update on the processor takes most of a minute, which is too long
+    /// for Stop to wait. An update cut short is not counted.
+    pub fn stop_when(&mut self, flag: Arc<AtomicBool>) {
+        self.stop = Some(flag);
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Relaxed))
     }
 
     fn model(&self) -> &Net<B> {
@@ -201,6 +229,9 @@ impl<B: AutodiffBackend> Trainer<B> {
 
         let mut current = self.pool.observations();
         for _ in 0..steps {
+            if self.stopped() {
+                return &self.progress;
+            }
             let refs: Vec<&[u8]> = current.iter().map(|o| o.as_slice()).collect();
             let (probs, value) = self.preferences(&refs);
             let picks: Vec<usize> = (0..games)
@@ -211,6 +242,9 @@ impl<B: AutodiffBackend> Trainer<B> {
             }
             values.extend_from_slice(&value);
             let results = self.pool.step(&picks);
+            if let Some(watch) = self.watch.as_mut() {
+                watch(self.pool.game(0).machine(), picks[0], &probs[..a]);
+            }
             for step in &results {
                 rewards.push(step.reward);
                 dones.push(step.done);
@@ -258,6 +292,9 @@ impl<B: AutodiffBackend> Trainer<B> {
                 order.swap(i, j);
             }
             for part in order.chunks(self.config.minibatch.max(1)) {
+                if self.stopped() {
+                    return &self.progress;
+                }
                 let m = part.len();
                 let refs: Vec<&[u8]> = part.iter().map(|i| observations[*i].as_slice()).collect();
                 let x = batch::<B>(&refs, &self.sight, &self.device);
