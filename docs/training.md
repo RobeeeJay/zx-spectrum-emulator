@@ -52,16 +52,31 @@ game is over.
 ### Finding the score
 
 **Find a number** in the window looks for where the game keeps it, the way a
-cheat finder does. Start looking, play until the number on the screen
-changes, and say how: it went up, went down, is now this, did not change.
-Addresses whose byte did otherwise are dropped, and a few rounds usually leave
-a handful, each with a button to use it as the score or the lives. The search
-starts above the screen at `$5B00`: the display file holds pictures of
-numbers, not numbers. A score kept in several bytes is found by the byte that
-changes most, which can wrap on a carry — a BCD 99 going to 00 — so *changed*
-is the safer thing to say about a score than *went up*. What is found is
-offered as `byte ADDR`; make it `bcd` or `digits` if that is how the game
-keeps it.
+cheat finder does, but for a number rather than a byte. A score is seldom one
+byte: it is kept in binary, as binary-coded decimal two digits a byte, or a
+byte a digit — and a byte a digit may count from 0, from the character `0`,
+or from wherever the game's own font keeps its digits. So what is looked for
+is a place and a way of keeping a number there: a byte, a word (low byte
+first), BCD in one to four bytes, or one to eight digit bytes. Anything that
+cannot be that way of keeping a number — a BCD nibble above 9, digit bytes
+more than ten apart — is dropped every round.
+
+Start looking, play until the number on the screen changes, and say how: it
+went up, went down, changed, or did not change. Then say what it is now **as
+the screen shows it, noughts and all** — `001230`, not `1230`. The width
+matters: while a score is small, the two bytes at the end of a three-byte BCD
+score read the same number as the whole of it, and only the six digits on the
+screen say it is three bytes; six digits are likewise six digit bytes. Saying
+the number also settles which byte stands for nought in a number kept a digit
+a byte. One look at a single digit settles nothing — every byte reads as 3
+counting from three below it — so lives kept as one digit need the number to
+change before they are found.
+
+Once a dozen or fewer are left, each is listed with the number it reads, and
+**Use as score** or **Use as lives** fills it in as the set-up writes it. The
+search starts above the screen at `$5B00`: the display file holds pictures of
+numbers, not numbers. Numbers kept lowest digit first are not looked for,
+since the judge cannot read them either.
 
 ## Learning
 
