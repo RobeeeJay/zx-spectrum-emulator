@@ -372,6 +372,16 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             // what it was showing.
             app.dbg.centre = true;
         }
+        if ui
+            .add_enabled(!app.on_zx81(), egui::Button::new("Export…"))
+            .on_hover_text(
+                "Save the program in RAM as assembly source that builds back into the same \
+                 bytes: code where it has run, data elsewhere, with every label and comment",
+            )
+            .clicked()
+        {
+            app.export_asm();
+        }
     });
 
     // Stopping on what a program does rather than on where it is: the things
@@ -1441,7 +1451,11 @@ fn back<F: Fn(u16) -> u8>(peek: &F, ran: &Option<Vec<bool>>, addr: u16, count: u
     for _ in 0..count {
         addr = match ran {
             None => disasm::previous(peek, addr),
+            // The longest first: the byte after a prefix is fetched as an
+            // opcode too, so an instruction that starts inside a prefixed one
+            // also looks as though it has run.
             Some(ran) => (1..=4u16)
+                .rev()
                 .map(|k| addr.wrapping_sub(k))
                 .find(|at| {
                     ran[*at as usize]

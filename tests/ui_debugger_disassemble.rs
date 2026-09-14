@@ -111,3 +111,48 @@ fn disassemble_shows_data_where_nothing_has_run() {
         "off, the byte is disassembled again: {as_code}"
     );
 }
+
+/// A prefixed instruction is one row. The Z80 fetches the byte after a DD,
+/// ED, CB or FD prefix as an opcode too, so the tracker marks it as run; the
+/// row above the instruction after LD IX,nn is the LD IX — not the LD HL,nn
+/// that starts one byte into it.
+#[test]
+fn a_prefixed_instruction_is_one_row() {
+    let roms = Roms {
+        rom48: Some(vec![0x00; 0x4000]),
+        rom128: None,
+        rom_plus3: None,
+        rom_zx81: None,
+    };
+    let mut app = App::with_roms(Spectrum::new(), String::new(), roms, None);
+    app.show_ram_map = false;
+    app.show_back_buffer = false;
+    app.show_tape = false;
+    app.show_debugger = true;
+    app.running = false;
+    // LD IX,$9000; JR to itself.
+    for (i, b) in [0xDDu8, 0x21, 0x00, 0x90, 0x18, 0xFE].iter().enumerate() {
+        app.spec.bus.poke(0x8000 + i as u16, *b);
+    }
+    app.spec.cpu.pc = 0x8000;
+    app.spec.run(FRAME_T);
+    let ran = |app: &App, a: u16| app.spec.bus.tracker.executed[app.spec.bus.phys_index(a)];
+    assert!(
+        ran(&app, 0x8001),
+        "the byte after the prefix is fetched as an opcode too"
+    );
+    app.dbg.disassemble_run = true;
+    app.show_in_listing(0x8004);
+    let mut h = Harness::builder()
+        .with_size([1600.0, 1200.0])
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), app);
+    h.run_steps(3);
+    assert!(shown(&h, "LD IX,$9000"), "one row for the LD IX");
+    assert!(!shown(&h, "LD HL,$9000"), "and no LD HL starting inside it");
+    let lines = h.state().dbg.lines as u16;
+    assert_eq!(
+        h.state().dbg.top,
+        0x8000u16.wrapping_sub(lines / 2 - 1),
+        "the row above $8004 is the LD IX at $8000"
+    );
+}
