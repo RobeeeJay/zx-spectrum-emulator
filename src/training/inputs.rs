@@ -126,11 +126,8 @@ impl InputSet {
     /// Put an action on the machine: what it holds is down, and everything
     /// else the set could press is let go, so the last action does not linger.
     pub fn apply(&self, spec: &mut Spectrum, action: usize) {
+        self.release(spec);
         let bus = &mut spec.bus;
-        for way in Way::ALL {
-            bus.joystick.set(way, false);
-        }
-        bus.keys = [0xFF; 8];
         if let Some(action) = self.actions.get(action) {
             for control in &action.controls {
                 match *control {
@@ -139,6 +136,14 @@ impl InputSet {
                 }
             }
         }
+    }
+
+    /// Let go of the stick and every key.
+    pub fn release(&self, spec: &mut Spectrum) {
+        for way in Way::ALL {
+            spec.bus.joystick.set(way, false);
+        }
+        spec.bus.keys = [0xFF; 8];
     }
 
     /// Saved as `interface; action; action`, an action being its controls

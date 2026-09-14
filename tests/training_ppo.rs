@@ -37,7 +37,13 @@ use zx_rustrum::training::setup::Setup;
 use zx_rustrum::training::sight::{Area, Sight};
 use zx_rustrum::training::worker::{Processor, Shared, Worker, NETWORK, SETUP};
 
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+use zx_rustrum::machine::FRAME_T;
+use zx_rustrum::training::env::Env;
+use zx_rustrum::training::player::Player;
+use zx_rustrum::training::worker::keep;
+use zx_rustrum::z80::Bus;
 
 type B = burn::backend::Autodiff<burn::backend::NdArray>;
 
@@ -117,30 +123,124 @@ fn ppo_config() -> PpoConfig {
     }
 }
 
+/// What training the tiny game once came to, for the tests that need a
+/// trained network: training takes seconds, and doing it twice would prove
+/// nothing more.
+struct Learnt {
+    first: f32,
+    last: f32,
+    updates: usize,
+    steps: u64,
+    dir: std::path::PathBuf,
+    /// A screen with the bar on it, and what the trainer made of it.
+    bar: Vec<u8>,
+    bar_probabilities: Vec<f32>,
+}
+
+fn learnt() -> &'static Learnt {
+    static LEARNT: OnceLock<Learnt> = OnceLock::new();
+    LEARNT.get_or_init(|| {
+        let mut trainer =
+            Trainer::<B>::new(&tiny_game(), env_config(), ppo_config(), Default::default())
+                .unwrap();
+        let first = trainer.update().step_reward;
+        let mut last = first;
+        for _ in 0..60 {
+            last = trainer.update().step_reward;
+            if last >= 0.45 {
+                break;
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("zxrs-learnt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let setup = Setup {
+            env: env_config(),
+            ppo: ppo_config(),
+        };
+        keep(&trainer, &setup, &dir).unwrap();
+        let mut env = Env::new(Arc::new(tiny_game()), Arc::new(env_config()), 1);
+        let bar = env.step(FIRE).observation;
+        let bar_probabilities = trainer.probabilities(&bar);
+        let p = trainer.progress();
+        Learnt {
+            first,
+            last,
+            updates: p.updates,
+            steps: p.steps,
+            dir,
+            bar,
+            bar_probabilities,
+        }
+    })
+}
+
+/// Fire, in the Kempston set with no diagonals and no fire while moving.
+const FIRE: usize = 5;
+
 /// Trained from nothing but the screen and the judge's reward, the network
 /// learns to alternate: 0.45 a step, which play blind to the screen cannot
 /// reach, and at least twice where it began.
 #[test]
 fn a_network_learns_the_tiny_game_from_the_screen() {
-    let mut trainer =
-        Trainer::<B>::new(&tiny_game(), env_config(), ppo_config(), Default::default()).unwrap();
-    let first = trainer.update().step_reward;
-    let mut last = first;
-    for _ in 0..60 {
-        last = trainer.update().step_reward;
-        if last >= 0.45 {
-            break;
-        }
-    }
-    let p = trainer.progress();
+    let l = learnt();
     eprintln!(
-        "started at {first:.3} a step, reached {last:.3} after {} updates, {} steps",
-        p.updates, p.steps
+        "started at {:.3} a step, reached {:.3} after {} updates, {} steps",
+        l.first, l.last, l.updates, l.steps
     );
     assert!(
-        last >= 0.45 && last >= 2.0 * first,
-        "from {first:.3} to {last:.3} a step: the network did not learn to alternate"
+        l.last >= 0.45 && l.last >= 2.0 * l.first,
+        "from {:.3} to {:.3} a step: the network did not learn to alternate",
+        l.first,
+        l.last
     );
+}
+
+/// A kept network loaded to play rather than to train prefers what the
+/// trainer preferred, plays a machine it has never seen far better than
+/// play blind to the screen could, and lets go when told.
+#[test]
+fn a_kept_network_plays_a_machine_of_its_own() {
+    let l = learnt();
+    let mut player = Player::load(&l.dir).unwrap();
+    let probs = player.probabilities(&l.bar);
+    assert!(
+        probs
+            .iter()
+            .zip(&l.bar_probabilities)
+            .all(|(a, b)| (a - b).abs() < 1e-5),
+        "the player's {probs:?} against the trainer's {:?}",
+        l.bar_probabilities
+    );
+
+    let mut spec = tiny_game();
+    player.prepare(&mut spec);
+    let steps = 64;
+    for _ in 0..steps * env_config().frames_per_step {
+        player.play(&mut spec);
+        spec.run(FRAME_T);
+    }
+    let score = spec.bus.peek_raw(0x9000);
+    let per_step = score as f32 / steps as f32;
+    eprintln!("played {score} points in {steps} steps, {per_step:.3} a step");
+    assert!(
+        per_step >= 0.35,
+        "{score} points in {steps} steps, {per_step:.3} a step: blind play gets at most \
+         0.25, and training reached {:.3}",
+        l.last
+    );
+    player.release(&mut spec);
+    assert_eq!(spec.bus.io_read(0x001F), 0, "and let go");
+}
+
+/// A network without the set-up it was trained with cannot be rebuilt, and
+/// is refused with the name of what is missing.
+#[test]
+fn a_network_without_its_set_up_is_refused() {
+    let dir = std::env::temp_dir().join(format!("zxrs-bare-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let err = Player::load(&dir).err().expect("refused");
+    assert!(err.contains("setup.txt"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A network kept in a file and put back chooses exactly as it did.
