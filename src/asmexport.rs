@@ -531,7 +531,7 @@ pub fn describe_rom(what: &str, bytes: &[u8]) -> String {
 fn header(spec: &Spectrum, program: &str) -> Vec<String> {
     let bus = &spec.bus;
     let mut lines = vec![
-        format!("{program}"),
+        program.to_string(),
         format!(
             "Exported by ZX-Rustrum {} from a ZX Spectrum {}.",
             env!("CARGO_PKG_VERSION"),
