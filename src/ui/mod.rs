@@ -19,6 +19,7 @@ pub mod ram_map;
 pub mod sprites;
 pub mod tape;
 pub mod theme;
+pub mod trainwin;
 
 use eframe::egui;
 use egui::{ColorImage, TextureHandle, TextureOptions, ViewportBuilder, ViewportId};
@@ -486,6 +487,9 @@ pub struct App {
     pub show_input: bool,
     pub show_printer: bool,
     printer_view: printerwin::View,
+    /// A network learning to play, and the game it is learning.
+    pub show_training: bool,
+    pub training: trainwin::Training,
     /// Ten quicksaves, kept in memory for as long as the emulator is open, and
     /// the one Load would restore.
     pub quick: [Option<Box<Spectrum>>; 10],
@@ -683,6 +687,8 @@ impl App {
             show_input: false,
             show_printer: false,
             printer_view: printerwin::View::default(),
+            show_training: false,
+            training: trainwin::Training::default(),
             quick: Default::default(),
             quick_slot: 1,
             mouse_rest: egui::Vec2::ZERO,
@@ -969,6 +975,9 @@ impl App {
             }
             theme::toggle(ui, &mut self.show_hardware, "Hardware");
             theme::toggle(ui, &mut self.show_input, "Input");
+            if !self.on_zx81() {
+                theme::toggle(ui, &mut self.show_training, "Training");
+            }
             if self
                 .spec
                 .bus
@@ -2510,6 +2519,7 @@ impl App {
             self.show_hardware = is_open("hardware");
             self.show_input = is_open("joystick");
             self.show_printer = is_open("printer");
+            self.show_training = is_open("training");
             self.show_microdrive = is_open("microdrive");
         }
     }
@@ -2531,6 +2541,7 @@ impl App {
             ("joystick", self.show_input),
             ("printer", self.show_printer),
             ("microdrive", self.show_microdrive),
+            ("training", self.show_training),
         ]
         .into_iter()
         .filter(|(_, open)| *open)
@@ -4681,6 +4692,7 @@ impl App {
             ("joystick", self.show_input),
             ("printer", self.show_printer),
             ("microdrive", self.show_microdrive),
+            ("training", self.show_training),
         ] {
             if !shown {
                 self.placed.remove(name);
@@ -5023,6 +5035,33 @@ impl App {
                 },
             );
             self.show_printer = open;
+        }
+
+        if self.show_training && self.zx81.is_none() {
+            let mut open = true;
+            let size = [560.0, 420.0];
+            let default = [640.0, 900.0];
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("training"),
+                self.restore_window(
+                    "training",
+                    ViewportBuilder::default().with_title("Training"),
+                    size,
+                    default,
+                ),
+                |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("training", &ctx, size, default) {
+                        self.remember_window("training", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| trainwin::ui(self, ui));
+                },
+            );
+            self.show_training = open;
         }
 
         if self.show_back_buffer {
