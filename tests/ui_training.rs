@@ -227,3 +227,29 @@ fn a_kept_network_takes_the_controls_and_gives_them_back() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Find a number narrows memory down to where the game keeps it, and what is
+/// left can be taken for the score in one press.
+#[test]
+fn a_number_found_in_memory_becomes_the_score() {
+    let mut app = test_app();
+    small_run(&mut app);
+    app.training.score.clear();
+    app.show_training = true;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+    h.get_by_label("Find a number").click();
+    h.run_steps(2);
+    h.get_by_label("Start looking").click();
+    h.run_steps(2);
+    h.state_mut().spec.bus.poke(0x9C4E, 5);
+    h.get_by_label("Went up").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().training.search.as_ref().unwrap().candidates(),
+        &[0x9C4E],
+        "the one byte that went up"
+    );
+    h.get_by_label("Use as score").click();
+    h.run_steps(2);
+    assert_eq!(h.state().training.score, "byte 9C4E");
+}

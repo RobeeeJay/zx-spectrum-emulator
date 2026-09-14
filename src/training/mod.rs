@@ -17,7 +17,8 @@
 //! network, built with `burn`, and `ppo` trains it. `setup` is all of that
 //! as a file, kept beside the tape and beside every saved network. `worker`
 //! runs training on a thread of its own and keeps what the window shows, and
-//! `player` puts a kept network in charge of the machine on the screen.
+//! `player` puts a kept network in charge of the machine on the screen, and
+//! `search` finds where a game keeps its score for the judge.
 
 pub mod env;
 pub mod inputs;
@@ -25,6 +26,7 @@ pub mod judge;
 pub mod model;
 pub mod player;
 pub mod ppo;
+pub mod search;
 pub mod setup;
 pub mod sight;
 pub mod worker;

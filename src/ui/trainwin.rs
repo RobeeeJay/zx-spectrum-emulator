@@ -19,6 +19,7 @@ use crate::training::judge::Number;
 use crate::training::model::SMALLEST;
 use crate::training::player::Player;
 use crate::training::ppo::Progress;
+use crate::training::search::{Search, Test};
 use crate::training::setup::Setup;
 use crate::training::sight::Area;
 use crate::training::worker::{self, Processor, Start, Worker};
@@ -56,6 +57,9 @@ pub struct Training {
     pub worker: Option<Worker>,
     /// A kept network with the machine's controls.
     pub player: Option<Player>,
+    /// Looking for where the game keeps a number, and the number to look for.
+    pub search: Option<Search>,
+    pub search_is: u8,
     /// Let it take its favourite action rather than draw one.
     pub greedy: bool,
     started: Option<Instant>,
@@ -82,6 +86,8 @@ impl Default for Training {
             resume: false,
             worker: None,
             player: None,
+            search: None,
+            search_is: 0,
             greedy: false,
             started: None,
             read_for: None,
@@ -238,6 +244,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 sight(&mut app.training, ui);
                 ui.add_space(6.0);
                 reward(&mut app.training, ui);
+                find(app, ui);
                 ui.add_space(6.0);
                 learning(app, ui);
             });
@@ -927,3 +934,78 @@ pub fn take_back(app: &mut App) {
     }
 }
 
+/// Looking for where the game keeps a number — for the judge, never the
+/// network — by saying what the number on the screen did.
+fn find(app: &mut App, ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Find a number")
+        .id_salt("training-find")
+        .show(ui, |ui| {
+            note(
+                ui,
+                "Start looking, play until the number on the screen changes, and say \
+                 what it did. A few rounds leave a handful of places.",
+            );
+            let spec = &app.spec;
+            let t = &mut app.training;
+            let peek = |a: u16| spec.bus.peek_raw(a);
+            let mut test = None;
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Start looking").clicked() {
+                    t.search = Some(Search::new(&peek));
+                }
+                ui.add_enabled_ui(t.search.is_some(), |ui| {
+                    for (label, what) in [
+                        ("Went up", Test::Up),
+                        ("Went down", Test::Down),
+                        ("Changed", Test::Changed),
+                        ("Did not change", Test::Same),
+                    ] {
+                        if ui.button(label).clicked() {
+                            test = Some(what);
+                        }
+                    }
+                    if ui.button("Is now").clicked() {
+                        test = Some(Test::Is(t.search_is));
+                    }
+                    ui.add(egui::DragValue::new(&mut t.search_is));
+                });
+            });
+            let Some(search) = t.search.as_mut() else {
+                return;
+            };
+            if let Some(test) = test {
+                search.narrow(test, &peek);
+            }
+            let left = search.candidates();
+            note(
+                ui,
+                format!(
+                    "{} place{} left after {} round{}",
+                    left.len(),
+                    if left.len() == 1 { "" } else { "s" },
+                    search.rounds,
+                    if search.rounds == 1 { "" } else { "s" }
+                ),
+            );
+            if left.len() > 12 {
+                return;
+            }
+            let mut chosen = None;
+            for &at in left {
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("{at:04X}  {:3}", peek(at)));
+                    if ui.small_button("Use as score").clicked() {
+                        chosen = Some((at, true));
+                    }
+                    if ui.small_button("Use as lives").clicked() {
+                        chosen = Some((at, false));
+                    }
+                });
+            }
+            match chosen {
+                Some((at, true)) => t.score = format!("byte {at:04X}"),
+                Some((at, false)) => t.lives = format!("byte {at:04X}"),
+                None => {}
+            }
+        });
+}
