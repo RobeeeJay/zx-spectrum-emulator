@@ -48,6 +48,7 @@ pub mod szx;
 pub mod tape;
 pub mod timeline;
 pub mod tracker;
+pub mod training;
 pub mod ui;
 pub mod uspeech;
 pub mod video_out;

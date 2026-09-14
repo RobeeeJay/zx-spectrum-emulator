@@ -533,6 +533,17 @@ the machine. The ROM's `COPY` is checked against the display file bit for bit.
 `Session::new` has no ROM in it: an MCP test that types at the machine has to
 put one in, or it types into `RST $38` and looks like the peripheral failing.
 
+**A network being trained sees the screen and nothing else.** `src/training/`
+plays a game from a saved machine an action at a time, the actions chosen per
+game from a joystick interface's switches or particular keys. What the network
+is given is built in one place, `training::sight::look`, from what the ULA
+painted — never the display file, never memory, never registers. The reward
+has to come from somewhere, and the judge reads the score, lives and game-over
+out of memory as the Arcade Learning Environment does for Atari games; what it
+reads goes no further than the reward. A test puts the same picture in front
+of two machines with different memory and registers and requires the network
+to see no difference.
+
 **A joystick is a choice, not a fact.** The machine has no joystick port, so
 every interface solved it differently: Kempston on a port, Sinclair and Cursor
 wired to five keys each — which is why they work with games that know nothing
