@@ -84,6 +84,9 @@ const KEEP_EVERY: usize = 10;
 
 pub const NETWORK: &str = "network";
 pub const SETUP: &str = "setup.txt";
+/// The machine every game of the run started from, so the next run can
+/// start there too.
+pub const START: &str = "start.szx";
 
 /// Where a tape's network is kept: `games/manic.zxrs-net/`.
 pub fn network_dir(source: &Path) -> PathBuf {
@@ -186,16 +189,22 @@ impl Drop for Worker {
     }
 }
 
-/// Keep a network and the set-up it needs in a directory of its own.
+/// Keep a network, the set-up it needs and the machine its games started
+/// from in a directory of their own.
 pub fn keep<B: AutodiffBackend>(
     trainer: &Trainer<B>,
     setup: &Setup,
+    start: &Spectrum,
     dir: &Path,
 ) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     trainer.save(&dir.join(NETWORK))?;
-    std::fs::write(dir.join(SETUP), setup.to_text())
-        .map_err(|e| format!("{}: {e}", dir.join(SETUP).display()))
+    let write = |name: &str, bytes: &[u8]| {
+        std::fs::write(dir.join(name), bytes)
+            .map_err(|e| format!("{}: {e}", dir.join(name).display()))
+    };
+    write(SETUP, setup.to_text().as_bytes())?;
+    write(START, &crate::szx::save(start))
 }
 
 fn run<B: AutodiffBackend>(
@@ -239,7 +248,7 @@ fn run<B: AutodiffBackend>(
 
     let keep_it = |trainer: &Trainer<B>| -> Result<(), String> {
         if let Some(dir) = &keep_in {
-            keep(trainer, &setup, dir)?;
+            keep(trainer, &setup, &machine, dir)?;
             lock(shared).saved = Some(dir.clone());
         }
         Ok(())

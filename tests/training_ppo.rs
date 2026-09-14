@@ -35,7 +35,7 @@ use zx_rustrum::training::judge::{Judge, Number};
 use zx_rustrum::training::ppo::{PpoConfig, Trainer};
 use zx_rustrum::training::setup::Setup;
 use zx_rustrum::training::sight::{Area, Sight};
-use zx_rustrum::training::worker::{Processor, Shared, Worker, NETWORK, SETUP};
+use zx_rustrum::training::worker::{Processor, Shared, Worker, NETWORK, SETUP, START};
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -157,7 +157,7 @@ fn learnt() -> &'static Learnt {
             env: env_config(),
             ppo: ppo_config(),
         };
-        keep(&trainer, &setup, &dir).unwrap();
+        keep(&trainer, &setup, &tiny_game(), &dir).unwrap();
         let mut env = Env::new(Arc::new(tiny_game()), Arc::new(env_config()), 1);
         let bar = env.step(FIRE).observation;
         let bar_probabilities = trainer.probabilities(&bar);
@@ -359,6 +359,18 @@ fn a_worker_trains_shows_a_game_and_keeps_the_network() {
     again
         .load(&dir.join(NETWORK))
         .expect("the kept network loads");
+
+    // And the machine every game started from, so the next run can start
+    // there too.
+    let mut back = Spectrum::new();
+    let start = std::fs::read(dir.join(START)).expect("the start is kept");
+    zx_rustrum::szx::load(&mut back, &start).unwrap();
+    let game = tiny_game();
+    assert_eq!(back.cpu.pc, game.cpu.pc, "the start's registers");
+    assert!(
+        (0x8000..0x8040u16).all(|a| back.bus.peek_raw(a) == game.bus.peek_raw(a)),
+        "and its program"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

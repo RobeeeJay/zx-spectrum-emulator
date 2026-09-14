@@ -182,7 +182,7 @@ fn a_kept_network_takes_the_controls_and_gives_them_back() {
         Default::default(),
     )
     .unwrap();
-    keep(&trainer, &setup, &network_dir(&tape)).unwrap();
+    keep(&trainer, &setup, &app.spec, &network_dir(&tape)).unwrap();
     app.tape_path = Some(tape);
     app.show_training = true;
     app.running = true;
@@ -252,4 +252,41 @@ fn a_number_found_in_memory_becomes_the_score() {
     h.get_by_label("Use as score").click();
     h.run_steps(2);
     assert_eq!(h.state().training.score, "byte 9C4E");
+}
+
+/// The kept start is the machine the kept network's games started from, put
+/// into a copy of this one — a snapshot holds no ROM — and a snapshot of
+/// another model is refused with the reason rather than half loaded.
+#[test]
+fn the_kept_start_is_where_the_last_run_started() {
+    use zx_rustrum::machine::Model;
+    use zx_rustrum::training::worker::START;
+    use zx_rustrum::ui::trainwin::kept_start;
+
+    let dir = std::env::temp_dir().join(format!("zxrs-ui-start-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut start = Spectrum::new();
+    start.bus.poke(0x9123, 0xA5);
+    start.cpu.pc = 0x8765;
+    std::fs::write(dir.join(START), zx_rustrum::szx::save(&start)).unwrap();
+
+    let app = test_app();
+    let (machine, _) = kept_start(&app.spec, Some(&dir)).unwrap();
+    assert_eq!(
+        (machine.bus.peek_raw(0x9123), machine.cpu.pc),
+        (0xA5, 0x8765),
+        "the kept machine's memory and registers"
+    );
+    assert_eq!(
+        app.spec.bus.peek_raw(0x9123),
+        0,
+        "and the live one untouched"
+    );
+
+    let other = Spectrum::with_model(Model::Spectrum128);
+    std::fs::write(dir.join(START), zx_rustrum::szx::save(&other)).unwrap();
+    let err = kept_start(&app.spec, Some(&dir)).err().expect("refused");
+    assert!(err.contains("switch machine"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

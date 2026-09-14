@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use crate::joystick::Kind;
+use crate::machine::Spectrum;
 use crate::training::inputs::Action;
 use crate::training::inputs::InputSet;
 use crate::training::judge::Number;
@@ -33,6 +34,8 @@ pub enum From {
     Now,
     /// A quicksave.
     Slot(usize),
+    /// The machine the kept network's games started from.
+    Kept,
 }
 
 /// The window's state: the set-up being edited, the text of what is typed,
@@ -451,6 +454,11 @@ fn reward(t: &mut Training, ui: &mut egui::Ui) {
 fn learning(app: &mut App, ui: &mut egui::Ui) {
     theme::group_label(ui, "Learning");
     let filled: Vec<usize> = (0..10).filter(|n| app.quick[*n].is_some()).collect();
+    let kept_start = app
+        .notes_source()
+        .as_deref()
+        .map(worker::network_dir)
+        .is_some_and(|d| d.join(worker::START).exists());
     let t = &mut app.training;
     let ppo = &mut t.setup.ppo;
     egui::Grid::new("training-learning")
@@ -541,9 +549,12 @@ fn learning(app: &mut App, ui: &mut egui::Ui) {
         let from_name = |f: From| match f {
             From::Now => "This machine".to_string(),
             From::Slot(n) => format!("Quick slot {n}"),
+            From::Kept => "The kept start".to_string(),
         };
         let mut from = t.from;
-        if matches!(from, From::Slot(n) if !filled.contains(&n)) {
+        if matches!(from, From::Slot(n) if !filled.contains(&n))
+            || (from == From::Kept && !kept_start)
+        {
             from = From::Now;
         }
         theme::dropdown(ui, 130.0, from_name(from), |ui| {
@@ -558,6 +569,14 @@ fn learning(app: &mut App, ui: &mut egui::Ui) {
                 if ui.selectable_label(from == slot, from_name(slot)).clicked() {
                     from = slot;
                 }
+            }
+            if kept_start
+                && ui
+                    .selectable_label(from == From::Kept, from_name(From::Kept))
+                    .on_hover_text("Where the kept network's games started, kept beside it")
+                    .clicked()
+            {
+                from = From::Kept;
             }
         });
         t.from = from;
@@ -630,20 +649,44 @@ fn buttons(app: &mut App, ui: &mut egui::Ui, running: bool, problems: &[String])
     }
 }
 
+/// The machine the kept network's games started from, put into a copy of
+/// this one — a snapshot holds no ROM — with what the snapshot could not put
+/// back. A snapshot of another model is refused with the reason.
+pub fn kept_start(spec: &Spectrum, keep_in: Option<&Path>) -> Result<(Spectrum, String), String> {
+    let path = keep_in
+        .map(|d| d.join(worker::START))
+        .ok_or("Nothing is kept: load the tape the network was trained on")?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut machine = spec.clone();
+    let note =
+        crate::szx::load(&mut machine, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((machine, note))
+}
+
 /// Start a run.
 fn begin(app: &mut App, keep_in: Option<PathBuf>) {
     let machine = match app.training.from {
-        From::Now => Some(app.spec.clone()),
-        From::Slot(n) => app.quick[n].as_ref().map(|m| (**m).clone()),
+        From::Now => Ok((app.spec.clone(), String::new())),
+        From::Slot(n) => app.quick[n]
+            .as_ref()
+            .map(|m| ((**m).clone(), String::new()))
+            .ok_or_else(|| "That quick slot is empty".to_string()),
+        From::Kept => kept_start(&app.spec, keep_in.as_deref()),
     };
-    let Some(mut machine) = machine else {
-        app.training.message = Some(("That quick slot is empty".into(), true));
-        return;
+    let (mut machine, note) = match machine {
+        Ok(m) => m,
+        Err(e) => {
+            app.training.message = Some((e, true));
+            return;
+        }
     };
     // The copy would otherwise share the sound queue, and be heard.
     machine.bus.audio.detach();
     if app.notes_source().is_some() {
         save_setup(app);
+    }
+    if !note.is_empty() {
+        app.training.message = Some((format!("The kept start: {note}"), false));
     }
     let t = &mut app.training;
     let resume = keep_in
