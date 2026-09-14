@@ -64,6 +64,9 @@ the others still have that this does not:
   that exists already but only over MCP, where `find_bytes` and `changed_since`
   are exactly the two halves of a cheat search.
 
+What a language model would need to take a game apart through the MCP server
+is a list of its own, in [`agent-disassembly.md`](agent-disassembly.md).
+
 ## Where to start
 
 divMMC. It is the biggest job here and the one that would change how the

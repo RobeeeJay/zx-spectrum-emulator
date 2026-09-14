@@ -90,6 +90,9 @@ set of decisions rather than a manual:
 - [`docs/missing.md`](docs/missing.md) — what other emulators have that this
   does not, checked against the source rather than remembered. A description of
   the gap and not a plan: nothing in it is promised.
+- [`docs/agent-disassembly.md`](docs/agent-disassembly.md) — what a language
+  model driving the MCP server would still need to disassemble a game fully
+  and explain it. Also a description of the gap, not a plan.
 
 ## Boundaries
 
