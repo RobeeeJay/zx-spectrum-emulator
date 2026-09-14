@@ -20,7 +20,7 @@ use crate::training::judge::Number;
 use crate::training::model::SMALLEST;
 use crate::training::player::Player;
 use crate::training::ppo::Progress;
-use crate::training::search::{Search, Test};
+use crate::training::search::{Candidate, Search, Test};
 use crate::training::setup::Setup;
 use crate::training::sight::Area;
 use crate::training::worker::{self, Processor, Start, Worker};
@@ -66,7 +66,8 @@ pub struct Training {
     pub player: Option<Player>,
     /// Looking for where the game keeps a number, and the number to look for.
     pub search: Option<Search>,
-    pub search_is: u8,
+    /// The number as the screen shows it, for Is now.
+    pub search_is: String,
     /// Let it take its favourite action rather than draw one.
     pub greedy: bool,
     started: Option<Instant>,
@@ -96,7 +97,7 @@ impl Default for Training {
             timed: None,
             player: None,
             search: None,
-            search_is: 0,
+            search_is: String::new(),
             greedy: false,
             started: None,
             read_for: None,
@@ -1072,11 +1073,13 @@ fn find(app: &mut App, ui: &mut egui::Ui) {
             note(
                 ui,
                 "Start looking, play until the number on the screen changes, and say \
-                 what it did. A few rounds leave a handful of places.",
+                 what it did. Say what it is now as the screen shows it, noughts and \
+                 all, to tell how many bytes it takes.",
             );
             let spec = &app.spec;
             let t = &mut app.training;
             let peek = |a: u16| spec.bus.peek_raw(a);
+            let shown = Test::is_shown(&t.search_is);
             let mut test = None;
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Start looking").clicked() {
@@ -1093,10 +1096,17 @@ fn find(app: &mut App, ui: &mut egui::Ui) {
                             test = Some(what);
                         }
                     }
-                    if ui.button("Is now").clicked() {
-                        test = Some(Test::Is(t.search_is));
+                    if ui
+                        .add_enabled(shown.is_ok(), egui::Button::new("Is now"))
+                        .clicked()
+                    {
+                        test = shown.clone().ok();
                     }
-                    ui.add(egui::DragValue::new(&mut t.search_is));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut t.search_is)
+                            .hint_text("001230")
+                            .desired_width(80.0),
+                    );
                 });
             });
             let Some(search) = t.search.as_mut() else {
@@ -1105,35 +1115,60 @@ fn find(app: &mut App, ui: &mut egui::Ui) {
             if let Some(test) = test {
                 search.narrow(test, &peek);
             }
-            let left = search.candidates();
+            // Copied only once there are few enough to list: right after
+            // Start looking there are hundreds of thousands.
+            let count = search.candidates().len();
             note(
                 ui,
                 format!(
-                    "{} place{} left after {} round{}",
-                    left.len(),
-                    if left.len() == 1 { "" } else { "s" },
+                    "{} way{} it could be kept left after {} round{}",
+                    count,
+                    if count == 1 { "" } else { "s" },
                     search.rounds,
                     if search.rounds == 1 { "" } else { "s" }
                 ),
             );
-            if left.len() > 12 {
+            if count > 12 {
+                if search.rounds > 0 {
+                    note(
+                        ui,
+                        "Too many to list: say what it is now, noughts and all, or play on",
+                    );
+                }
                 return;
             }
+            let left: Vec<Candidate> = search.candidates().to_vec();
             let mut chosen = None;
-            for &at in left {
+            for c in &left {
                 ui.horizontal(|ui| {
-                    ui.monospace(format!("{at:04X}  {:3}", peek(at)));
-                    if ui.small_button("Use as score").clicked() {
-                        chosen = Some((at, true));
+                    let reads = c
+                        .number()
+                        .map_or("?".to_string(), |n| n.read(&peek).to_string());
+                    ui.label(
+                        egui::RichText::new(format!("{}  reads {reads}", c.describe())).monospace(),
+                    );
+                    let usable = c.number().is_some();
+                    let why = "Say what the number is now, as the screen shows it, to settle \
+                               which byte stands for nought";
+                    if ui
+                        .add_enabled(usable, egui::Button::new("Use as score").small())
+                        .on_disabled_hover_text(why)
+                        .clicked()
+                    {
+                        chosen = c.number().map(|n| (n, true));
                     }
-                    if ui.small_button("Use as lives").clicked() {
-                        chosen = Some((at, false));
+                    if ui
+                        .add_enabled(usable, egui::Button::new("Use as lives").small())
+                        .on_disabled_hover_text(why)
+                        .clicked()
+                    {
+                        chosen = c.number().map(|n| (n, false));
                     }
                 });
             }
             match chosen {
-                Some((at, true)) => t.score = format!("byte {at:04X}"),
-                Some((at, false)) => t.lives = format!("byte {at:04X}"),
+                Some((n, true)) => t.score = n.to_text(),
+                Some((n, false)) => t.lives = n.to_text(),
                 None => {}
             }
         });

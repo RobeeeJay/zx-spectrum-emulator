@@ -227,8 +227,9 @@ fn a_kept_network_takes_the_controls_and_gives_them_back() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Find a number narrows memory down to where the game keeps it, and what is
-/// left can be taken for the score in one press.
+/// Find a number narrows memory down to where the game keeps its score —
+/// here three bytes of BCD, shown on the screen as 001234 — and what is left
+/// is taken for the score in one press.
 #[test]
 fn a_number_found_in_memory_becomes_the_score() {
     let mut app = test_app();
@@ -241,17 +242,33 @@ fn a_number_found_in_memory_becomes_the_score() {
     h.run_steps(2);
     h.get_by_label("Start looking").click();
     h.run_steps(2);
-    h.state_mut().spec.bus.poke(0x9C4E, 5);
+    for (i, b) in [0x00, 0x12, 0x34].iter().enumerate() {
+        h.state_mut().spec.bus.poke(0x9C4E + i as u16, *b);
+    }
     h.get_by_label("Went up").click();
     h.run_steps(2);
+    h.state_mut().training.search_is = "001234".into();
+    h.run_steps(1);
+    h.get_by_label("Is now").click();
+    h.run_steps(2);
+    let left: Vec<String> = h
+        .state()
+        .training
+        .search
+        .as_ref()
+        .unwrap()
+        .candidates()
+        .iter()
+        .map(|c| c.describe())
+        .collect();
     assert_eq!(
-        h.state().training.search.as_ref().unwrap().candidates(),
-        &[0x9C4E],
-        "the one byte that went up"
+        left,
+        ["BCD, 3 bytes at 9C4E"],
+        "the three bytes, and nothing else"
     );
     h.get_by_label("Use as score").click();
     h.run_steps(2);
-    assert_eq!(h.state().training.score, "byte 9C4E");
+    assert_eq!(h.state().training.score, "bcd 9C4E 3");
 }
 
 /// The kept start is the machine the kept network's games started from, put
