@@ -87,6 +87,8 @@ pub const SETUP: &str = "setup.txt";
 /// The machine every game of the run started from, so the next run can
 /// start there too.
 pub const START: &str = "start.szx";
+/// Adam's running averages, so going on carries on.
+pub const OPTIMISER: &str = "optimiser";
 
 /// Where a tape's network is kept: `games/manic.zxrs-net/`.
 pub fn network_dir(source: &Path) -> PathBuf {
@@ -199,6 +201,7 @@ pub fn keep<B: AutodiffBackend>(
 ) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     trainer.save(&dir.join(NETWORK))?;
+    trainer.save_optimiser(&dir.join(OPTIMISER))?;
     let write = |name: &str, bytes: &[u8]| {
         std::fs::write(dir.join(name), bytes)
             .map_err(|e| format!("{}: {e}", dir.join(name).display()))
@@ -224,6 +227,11 @@ fn run<B: AutodiffBackend>(
     let mut trainer = Trainer::<B>::new(&machine, setup.env.clone(), setup.ppo.clone(), device)?;
     if let Some(dir) = &resume {
         trainer.load(&dir.join(NETWORK))?;
+        // A network kept before the optimiser was is still worth going on
+        // from, with the averages worked out again.
+        if dir.join(format!("{OPTIMISER}.bin")).exists() {
+            trainer.load_optimiser(&dir.join(OPTIMISER))?;
+        }
     }
     let seen = shared.clone();
     let mut last: Option<Instant> = None;

@@ -35,7 +35,7 @@ use zx_rustrum::training::judge::{Judge, Number};
 use zx_rustrum::training::ppo::{PpoConfig, Trainer};
 use zx_rustrum::training::setup::Setup;
 use zx_rustrum::training::sight::{Area, Sight};
-use zx_rustrum::training::worker::{Processor, Shared, Worker, NETWORK, SETUP, START};
+use zx_rustrum::training::worker::{Processor, Shared, Worker, NETWORK, OPTIMISER, SETUP, START};
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -438,4 +438,59 @@ fn a_player_chooses_again_when_the_clock_goes_back() {
         player.play(&mut spec).is_some(),
         "the clock went back and it chose again"
     );
+}
+
+/// Going on from a kept network carries the optimiser's state with it. Three
+/// copies of the same kept network each take one update: two without the
+/// state come out identical — so any difference is not noise — and the one
+/// with it comes out different, because Adam's steps depend on what it had
+/// worked out before.
+#[test]
+fn going_on_carries_the_optimisers_state() {
+    let setup = Setup {
+        env: env_config(),
+        ppo: ppo_config(),
+    };
+    let mut first = Trainer::<B>::new(
+        &tiny_game(),
+        setup.env.clone(),
+        setup.ppo.clone(),
+        Default::default(),
+    )
+    .unwrap();
+    first.update();
+    first.update();
+    let dir = std::env::temp_dir().join(format!("zxrs-optimiser-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    keep(&first, &setup, &tiny_game(), &dir).unwrap();
+
+    let again = || {
+        let mut t = Trainer::<B>::new(
+            &tiny_game(),
+            setup.env.clone(),
+            setup.ppo.clone(),
+            Default::default(),
+        )
+        .unwrap();
+        t.load(&dir.join(NETWORK)).unwrap();
+        t
+    };
+    let (mut without, mut also_without, mut with) = (again(), again(), again());
+    with.load_optimiser(&dir.join(OPTIMISER)).unwrap();
+    for t in [&mut without, &mut also_without, &mut with] {
+        t.update();
+    }
+    let mut env = Env::new(Arc::new(tiny_game()), Arc::new(env_config()), 1);
+    let seen = env.step(FIRE).observation;
+    let (a, b, c) = (
+        without.probabilities(&seen),
+        also_without.probabilities(&seen),
+        with.probabilities(&seen),
+    );
+    assert_eq!(a, b, "two runs going on without it are identical");
+    assert_ne!(
+        a, c,
+        "and the one with the optimiser's state went its own way"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

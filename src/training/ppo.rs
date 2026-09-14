@@ -15,7 +15,7 @@ use std::sync::Arc;
 use burn::module::AutodiffModule;
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
-use burn::record::{BinFileRecorder, FullPrecisionSettings};
+use burn::record::{BinFileRecorder, FullPrecisionSettings, Recorder};
 use burn::tensor::activation::{log_softmax, softmax};
 use burn::tensor::backend::AutodiffBackend;
 
@@ -377,5 +377,25 @@ impl<B: AutodiffBackend> Trainer<B> {
                 Err(format!("{}: {e}", path.display()))
             }
         }
+    }
+
+    /// Keep what the optimiser has worked out about each parameter — Adam's
+    /// running averages — so a run that goes on carries on, rather than
+    /// taking its first steps as if nothing had been learnt.
+    pub fn save_optimiser(&self, path: &std::path::Path) -> Result<(), String> {
+        BinFileRecorder::<FullPrecisionSettings>::new()
+            .record(self.optim.to_record(), path.to_path_buf())
+            .map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Put it back. The averages are kept against each parameter's id, which
+    /// a network loaded from a file takes from the file, so they meet up
+    /// with the network they were worked out for.
+    pub fn load_optimiser(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let record = BinFileRecorder::<FullPrecisionSettings>::new()
+            .load(path.to_path_buf(), &self.device)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        self.optim = self.optim.clone().load_record(record);
+        Ok(())
     }
 }
