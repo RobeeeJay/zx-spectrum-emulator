@@ -151,3 +151,79 @@ fn a_run_is_started_and_stopped_from_the_window() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Let it play gives a kept network the machine's controls: the keys on the
+/// desk do not reach the machine while it has them, and do again once they
+/// are taken back.
+#[test]
+fn a_kept_network_takes_the_controls_and_gives_them_back() {
+    use zx_rustrum::training::ppo::Trainer;
+    use zx_rustrum::training::worker::keep;
+    use zx_rustrum::z80::Bus;
+    type B = burn::backend::Autodiff<burn::backend::NdArray>;
+
+    let dir = std::env::temp_dir().join(format!("zxrs-ui-play-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let tape = dir.join("game.tap");
+    std::fs::write(&tape, []).unwrap();
+
+    let mut app = test_app();
+    small_run(&mut app);
+    // A step long enough to leave frames between choices. At a frame a step
+    // the network put its choice back after every frame's keys had been
+    // read, which hid the desk's keys reaching the machine at all.
+    app.training.setup.env.frames_per_step = 50;
+    let setup = app.training.setup.clone();
+    let trainer = Trainer::<B>::new(
+        &app.spec,
+        setup.env.clone(),
+        setup.ppo.clone(),
+        Default::default(),
+    )
+    .unwrap();
+    keep(&trainer, &setup, &network_dir(&tape)).unwrap();
+    app.tape_path = Some(tape);
+    app.show_training = true;
+    app.running = true;
+    let mut h = harness_for(app);
+    h.run_steps(3);
+
+    h.get_by_label("Let it play").click();
+    h.key_down(egui::Key::Q);
+    h.run_steps(4);
+    let state = h.state();
+    assert!(
+        state
+            .training
+            .player
+            .as_ref()
+            .is_some_and(|p| p.last.is_some()),
+        "the network is choosing"
+    );
+    assert_eq!(
+        state.spec.bus.keys[2], 0xFF,
+        "Q held on the desk does not reach the machine while it plays"
+    );
+    assert_eq!(
+        state.spec.bus.joystick.kind,
+        zx_rustrum::joystick::Kind::Kempston,
+        "the stick is plugged into the interface it learnt on"
+    );
+
+    h.get_by_label("Take the controls back").click();
+    h.run_steps(4);
+    assert!(h.state().training.player.is_none());
+    assert_eq!(
+        h.state().spec.bus.keys[2],
+        0xFE,
+        "and once they are taken back, Q is the machine's again"
+    );
+    assert_eq!(
+        h.state_mut().spec.bus.io_read(0x001F) & 0x1F,
+        0,
+        "with nothing the network held left held"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+

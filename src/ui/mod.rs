@@ -3362,7 +3362,23 @@ impl App {
         };
         self.rewind.clear();
         let started = std::time::Instant::now();
-        let stop = self.spec.run(budget);
+        // A network playing chooses between frames, so the machine is run a
+        // frame at a time for it rather than in one slice of up to 24.
+        let stop = match self.training.player.as_mut() {
+            Some(player) => {
+                let mut left = budget;
+                loop {
+                    player.play(&mut self.spec);
+                    let slice = left.min(self.spec.bus.frame_t());
+                    let stop = self.spec.run(slice);
+                    left -= slice;
+                    if left == 0 || !matches!(stop, Stop::Budget) {
+                        break stop;
+                    }
+                }
+            }
+            None => self.spec.run(budget),
+        };
         self.last_stop = Some(stop);
         if flat_out {
             // However much is left of the budget, stop when the host frame is
@@ -5211,6 +5227,11 @@ impl App {
         // including the keyboard: typing at it would do nothing, and letting
         // the host keys through would only be confusing.
         if self.rzx.is_some() {
+            return;
+        }
+        // Nor while a network is playing: it has the controls, and two hands
+        // on them is neither playing nor watching.
+        if self.training.player.is_some() {
             return;
         }
         let mut matrix = [0xffu8; 8];

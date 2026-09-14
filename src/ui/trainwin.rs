@@ -13,9 +13,11 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use crate::joystick::Kind;
+use crate::training::inputs::Action;
 use crate::training::inputs::InputSet;
 use crate::training::judge::Number;
 use crate::training::model::SMALLEST;
+use crate::training::player::Player;
 use crate::training::ppo::Progress;
 use crate::training::setup::Setup;
 use crate::training::sight::Area;
@@ -52,6 +54,10 @@ pub struct Training {
     /// Go on from the network kept beside the tape rather than a fresh one.
     pub resume: bool,
     pub worker: Option<Worker>,
+    /// A kept network with the machine's controls.
+    pub player: Option<Player>,
+    /// Let it take its favourite action rather than draw one.
+    pub greedy: bool,
     started: Option<Instant>,
     /// The file the set-up was last read for, so a new tape brings its own.
     read_for: Option<Option<PathBuf>>,
@@ -75,6 +81,8 @@ impl Default for Training {
             from: From::Now,
             resume: false,
             worker: None,
+            player: None,
+            greedy: false,
             started: None,
             read_for: None,
             preview: None,
@@ -239,6 +247,8 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             progress(&app.training, ui);
             ui.add_space(6.0);
             watching(&mut app.training, ui);
+            ui.add_space(8.0);
+            play(app, ui);
         });
 }
 
@@ -809,41 +819,111 @@ fn watching(t: &mut Training, ui: &mut egui::Ui) {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
-        ui.vertical(|ui| {
-            for (i, (action, prob)) in setup
-                .env
-                .inputs
-                .actions
-                .iter()
-                .zip(&p.probabilities)
-                .enumerate()
-            {
-                let chosen = i == p.action;
-                let (bar, _) =
-                    ui.allocate_exact_size(egui::vec2(170.0, 14.0), egui::Sense::hover());
-                let painter = ui.painter_at(bar);
-                painter.rect_filled(bar, 2.0, theme::CASE_DARK);
-                let filled = egui::Rect::from_min_size(
-                    bar.min,
-                    egui::vec2(bar.width() * prob.clamp(0.0, 1.0), bar.height()),
-                );
-                painter.rect_filled(
-                    filled,
-                    2.0,
-                    if chosen {
-                        theme::AMBER
-                    } else {
-                        theme::CASE_LIGHT
-                    },
-                );
-                painter.text(
-                    bar.left_center() + egui::vec2(4.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    format!("{} {:.0}%", action.name, prob * 100.0),
-                    egui::FontId::proportional(10.0),
-                    if chosen { theme::ON_LIT } else { theme::INK },
-                );
-            }
-        });
+        bars(ui, &setup.env.inputs.actions, &p.probabilities, p.action);
     });
 }
+
+/// Each action and how much the network wanted it, the one taken lit.
+fn bars(ui: &mut egui::Ui, actions: &[Action], probabilities: &[f32], taken: usize) {
+    ui.vertical(|ui| {
+        for (i, (action, prob)) in actions.iter().zip(probabilities).enumerate() {
+            let chosen = i == taken;
+            let (bar, _) = ui.allocate_exact_size(egui::vec2(170.0, 14.0), egui::Sense::hover());
+            let painter = ui.painter_at(bar);
+            painter.rect_filled(bar, 2.0, theme::CASE_DARK);
+            let filled = egui::Rect::from_min_size(
+                bar.min,
+                egui::vec2(bar.width() * prob.clamp(0.0, 1.0), bar.height()),
+            );
+            painter.rect_filled(
+                filled,
+                2.0,
+                if chosen {
+                    theme::AMBER
+                } else {
+                    theme::CASE_LIGHT
+                },
+            );
+            painter.text(
+                bar.left_center() + egui::vec2(4.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!("{} {:.0}%", action.name, prob * 100.0),
+                egui::FontId::proportional(10.0),
+                if chosen { theme::ON_LIT } else { theme::INK },
+            );
+        }
+    });
+}
+
+/// The kept network given the machine's controls, and taken back from it.
+fn play(app: &mut App, ui: &mut egui::Ui) {
+    theme::group_label(ui, "Letting it play");
+    let kept = app
+        .notes_source()
+        .as_deref()
+        .map(worker::network_dir)
+        .filter(|d| d.join(format!("{}.bin", worker::NETWORK)).exists());
+    ui.horizontal_wrapped(|ui| {
+        if app.training.player.is_some() {
+            if ui.button("Take the controls back").clicked() {
+                take_back(app);
+            }
+        } else if ui
+            .add_enabled(kept.is_some(), egui::Button::new("Let it play"))
+            .on_hover_text(
+                "Give the kept network the machine's controls: the keyboard and the stick \
+                 on the desk are not read while it plays",
+            )
+            .clicked()
+        {
+            let dir = kept.clone().expect("the button waits for one");
+            app.training.message = Some(match Player::load(&dir) {
+                Ok(mut player) => {
+                    player.greedy = app.training.greedy;
+                    player.prepare(&mut app.spec);
+                    app.training.player = Some(player);
+                    app.running = true;
+                    ("The network is playing".into(), false)
+                }
+                Err(e) => (e, true),
+            });
+        }
+        let t = &mut app.training;
+        if ui
+            .checkbox(&mut t.greedy, "Its favourite every time")
+            .on_hover_text(
+                "Take the action it likes best rather than drawing one as it did while \
+                 learning; it can get stuck doing one thing forever",
+            )
+            .changed()
+        {
+            if let Some(player) = t.player.as_mut() {
+                player.greedy = t.greedy;
+            }
+        }
+    });
+    if kept.is_none() {
+        note(
+            ui,
+            "Nothing is kept yet: a run keeps its network beside the tape",
+        );
+    }
+    if let Some(player) = &app.training.player {
+        if let Some((taken, probabilities)) = &player.last {
+            bars(
+                ui,
+                &player.setup().env.inputs.actions,
+                probabilities,
+                *taken,
+            );
+        }
+    }
+}
+
+/// Take the controls back from the network, letting go of whatever it held.
+pub fn take_back(app: &mut App) {
+    if let Some(player) = app.training.player.take() {
+        player.release(&mut app.spec);
+    }
+}
+

@@ -403,3 +403,27 @@ fn a_worker_that_cannot_start_says_why() {
     let error = worker.shared().error.clone().expect("an error");
     assert!(error.contains("too small"), "{error}");
 }
+
+/// A reset or a snapshot puts the machine's frame count back, and the player
+/// chooses again at once rather than holding its last choice until the count
+/// catches up with where it was.
+#[test]
+fn a_player_chooses_again_when_the_clock_goes_back() {
+    let mut player = Player::load(&learnt().dir).unwrap();
+    let mut spec = tiny_game();
+    player.prepare(&mut spec);
+    for _ in 0..3 {
+        spec.run(FRAME_T);
+    }
+    assert!(player.play(&mut spec).is_some(), "a first choice");
+    spec.run(FRAME_T);
+    assert!(
+        player.play(&mut spec).is_none(),
+        "a step is two frames, and only one has gone"
+    );
+    spec.bus.frame = 0;
+    assert!(
+        player.play(&mut spec).is_some(),
+        "the clock went back and it chose again"
+    );
+}

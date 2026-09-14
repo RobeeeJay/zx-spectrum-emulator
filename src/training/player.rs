@@ -31,6 +31,10 @@ pub struct Player {
     frames: VecDeque<Vec<u8>>,
     /// The machine's frame count at which to choose again.
     next_at: Option<u64>,
+    /// And at the last choice. A count that has gone back is a reset or a
+    /// snapshot, after which the next choice is made at once: waiting for the
+    /// count to catch up would leave the controls held for as long.
+    last_frame: u64,
     rng: u64,
     /// Take the action it likes best rather than drawing one.
     pub greedy: bool,
@@ -60,6 +64,7 @@ impl Player {
             setup,
             frames: VecDeque::new(),
             next_at: None,
+            last_frame: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
             greedy: false,
             last: None,
@@ -78,6 +83,7 @@ impl Player {
         }
         self.frames.clear();
         self.next_at = None;
+        self.last_frame = 0;
     }
 
     /// Let go of everything the network was holding.
@@ -98,6 +104,10 @@ impl Player {
     /// and put the choice on the machine. Returns what was chosen.
     pub fn play(&mut self, spec: &mut Spectrum) -> Option<usize> {
         let frame = spec.bus.frame;
+        if frame < self.last_frame {
+            self.frames.clear();
+            self.next_at = None;
+        }
         if self.next_at.is_some_and(|at| frame < at) {
             return None;
         }
@@ -123,6 +133,7 @@ impl Player {
         self.setup.env.inputs.apply(spec, action);
         self.next_at = Some(frame + self.setup.env.frames_per_step.max(1) as u64);
         self.last = Some((action, probs));
+        self.last_frame = frame;
         Some(action)
     }
 
