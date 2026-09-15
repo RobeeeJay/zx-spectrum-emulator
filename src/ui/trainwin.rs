@@ -22,8 +22,8 @@ use crate::training::player::Player;
 use crate::training::ppo::Progress;
 use crate::training::search::{Candidate, Search, Test};
 use crate::training::setup::Setup;
-use crate::training::sight::Area;
-use crate::training::worker::{self, Processor, Start, Worker};
+use crate::training::sight::{changes, Area, Sight};
+use crate::training::worker::{self, Preview, Processor, Start, Worker};
 use crate::ui::{theme, App};
 
 /// What every game of a run starts as.
@@ -74,6 +74,8 @@ pub struct Training {
     /// The file the set-up was last read for, so a new tape brings its own.
     read_for: Option<Option<PathBuf>>,
     preview: Option<egui::TextureHandle>,
+    /// One texture per frame of the stack the network is shown.
+    seen: Vec<egui::TextureHandle>,
     /// The last thing to report, and whether it went wrong.
     pub message: Option<(String, bool)>,
 }
@@ -102,6 +104,7 @@ impl Default for Training {
             started: None,
             read_for: None,
             preview: None,
+            seen: Vec::new(),
             message: None,
         };
         training.adopt(Setup::default());
@@ -922,6 +925,7 @@ fn watching(t: &mut Training, ui: &mut egui::Ui) {
     let Training {
         worker,
         preview,
+        seen,
         setup,
         ..
     } = t;
@@ -946,18 +950,10 @@ fn watching(t: &mut Training, ui: &mut egui::Ui) {
         )),
     };
     ui.horizontal_top(|ui| {
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(p.width as f32, p.height as f32),
-            egui::Sense::hover(),
-        );
-        ui.painter().image(
-            tex.id(),
-            rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
+        draw(ui, tex, p.width as f32, p.height as f32);
         bars(ui, &setup.env.inputs.actions, &p.probabilities, p.action);
     });
+    frames(ui, seen, p);
 }
 
 /// Each action and how much the network wanted it, the one taken lit.
@@ -990,6 +986,96 @@ fn bars(ui: &mut egui::Ui, actions: &[Action], probabilities: &[f32], taken: usi
             );
         }
     });
+}
+
+/// Put a texture on the screen at its own size.
+fn draw(ui: &mut egui::Ui, tex: &egui::TextureHandle, w: f32, h: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+    ui.painter().image(
+        tex.id(),
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+}
+
+/// One frame of the stack, as the network is shown it.
+fn frame_image(bytes: &[u8], sight: &Sight) -> egui::ColorImage {
+    let (w, h) = (sight.width(), sight.height());
+    let mut rgba = vec![255u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let at = (y * w + x) * 4;
+            if sight.channels() == 3 {
+                for c in 0..3 {
+                    rgba[at + c] = bytes[c * w * h + y * w + x];
+                }
+            } else {
+                let grey = bytes[y * w + x];
+                rgba[at..at + 3].fill(grey);
+            }
+        }
+    }
+    egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba)
+}
+
+/// The frames the network is shown, oldest first, each with how much of it
+/// moved since the one before. Four frames alike mean the stack says nothing
+/// about movement — the game drew nothing new between the steps, so a longer
+/// step or fewer frames would show it more.
+fn frames(ui: &mut egui::Ui, kept: &mut Vec<egui::TextureHandle>, p: &Preview) {
+    let sight = &p.sight;
+    let len = sight.frame_len();
+    if len == 0 || p.seen.len() < len {
+        return;
+    }
+    let moved = changes(&p.seen, sight);
+    theme::group_label(ui, "What it sees");
+    let (w, h) = (sight.width() as f32, sight.height() as f32);
+    ui.horizontal_wrapped(|ui| {
+        for (i, frame) in p.seen.chunks_exact(len).enumerate() {
+            let image = frame_image(frame, sight);
+            match kept.get_mut(i) {
+                Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+                None => kept.push(ui.ctx().load_texture(
+                    format!("training-seen-{i}"),
+                    image,
+                    egui::TextureOptions::NEAREST,
+                )),
+            }
+            ui.vertical(|ui| {
+                draw(ui, &kept[i], w, h);
+                let back = p.seen.len() / len - 1 - i;
+                let when = match back {
+                    0 => "now".to_string(),
+                    1 => "a step back".to_string(),
+                    n => format!("{n} steps back"),
+                };
+                match i.checked_sub(1).and_then(|k| moved.get(k)) {
+                    Some(0.0) => {
+                        ui.label(
+                            egui::RichText::new(format!("{when} — the same"))
+                                .small()
+                                .color(theme::AMBER),
+                        );
+                    }
+                    Some(share) => note(ui, format!("{when} — {:.0}% moved", share * 100.0)),
+                    None => note(ui, when),
+                }
+            });
+        }
+    });
+    if moved.iter().all(|share| *share == 0.0) && !moved.is_empty() {
+        ui.label(
+            egui::RichText::new(
+                "Every frame is the same: the stack is telling the network nothing about \
+                 movement. Hold each choice for more frames, or watch a part of the screen \
+                 that changes.",
+            )
+            .small()
+            .color(theme::AMBER),
+        );
+    }
 }
 
 /// The kept network given the machine's controls, and taken back from it.

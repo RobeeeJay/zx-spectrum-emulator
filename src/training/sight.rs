@@ -77,6 +77,29 @@ impl Sight {
     }
 }
 
+/// How much each frame of an observation differs from the one before: the
+/// share of its bytes that moved by more than a little. Frames that are all
+/// the same say the game put nothing new on the screen between the steps,
+/// and stacking them tells the network nothing about movement.
+pub fn changes(observation: &[u8], sight: &Sight) -> Vec<f32> {
+    let len = sight.frame_len();
+    if len == 0 || observation.len() < len * 2 {
+        return Vec::new();
+    }
+    let frames: Vec<&[u8]> = observation.chunks_exact(len).collect();
+    frames
+        .windows(2)
+        .map(|pair| {
+            let moved = pair[0]
+                .iter()
+                .zip(pair[1])
+                .filter(|(a, b)| a.abs_diff(**b) > 8)
+                .count();
+            moved as f32 / len as f32
+        })
+        .collect()
+}
+
 /// One frame as the network sees it, channel by channel, row by row.
 pub fn look(spec: &Spectrum, sight: &Sight) -> Vec<u8> {
     let (view, crop) = match sight.area {

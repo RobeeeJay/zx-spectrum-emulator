@@ -335,6 +335,14 @@ fn a_worker_trains_shows_a_game_and_keeps_the_network() {
         "an RGBA picture"
     );
     assert_eq!(preview.probabilities.len(), 6, "one for each action");
+    // And what the network was shown for that step, so the window can draw
+    // the frames it stacked.
+    assert_eq!(preview.sight, env_config().sight);
+    assert_eq!(
+        preview.seen.len(),
+        preview.sight.len(),
+        "the frames stacked as the network sees them"
+    );
     let sum: f32 = preview.probabilities.iter().sum();
     assert!((sum - 1.0).abs() < 1e-4, "probabilities sum to {sum}");
     assert!(

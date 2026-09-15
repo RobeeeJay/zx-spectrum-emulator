@@ -114,9 +114,10 @@ pub struct Trainer<B: AutodiffBackend> {
     stop: Option<Arc<AtomicBool>>,
 }
 
-/// Shown game 0's machine after every step, with the action taken and the
-/// probabilities it was chosen from.
-pub type Watch = Box<dyn FnMut(&Spectrum, usize, &[f32]) + Send>;
+/// Shown game 0 after every step: its machine, the frames the network sees
+/// stacked as it sees them, the action taken and the probabilities it was
+/// drawn from.
+pub type Watch = Box<dyn FnMut(&Spectrum, &[u8], usize, &[f32]) + Send>;
 
 impl<B: AutodiffBackend> Trainer<B> {
     pub fn new(
@@ -246,7 +247,12 @@ impl<B: AutodiffBackend> Trainer<B> {
             values.extend_from_slice(&value);
             let results = self.pool.step(&picks);
             if let Some(watch) = self.watch.as_mut() {
-                watch(self.pool.game(0).machine(), picks[0], &probs[..a]);
+                watch(
+                    self.pool.game(0).machine(),
+                    &results[0].observation,
+                    picks[0],
+                    &probs[..a],
+                );
             }
             for step in &results {
                 rewards.push(step.reward);

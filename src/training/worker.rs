@@ -21,6 +21,7 @@ use burn::tensor::backend::AutodiffBackend;
 
 use super::ppo::{Progress, Trainer};
 use super::setup::Setup;
+use super::sight::Sight;
 use crate::machine::Spectrum;
 use crate::screen::View;
 
@@ -52,6 +53,10 @@ pub struct Preview {
     pub height: usize,
     pub action: usize,
     pub probabilities: Vec<f32>,
+    /// The frames the network was shown for this step, stacked as it sees
+    /// them, and how to read them.
+    pub seen: Vec<u8>,
+    pub sight: Sight,
 }
 
 /// What the worker has written down for the window.
@@ -238,24 +243,29 @@ fn run<B: AutodiffBackend>(
         }
     }
     let seen = shared.clone();
+    let sight = setup.env.sight;
     let mut last: Option<Instant> = None;
-    trainer.watch(Box::new(move |machine, action, probabilities| {
-        if last.is_some_and(|t| t.elapsed() < PREVIEW_EVERY) {
-            return;
-        }
-        last = Some(Instant::now());
-        let view = View::CROPPED;
-        let mut picture = vec![0u8; view.buffer_len()];
-        let flash_on = (machine.bus.frame / 16) % 2 == 1;
-        crate::screen::render(&machine.bus, view, &mut picture, flash_on);
-        lock(&seen).preview = Some(Preview {
-            picture,
-            width: view.width(),
-            height: view.height(),
-            action,
-            probabilities: probabilities.to_vec(),
-        });
-    }));
+    trainer.watch(Box::new(
+        move |machine, observation, action, probabilities| {
+            if last.is_some_and(|t| t.elapsed() < PREVIEW_EVERY) {
+                return;
+            }
+            last = Some(Instant::now());
+            let view = View::CROPPED;
+            let mut picture = vec![0u8; view.buffer_len()];
+            let flash_on = (machine.bus.frame / 16) % 2 == 1;
+            crate::screen::render(&machine.bus, view, &mut picture, flash_on);
+            lock(&seen).preview = Some(Preview {
+                picture,
+                width: view.width(),
+                height: view.height(),
+                action,
+                probabilities: probabilities.to_vec(),
+                seen: observation.to_vec(),
+                sight,
+            });
+        },
+    ));
     trainer.stop_when(stop.clone());
 
     let keep_it = |trainer: &Trainer<B>| -> Result<(), String> {

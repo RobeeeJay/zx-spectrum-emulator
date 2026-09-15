@@ -7,7 +7,7 @@ use zx_rustrum::machine::Spectrum;
 use zx_rustrum::training::env::{Config, Env, Pool};
 use zx_rustrum::training::inputs::InputSet;
 use zx_rustrum::training::judge::{Judge, Number};
-use zx_rustrum::training::sight::{look, Area, Sight};
+use zx_rustrum::training::sight::{changes, look, Area, Sight};
 use zx_rustrum::z80::Bus;
 
 /// A Kempston action is exactly what port $1F reads, and choosing another
@@ -313,4 +313,46 @@ fn a_pool_of_games_agrees_with_one_at_a_time() {
             );
         }
     }
+}
+
+/// How much each frame of an observation moved since the one before, which
+/// is what says whether stacking frames is telling the network anything: a
+/// game drawing nothing new between steps stacks the same picture over and
+/// over.
+#[test]
+fn the_frames_of_an_observation_say_how_much_moved() {
+    let sight = Sight {
+        area: Area::Display,
+        shrink: 4,
+        colour: false,
+        frames: 4,
+    };
+    let len = sight.frame_len();
+    let still: Vec<u8> = std::iter::repeat_n(7u8, len * 4).collect();
+    assert_eq!(
+        changes(&still, &sight),
+        vec![0.0, 0.0, 0.0],
+        "four of the same picture moved nothing"
+    );
+
+    let mut moving = still.clone();
+    // A tenth of the last frame is redrawn, and a byte of the one before it
+    // by too little to count as movement.
+    for i in 0..len / 10 {
+        moving[3 * len + i] = 200;
+    }
+    moving[2 * len] = 7 + 8;
+    let moved = changes(&moving, &sight);
+    assert_eq!(&moved[..2], &[0.0, 0.0], "nothing moved in the first three");
+    assert!(
+        (moved[2] - 0.1).abs() < 0.01,
+        "a tenth of the last frame moved: {}",
+        moved[2]
+    );
+
+    let one = Sight { frames: 1, ..sight };
+    assert!(
+        changes(&still[..len], &one).is_empty(),
+        "one frame has nothing to differ from"
+    );
 }
