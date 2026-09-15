@@ -342,3 +342,41 @@ fn time_it_measures_an_update_of_this_set_up() {
         "and it goes when the set-up is no longer the one timed"
     );
 }
+
+/// Every box in the Training window says what it does to the training. The
+/// numbers all go through one helper that takes its words from a table, so a
+/// box added without a word about it fails here rather than going unnoticed,
+/// and the words say what the setting does rather than naming it again.
+#[test]
+fn every_box_says_what_it_does() {
+    use zx_rustrum::ui::trainwin::tip;
+    let source = include_str!("../src/ui/trainwin.rs");
+    assert!(
+        !source.contains("ui.add(egui::DragValue"),
+        "a number box that does not go through value_box, and so has no tooltip"
+    );
+    for (at, _) in source.match_indices("egui::TextEdit::singleline") {
+        let after = &source[at..(at + 400).min(source.len())];
+        assert!(
+            after.contains("on_hover_text"),
+            "a text box with nothing said about it at byte {at}"
+        );
+    }
+
+    let names = [
+        "score", "point", "lives", "life", "over", "stop", "step", "frames", "hold", "wait",
+        "games", "steps", "rate", "discount", "trying", "seed", "lambda", "clip", "passes",
+        "value", "shown", "keys",
+    ];
+    let mut said: Vec<&str> = Vec::new();
+    for name in names {
+        let text = tip(name);
+        assert!(
+            text.len() > 60,
+            "{name} is described in {} characters: {text}",
+            text.len()
+        );
+        assert!(!said.contains(&text), "{name} says what another box says");
+        said.push(text);
+    }
+}

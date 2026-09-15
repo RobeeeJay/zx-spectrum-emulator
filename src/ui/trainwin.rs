@@ -329,8 +329,8 @@ fn controls(t: &mut Training, ui: &mut egui::Ui) {
             ui.label("Keys");
             let edit = egui::TextEdit::singleline(&mut t.keys)
                 .hint_text("O, P, SPACE")
-                .desired_width(200.0);
-            if ui.add(edit).changed() {
+                .desired_width(230.0);
+            if ui.add(edit).on_hover_text(tip("keys")).changed() {
                 t.custom = false;
             }
         } else {
@@ -368,6 +368,163 @@ fn controls(t: &mut Training, ui: &mut egui::Ui) {
     );
 }
 
+/// What each box does to the training, shown when the pointer rests on it.
+/// Every box goes through `tip`, so one added without a word about it fails
+/// the test rather than going unnoticed.
+const TIPS: [(&str, &str); 22] = [
+    (
+        "score",
+        "Where the game keeps its score, and how. Find a number below works it out. \
+         Wrong, and there is nothing to learn from: the network is rewarded by this \
+         alone unless lives or a reward a step are set.",
+    ),
+    (
+        "point",
+        "What one point of score is worth as reward. Rewards of about 1 are what the \
+         learning is built for: a game scoring 50 a kill wants 0.02 here, or the \
+         numbers it learns from run into the hundreds and swamp everything else.",
+    ),
+    (
+        "lives",
+        "Where the game keeps its lives, and how. It is how a game is known to be \
+         over, and what makes dying cost something.",
+    ),
+    (
+        "life",
+        "What losing a life costs, against a point being worth what it is worth \
+         above. Too little and the network throws lives away for a few points; too \
+         much and it hides in a corner rather than playing.",
+    ),
+    (
+        "over",
+        "The number of lives at which the game is over and a new one starts. Nothing \
+         after that point is learnt from, so a game that ends here rather than \
+         playing on into a demonstration teaches more.",
+    ),
+    (
+        "stop",
+        "A game is stopped after this many steps however it is going, so one that \
+         gets stuck cannot hold up the others. A game much longer than this is never \
+         seen to its end.",
+    ),
+    (
+        "step",
+        "A reward for every step survived, whatever else happens. For games with \
+         nothing else to go on, or to nudge the network towards staying alive. Small \
+         beside a point's worth: 0.01 adds up over a long game.",
+    ),
+    (
+        "frames",
+        "How many frames are stacked into what the network is shown. One picture \
+         cannot say which way anything is moving; a few can. What it sees below \
+         shows whether the frames really differ.",
+    ),
+    (
+        "hold",
+        "How many frames each choice is held for. More frames means fewer, coarser \
+         choices and a shorter way back from a reward to the move that earned it; \
+         fewer means finer control and more to learn from.",
+    ),
+    (
+        "wait",
+        "Up to this many frames of doing nothing at the start of each game, a \
+         different number each time, so games that start alike do not all go alike \
+         and the network cannot learn one fixed opening.",
+    ),
+    (
+        "games",
+        "How many games are played at once. More games give steadier learning and \
+         use the cores better, at more time and memory per update.",
+    ),
+    (
+        "steps",
+        "How many steps each game plays between updates. Games times steps is what \
+         one update learns from: more is steadier and slower to arrive.",
+    ),
+    (
+        "rate",
+        "How far the network moves at each step of learning. Too high and it lurches \
+         about and forgets what worked; too low and it takes far longer. 0.00025 is \
+         where the Atari work settled.",
+    ),
+    (
+        "discount",
+        "How much a reward a step later counts against one now. 0.99 judges a choice \
+         against the next hundred steps, which suits rewards that come long after \
+         the move; lower suits a game that pays at once, and learns quicker.",
+    ),
+    (
+        "trying",
+        "A reward for staying undecided, so it goes on trying things. Too little and \
+         it settles early on whatever worked first; too much and it never settles.",
+    ),
+    (
+        "seed",
+        "The number the randomness starts from. The same seed and the same set-up \
+         play the same games, so a change can be told from luck.",
+    ),
+    (
+        "lambda",
+        "How far ahead the reward itself is trusted before the network's own guess \
+         takes over. Lower leans on the guess, which is steadier but wronger early \
+         on; 0.95 is the usual.",
+    ),
+    (
+        "clip",
+        "How far one update may move the chance of a choice. It is what keeps an \
+         update from throwing the policy somewhere it cannot come back from.",
+    ),
+    (
+        "passes",
+        "How many times each update goes back over the steps it played, and how many \
+         steps are learnt from at a time. More passes wring more out of the same \
+         play, up to the point where the network starts chasing it.",
+    ),
+    (
+        "value",
+        "How much the network's guess at how well it is doing counts against \
+         learning the moves themselves. The guess is what every choice is judged \
+         against, so it matters, but too much of it crowds out the playing.",
+    ),
+    (
+        "shown",
+        "The number as the screen shows it, noughts and all — 001230 rather than \
+         1230. The digits say how wide it is, which is what tells a score kept in \
+         three bytes from the two bytes at its end.",
+    ),
+    (
+        "keys",
+        "The keys of the machine's own keyboard it may press, by the legends on \
+         them, with commas between. Every key is one more thing to try, so name \
+         only the ones the game plays with.",
+    ),
+];
+
+/// What a box does, by the name it is known by here.
+pub fn tip(name: &str) -> &'static str {
+    TIPS.iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, text)| *text)
+        .expect("every box has a word about what it does")
+}
+
+/// A number box of its own width, with what it does.
+fn value_box(ui: &mut egui::Ui, drag: egui::DragValue<'_>, width: f32, name: &str) {
+    let height = ui.spacing().interact_size.y;
+    ui.add_sized(egui::vec2(width, height), drag)
+        .on_hover_text(tip(name));
+}
+
+/// A box for a number written as the set-up file writes it.
+fn address(ui: &mut egui::Ui, text: &mut String, hint: &str, name: &str) {
+    ui.add(
+        egui::TextEdit::singleline(text)
+            .hint_text(hint)
+            .desired_width(230.0),
+    )
+    .on_hover_text(tip(name));
+}
+
 fn sight(t: &mut Training, ui: &mut egui::Ui) {
     theme::group_label(ui, "What it sees");
     let env = &mut t.setup.env;
@@ -399,8 +556,12 @@ fn sight(t: &mut Training, ui: &mut egui::Ui) {
         });
         ui.checkbox(&mut s.colour, "Colour");
         ui.label("Frames");
-        ui.add(egui::DragValue::new(&mut s.frames).range(1..=8))
-            .on_hover_text("One picture cannot say which way anything is moving; a few can");
+        value_box(
+            ui,
+            egui::DragValue::new(&mut s.frames).range(1..=8),
+            70.0,
+            "frames",
+        );
         note(
             ui,
             format!(
@@ -413,13 +574,19 @@ fn sight(t: &mut Training, ui: &mut egui::Ui) {
     });
     ui.horizontal_wrapped(|ui| {
         ui.label("Each choice is held for");
-        ui.add(egui::DragValue::new(&mut env.frames_per_step).range(1..=50));
+        value_box(
+            ui,
+            egui::DragValue::new(&mut env.frames_per_step).range(1..=50),
+            70.0,
+            "hold",
+        );
         ui.label("frames; a game starts after up to");
-        ui.add(egui::DragValue::new(&mut env.random_wait).range(0..=250))
-            .on_hover_text(
-                "Frames of doing nothing, a different number each game, so games that \
-                 start alike do not all go alike",
-            );
+        value_box(
+            ui,
+            egui::DragValue::new(&mut env.random_wait).range(0..=250),
+            70.0,
+            "wait",
+        );
         ui.label("frames of nothing");
     });
 }
@@ -437,48 +604,61 @@ fn reward(t: &mut Training, ui: &mut egui::Ui) {
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
             ui.label("Score");
-            ui.add(
-                egui::TextEdit::singleline(&mut t.score)
-                    .hint_text("bcd 9C4E 3")
-                    .desired_width(150.0),
-            );
-            ui.label("a point is worth");
-            ui.add(
+            address(ui, &mut t.score, "bcd 9C4E 3", "score");
+            ui.label("a point");
+            value_box(
+                ui,
                 egui::DragValue::new(&mut judge.score_scale)
                     .speed(0.01)
                     .range(0.0..=1000.0),
+                110.0,
+                "point",
             );
             ui.end_row();
 
             ui.label("Lives");
-            ui.add(
-                egui::TextEdit::singleline(&mut t.lives)
-                    .hint_text("byte 9C51")
-                    .desired_width(150.0),
-            );
-            ui.label("a life lost costs");
-            ui.add(
+            address(ui, &mut t.lives, "byte 9C51", "lives");
+            ui.label("a life");
+            value_box(
+                ui,
                 egui::DragValue::new(&mut judge.life_penalty)
                     .speed(0.1)
                     .range(0.0..=1000.0),
+                110.0,
+                "life",
             );
             ui.end_row();
 
             let mut over = judge.over_at_lives.is_some();
-            ui.checkbox(&mut over, "Game over at");
+            ui.checkbox(&mut over, "Over at").on_hover_text(tip("over"));
             let mut at = judge.over_at_lives.unwrap_or(0);
-            ui.add_enabled(over, egui::DragValue::new(&mut at).range(0..=255));
+            ui.add_enabled_ui(over, |ui| {
+                value_box(
+                    ui,
+                    egui::DragValue::new(&mut at).range(0..=255),
+                    110.0,
+                    "over",
+                );
+            });
             judge.over_at_lives = over.then_some(at);
-            ui.label("lives");
+            ui.label("lives left");
             ui.end_row();
 
-            ui.label("A game stops after");
-            ui.add(egui::DragValue::new(&mut judge.max_steps).range(1..=1_000_000));
-            ui.label("steps; each step survived is worth");
-            ui.add(
+            ui.label("Stop after");
+            value_box(
+                ui,
+                egui::DragValue::new(&mut judge.max_steps).range(1..=1_000_000),
+                110.0,
+                "stop",
+            );
+            ui.label("a step");
+            value_box(
+                ui,
                 egui::DragValue::new(&mut judge.per_step)
                     .speed(0.001)
                     .range(-10.0..=10.0),
+                110.0,
+                "step",
             );
             ui.end_row();
         });
@@ -499,38 +679,56 @@ fn learning(app: &mut App, ui: &mut egui::Ui) {
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
             ui.label("Games at once");
-            ui.add(egui::DragValue::new(&mut ppo.games).range(1..=256));
-            ui.label("steps each between updates");
-            ui.add(egui::DragValue::new(&mut ppo.steps).range(8..=4096));
+            value_box(
+                ui,
+                egui::DragValue::new(&mut ppo.games).range(1..=256),
+                90.0,
+                "games",
+            );
+            ui.label("steps each");
+            value_box(
+                ui,
+                egui::DragValue::new(&mut ppo.steps).range(8..=4096),
+                90.0,
+                "steps",
+            );
             ui.end_row();
 
             ui.label("Learning rate");
-            ui.add(
+            value_box(
+                ui,
                 egui::DragValue::new(&mut ppo.learning_rate)
                     .speed(0.00001)
                     .range(0.000001..=0.1)
                     .max_decimals(6),
+                90.0,
+                "rate",
             );
-            ui.label("discount")
-                .on_hover_text("How much a reward a step later counts against one now");
-            ui.add(
+            ui.label("discount").on_hover_text(tip("discount"));
+            value_box(
+                ui,
                 egui::DragValue::new(&mut ppo.gamma)
                     .speed(0.001)
                     .range(0.5..=0.9999)
                     .max_decimals(4),
+                90.0,
+                "discount",
             );
             ui.end_row();
 
-            ui.label("Trying things")
-                .on_hover_text("A reward for staying undecided, so it keeps exploring");
-            ui.add(
+            ui.label("Trying things (entropy)")
+                .on_hover_text(tip("trying"));
+            value_box(
+                ui,
                 egui::DragValue::new(&mut ppo.entropy_weight)
                     .speed(0.001)
                     .range(0.0..=0.5)
                     .max_decimals(4),
+                90.0,
+                "trying",
             );
             ui.label("seed");
-            ui.add(egui::DragValue::new(&mut ppo.seed));
+            value_box(ui, egui::DragValue::new(&mut ppo.seed), 90.0, "seed");
             ui.end_row();
         });
     egui::CollapsingHeader::new("More")
@@ -541,28 +739,47 @@ fn learning(app: &mut App, ui: &mut egui::Ui) {
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
                     ui.label("Looking ahead (lambda)");
-                    ui.add(
+                    value_box(
+                        ui,
                         egui::DragValue::new(&mut ppo.lambda)
                             .speed(0.01)
                             .range(0.0..=1.0),
+                        90.0,
+                        "lambda",
                     );
                     ui.label("clip");
-                    ui.add(
+                    value_box(
+                        ui,
                         egui::DragValue::new(&mut ppo.clip)
                             .speed(0.01)
                             .range(0.01..=1.0),
+                        90.0,
+                        "clip",
                     );
                     ui.end_row();
                     ui.label("Passes each update");
-                    ui.add(egui::DragValue::new(&mut ppo.epochs).range(1..=32));
+                    value_box(
+                        ui,
+                        egui::DragValue::new(&mut ppo.epochs).range(1..=32),
+                        90.0,
+                        "passes",
+                    );
                     ui.label("batch");
-                    ui.add(egui::DragValue::new(&mut ppo.minibatch).range(8..=8192));
+                    value_box(
+                        ui,
+                        egui::DragValue::new(&mut ppo.minibatch).range(8..=8192),
+                        90.0,
+                        "passes",
+                    );
                     ui.end_row();
-                    ui.label("Value weight");
-                    ui.add(
+                    ui.label("Value weight (its guess at how well it is doing)");
+                    value_box(
+                        ui,
                         egui::DragValue::new(&mut ppo.value_weight)
                             .speed(0.01)
                             .range(0.0..=10.0),
+                        90.0,
+                        "value",
                     );
                     ui.end_row();
                 });
@@ -1191,8 +1408,9 @@ fn find(app: &mut App, ui: &mut egui::Ui) {
                     ui.add(
                         egui::TextEdit::singleline(&mut t.search_is)
                             .hint_text("001230")
-                            .desired_width(80.0),
-                    );
+                            .desired_width(110.0),
+                    )
+                    .on_hover_text(tip("shown"));
                 });
             });
             let Some(search) = t.search.as_mut() else {
