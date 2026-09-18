@@ -380,3 +380,39 @@ fn every_box_says_what_it_does() {
         said.push(text);
     }
 }
+
+/// The trend line averages each update with the ones before it, so a single
+/// lucky update moves it by a twentieth of its luck rather than all of it;
+/// before there are twenty updates it averages what there is.
+#[test]
+fn the_trend_sees_past_one_lucky_update() {
+    use zx_rustrum::ui::trainwin::{trend, TREND};
+    assert_eq!(
+        trend(&[0.5; 30], TREND),
+        vec![0.5; 30],
+        "a steady run is its own trend"
+    );
+
+    let mut spiky = vec![1.0f32; 40];
+    spiky[30] = 21.0;
+    let t = trend(&spiky, TREND);
+    assert!(
+        (t[30] - 2.0).abs() < 1e-5,
+        "a spike of twenty over the usual lifts the trend by one: {}",
+        t[30]
+    );
+    assert!(
+        (t[39] - 2.0).abs() < 1e-5 && (t[29] - 1.0).abs() < 1e-5,
+        "and stays in it until twenty updates have passed: {} then {}",
+        t[29],
+        t[39]
+    );
+
+    assert_eq!(
+        trend(&[1.0, 3.0], TREND),
+        vec![1.0, 2.0],
+        "early on, what there is"
+    );
+    assert_eq!(trend(&[1.0, 3.0, 5.0], 1), vec![1.0, 3.0, 5.0]);
+    assert!(trend(&[], TREND).is_empty());
+}

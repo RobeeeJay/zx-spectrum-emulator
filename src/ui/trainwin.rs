@@ -1079,7 +1079,30 @@ fn progress(t: &Training, ui: &mut egui::Ui) {
     }
 }
 
-/// The reward a step, update by update.
+/// Updates the trend line averages over. One update's reward is mostly the
+/// luck of that update's play; twenty is enough to see past it and few
+/// enough that a real change shows within a few minutes.
+pub const TREND: usize = 20;
+
+/// Each point's average with the ones before it, up to `window` of them:
+/// fewer at the start, where there are not yet that many to average.
+pub fn trend(values: &[f32], window: usize) -> Vec<f32> {
+    let window = window.max(1);
+    let mut sum = 0f32;
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            sum += v;
+            if i >= window {
+                sum -= values[i - window];
+            }
+            sum / (i + 1).min(window) as f32
+        })
+        .collect()
+}
+
+/// The reward a step, update by update, and its trend.
 fn chart(ui: &mut egui::Ui, history: &[Progress]) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), 110.0),
@@ -1107,20 +1130,42 @@ fn chart(ui: &mut egui::Ui, history: &[Progress]) {
     let hi = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let span = (hi - lo).max(1e-6);
     let inner = rect.shrink2(egui::vec2(8.0, 10.0));
-    let points: Vec<egui::Pos2> = values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            egui::pos2(
-                inner.left() + inner.width() * i as f32 / (values.len() - 1) as f32,
-                inner.bottom() - inner.height() * (v - lo) / span,
-            )
-        })
-        .collect();
+    let line = |values: &[f32]| -> Vec<egui::Pos2> {
+        values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                egui::pos2(
+                    inner.left() + inner.width() * i as f32 / (values.len() - 1) as f32,
+                    inner.bottom() - inner.height() * (v - lo) / span,
+                )
+            })
+            .collect()
+    };
+    // Each update dimmed, since most of its ups and downs are luck; the
+    // trend drawn over it is what says whether it is learning.
     painter.add(egui::Shape::line(
-        points,
-        egui::Stroke::new(1.5, theme::LCD_FG),
+        line(&values),
+        egui::Stroke::new(1.0, theme::LCD_FG.gamma_multiply(0.45)),
     ));
+    painter.add(egui::Shape::line(
+        line(&trend(&values, TREND)),
+        egui::Stroke::new(2.5, theme::AMBER),
+    ));
+    painter.text(
+        rect.right_top() + egui::vec2(-4.0, 2.0),
+        egui::Align2::RIGHT_TOP,
+        format!("average of the last {TREND}"),
+        font.clone(),
+        theme::AMBER,
+    );
+    painter.text(
+        rect.right_top() + egui::vec2(-4.0, 14.0),
+        egui::Align2::RIGHT_TOP,
+        "each update",
+        font.clone(),
+        theme::LCD_FG.gamma_multiply(0.6),
+    );
     painter.text(
         rect.left_top() + egui::vec2(4.0, 2.0),
         egui::Align2::LEFT_TOP,
